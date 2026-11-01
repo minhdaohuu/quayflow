@@ -15,7 +15,7 @@ hex.workspace = true
 memchr.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { workspace = true, features = ["Win32_System_Diagnostics_ToolHelp", "Win32_System_Console"] }
 winreg.workspace = true
 junction.workspace = true
 

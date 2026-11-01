@@ -4,7 +4,7 @@ Quayflow v0.1 for Windows. This guide covers installing, setting up accounts and
 
 > **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Quayflow is not affiliated with or endorsed by Anthropic.
 
-Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Engine control](#engine-control) · [Update](#update) · [Uninstall](#uninstall) · [Several machines](#using-an-account-on-several-machines) · [Troubleshooting](#troubleshooting) · [Files](#files-and-folders)
+Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Engine control](#engine-control) · [Update](#update) · [Uninstall](#uninstall) · [Several machines](#using-an-account-on-several-machines) · [Troubleshooting](#troubleshooting) · [Testing](#testing-your-setup) · [Files](#files-and-folders)
 
 ## Requirements
 
@@ -241,6 +241,38 @@ The same account used on several machines shares one allowance and one usage-rea
 | Replace said history is not ready | Run the command it printed once Claude has fully exited |
 
 Logs are in `%LOCALAPPDATA%\Quayflow\logs` (sanitized, 7 days).
+
+## Testing your setup
+
+Two scripts in the repository's `tests/e2e/` folder exercise the product build. Read each one before you run it.
+
+**Fake environment (safe anywhere).** This runs the real `quayflow.exe` against a temporary fake Claude environment. `CLAUDE_CONFIG_DIR` and `QUAYFLOW_HOME` point to a temporary folder and network calls are off, so it never touches `~/.claude` or a real login. CI runs it on every change.
+
+```powershell
+pwsh -File tests/e2e/smoke-fake-env.ps1 -Exe "$env:LOCALAPPDATA\Quayflow\bin\quayflow.exe"
+```
+
+It covers single instance, the handshake, consent-gated registration, the mixed-identity disclosure, a manual switch with pin, a held lock leaving the login unchanged, an unknown login pausing automation, a support report without secrets, and an intentional stop.
+
+**Real logins (owner-run).** `tests/e2e/real-switching.ps1` **switches your live Claude login** between two registered accounts and puts it back. It uses synthetic prompts on model haiku. Run it only on your own machine, never in CI. Prerequisites:
+
+- the engine running, and two accounts registered in one group (`quayflow status`);
+- the Mod installed;
+- `quayflow consent live-canary on`.
+
+```powershell
+pwsh -File tests/e2e/real-switching.ps1                  # all cases
+pwsh -File tests/e2e/real-switching.ps1 -Case H,R1       # selected cases
+```
+
+| Case | What it checks |
+|---|---|
+| H | Switch in the middle of a headless job with sequential tools: same process, no replay, one output |
+| S | Switch while two parallel subagents run: each follows at its next request |
+| R1 | Simulated usage limit in Automatic mode: one switch, one retry, one JSON result |
+| R2 | Simulated usage limit in Suggest mode: no switch in a headless job |
+
+Results are saved under `%LOCALAPPDATA%\Quayflow\e2e`. If a case fails, check that your live account afterwards is the one you expect (`quayflow status`), then attach the sanitized output and a `quayflow report` to a bug report. Recorded results against the product build are in [acceptance.md](acceptance.md).
 
 ## Files and folders
 

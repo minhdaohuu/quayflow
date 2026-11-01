@@ -140,8 +140,27 @@ pub fn hidden(program: impl AsRef<OsStr>) -> Command {
     c
 }
 
+/// Make this process's standard handles non-inheritable, so a long-lived child never holds
+/// the caller's pipes open (a piped `quayflow start` must return as soon as it prints).
+#[cfg(windows)]
+fn uninherit_std_handles() {
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: plain Win32 calls on this process's own standard handles.
+        unsafe {
+            let h = GetStdHandle(which);
+            if !h.is_null() && h as isize != -1 {
+                SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+
 /// Start a detached background process with no window and no inherited handles.
 pub fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<Child> {
+    #[cfg(windows)]
+    uninherit_std_handles();
     let mut c = Command::new(exe);
     c.args(args)
         .stdin(Stdio::null())

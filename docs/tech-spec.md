@@ -63,7 +63,10 @@ PoC data in `%USERPROFILE%\.quayflow-poc` is imported once with `quayflow migrat
 - Return home: live != home, home fresh and <= threshold - margin, not pinned, cooldown passed.
 - Hard limit: confirmed when the session's own rate limit (or a fresh engine observation) is >= 99%. Generic errors never switch.
 - Recovery target: eligible member with the most remaining allowance below 99%; otherwise the soonest-available account (availability = latest reset among its exhausted windows; unknown reset times are not ranked). Concurrent failures within 30 s retry on the account already switched to, if it is still live.
-- `model_not_found` (or a model-unavailable error) on the first request after a switch marks the model unavailable for that account and switches back; that is the incident's single recovery.
+- `model_not_found` (or a model-unavailable error) on the first request after a switch marks the model unavailable for that account and switches back; that is the incident's single recovery. An authentication failure (`auth`) right after a switch sets the account aside (refresh rejected) and switches back the same way.
+- One login is never live in two environments at once (both clients would refresh the same token); such a switch is refused.
+
+**Known gap (owner decision needed):** Quayflow never refreshes tokens, so an idle account's access token expires after some hours and its usage can no longer be observed. Its last observation then ages past the 60-minute idle freshness limit, and the account stops being a candidate for automatic switching and recovery until it is used again. Options: accept it (current behavior; manual switching still works), allow recovery to use an account whose last observation is old but whose windows have all reset since (contradicts B2 for multi-machine use), or make idle accounts briefly live to let Claude refresh them (changes the shared login, not acceptable). Recorded in `docs/known-limits.md`.
 
 ## 6. API v1
 
@@ -109,6 +112,13 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `POST /v1/policy/dorg` | `{"enable": bool, "confirmOrg": "<org hash>", "acknowledge": "<typed text>"}` | `OkResponse` (setting recorded only; no bypass path in this build) |
 | `GET /v1/compat` / `POST /v1/compat/check` | | `[CompatRecord]` |
 | `POST /v1/report` | `{}` | `ReportResponse` (saved locally for review) |
+| `POST /v1/poll` | `{}` | `OkResponse` (observe every account now, respecting backoff) |
+| `POST /v1/migrate-poc` | `{"group", "acceptDisclosure"}` | `OkResponse` (imports the PoC vault) |
+| `POST /v1/canary/start` / `GET /v1/canary` / `POST /v1/canary/stop` | | Manual live canary recording (consent `liveCanary`); while active, `/v1/step` asks for identity on every request |
+| `POST /v1/canary/switch` | `{"to"}` | `SwitchResponse` (switch marked `canary`, no pin) |
+| `POST /v1/compat/reset` | `{"version", "livePass", "detail"}` | `CompatRecord` (record a manual canary result) |
+
+Refusals that need an explicit user decision use HTTP 409 with `code` `needs_disclosure` (mixed-identity group; resend with `acceptDisclosure: true`) or `needs_approval` (Automatic mode; resend with `approveAutomatic: true`).
 
 The Mod's request hook calls `/v1/step` after every main or subagent request; when the response says `verify`, it reads the identity its request used (`$.session.authorize()` handle + profile endpoint, hashed) and posts `/v1/adoption`.
 

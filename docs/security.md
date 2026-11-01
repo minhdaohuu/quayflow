@@ -86,4 +86,4 @@ Releases are reproducible, hashed and provenance-attested, but **not Authenticod
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for a security problem. While the repository is private, contact the maintainer directly. After it becomes public, use GitHub's private vulnerability reporting on the repository.
+Do not open a public issue for a security problem. Follow [SECURITY.md](../SECURITY.md): use GitHub's private vulnerability reporting, and redact tokens and account details.
