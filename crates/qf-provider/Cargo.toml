@@ -1,0 +1,16 @@
+[package]
+name = "qf-provider"
+description = "Quayflow provider access: usage and profile endpoints, per-account poll schedule and backoff"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+qf-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+native-tls.workspace = true
+
+[lints]
+workspace = true

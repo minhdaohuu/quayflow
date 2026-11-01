@@ -1,0 +1,457 @@
+//! Loopback API v1 (FR-20): per-run token, bounded bodies, validation, versioned handshake,
+//! duplicate-request protection. No arbitrary command endpoint; no token-bearing responses.
+
+use crate::accounts::ApiErr;
+use crate::core::{CanaryRun, Engine, Shared};
+use qf_model::api::*;
+use qf_model::time::now_ms;
+use qf_model::*;
+use serde_json::{json, Value};
+use std::io::Read;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+const MAX_BODY: usize = 64 * 1024;
+
+fn q(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then(|| percent_decode(v))
+    })
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => {
+                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                    out.push(v);
+                    i += 3;
+                    continue;
+                }
+                out.push(b'%');
+            }
+            b'+' => out.push(b' '),
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn ok<T: serde::Serialize>(v: T) -> Result<Value, ApiErr> {
+    serde_json::to_value(v).map_err(|e| ApiErr::new(500, "internal", e.to_string()))
+}
+
+fn parse<T: serde::de::DeserializeOwned>(body: &Value) -> Result<T, ApiErr> {
+    serde_json::from_value(body.clone()).map_err(|e| ApiErr::invalid(format!("invalid request: {e}")))
+}
+
+fn s<'a>(body: &'a Value, k: &str) -> Option<&'a str> {
+    body.get(k).and_then(|v| v.as_str())
+}
+
+fn strings(body: &Value, k: &str) -> Vec<String> {
+    body.get(k)
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+fn env_param(e: &Engine, body: &Value) -> EnvId {
+    match s(body, "env").filter(|x| !x.is_empty()) {
+        Some(x) => EnvId(x.into()),
+        None => match s(body, "sessionId") {
+            Some(sid) => e.env_of_session(&e.lock(), sid),
+            None => e.default_env.id.clone(),
+        },
+    }
+}
+
+fn refusal(r: crate::transition::Refusal) -> SwitchResponse {
+    SwitchResponse {
+        ok: false,
+        transition: None,
+        message: Some(r.message),
+        blocked_by: r.blocked_by.map(|b| *b),
+    }
+}
+
+pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) -> Result<Value, ApiErr> {
+    match (method, path) {
+        ("POST", "/v1/hello") => {
+            let h: HelloRequest = parse(body)?;
+            let accepted: Vec<u32> = (PROTOCOL.saturating_sub(1).max(1)..=PROTOCOL).collect();
+            let compatible = accepted.contains(&h.protocol);
+            let message = (!compatible).then(|| {
+                format!(
+                    "The Quayflow Mod (protocol {}) and engine {} (protocol {}) do not match. Run `quayflow update` to install a matched pair. Claude works normally meanwhile; switching and recovery are off.",
+                    h.protocol, ENGINE_VERSION, PROTOCOL
+                )
+            });
+            let inner = e.lock();
+            e.record(
+                &inner,
+                "hello",
+                json!({"protocol": h.protocol, "mod": h.mod_version, "compatible": compatible, "headless": h.headless}),
+                false,
+            );
+            ok(HelloResponse {
+                compatible,
+                protocol: PROTOCOL,
+                accepted_protocols: accepted,
+                engine_version: ENGINE_VERSION.into(),
+                message,
+            })
+        }
+        ("GET", "/v1/state") => ok(e.state_view(q(query, "sessionId").as_deref(), q(query, "cwd").as_deref())),
+        ("GET", "/v1/events") => {
+            let since = q(query, "since").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let wait = q(query, "wait")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0)
+                .min(25);
+            ok(e.wait_events(since, Duration::from_secs(wait)))
+        }
+        ("POST", "/v1/onboarding") => {
+            e.onboarding(
+                body.get("consents").unwrap_or(&json!({})),
+                body.get("complete").and_then(|v| v.as_bool()).unwrap_or(false),
+            )?;
+            ok(OkResponse::ok("saved"))
+        }
+        ("POST", "/v1/accounts/register") => {
+            let env = s(body, "env").map(|x| EnvId(x.into()));
+            let (id, note) = e.register(
+                env.as_ref(),
+                s(body, "label").unwrap_or(""),
+                s(body, "group").unwrap_or(""),
+                body.get("acceptDisclosure").and_then(|v| v.as_bool()).unwrap_or(false),
+            )?;
+            let view = e.state_view(None, None).accounts.into_iter().find(|a| a.id == id);
+            let mut v = ok(view)?;
+            if let (Some(n), Some(o)) = (note, v.as_object_mut()) {
+                o.insert("note".into(), json!(n));
+            }
+            Ok(v)
+        }
+        ("POST", "/v1/migrate-poc") => {
+            let lines = e.migrate_poc(
+                s(body, "group").unwrap_or("Default"),
+                body.get("acceptDisclosure").and_then(|v| v.as_bool()).unwrap_or(false),
+            )?;
+            ok(OkResponse::ok(lines.join(
+                "
+",
+            )))
+        }
+        ("POST", "/v1/accounts/signin/start") => ok(e.signin_start(s(body, "reauth"))?),
+        ("GET", "/v1/accounts/signin/status") => ok(e.signin_status(&q(query, "id").unwrap_or_default())?),
+        ("POST", "/v1/accounts/signin/confirm") => {
+            let msg = e.signin_confirm(
+                s(body, "id").unwrap_or(""),
+                s(body, "label"),
+                s(body, "group"),
+                body.get("acceptDisclosure").and_then(|v| v.as_bool()).unwrap_or(false),
+            )?;
+            ok(OkResponse::ok(msg))
+        }
+        ("POST", "/v1/accounts/signin/cancel") => {
+            e.signin_cancel(s(body, "id").unwrap_or(""))?;
+            ok(OkResponse::ok("cancelled; the live login is unchanged"))
+        }
+        ("POST", "/v1/accounts/remove") => {
+            e.remove_account(s(body, "account").unwrap_or(""))?;
+            ok(OkResponse::ok(
+                "removed from Quayflow (history and provider-side authorization are untouched)",
+            ))
+        }
+        ("POST", "/v1/accounts/label") => {
+            e.relabel(s(body, "account").unwrap_or(""), s(body, "label").unwrap_or(""))?;
+            ok(OkResponse::ok("label updated"))
+        }
+        ("POST", "/v1/groups/members") => ok(e.group_members(
+            s(body, "group").unwrap_or(""),
+            &strings(body, "add"),
+            &strings(body, "remove"),
+            body.get("acceptDisclosure").and_then(|v| v.as_bool()).unwrap_or(false),
+        )?),
+        ("POST", p) if p.starts_with("/v1/groups/") => ok(OkResponse::ok(e.group_op(&p["/v1/groups/".len()..], body)?)),
+        ("POST", "/v1/projects/assign") => ok(OkResponse::ok(e.project_op(
+            "assign",
+            s(body, "path").unwrap_or(""),
+            s(body, "group"),
+        )?)),
+        ("POST", "/v1/projects/unassign") => ok(OkResponse::ok(e.project_op(
+            "unassign",
+            s(body, "path").unwrap_or(""),
+            None,
+        )?)),
+        ("POST", "/v1/switch") => {
+            let r: SwitchRequest = parse(body)?;
+            let env = env_param(e, body);
+            let to = {
+                let inner = e.lock();
+                e.find_account(&inner, &r.to)?
+            };
+            Ok(
+                match e.start_switch(&env, &to, SwitchHow::Manual, "your choice", r.idle_wait, false) {
+                    Ok(t) => ok(SwitchResponse {
+                        ok: true,
+                        transition: Some(t),
+                        message: None,
+                        blocked_by: None,
+                    })?,
+                    Err(rf) => ok(refusal(rf))?,
+                },
+            )
+        }
+        ("POST", "/v1/accept") => {
+            let env = env_param(e, body);
+            let sug = e.lock().envs.get(&env).and_then(|s| s.suggestion.clone());
+            let Some(sug) = sug else {
+                return Err(ApiErr::refused("no pending suggestion"));
+            };
+            // Accepting is approval of timing, not a manual choice: no pin.
+            let how = SwitchHow::Accepted;
+            Ok(match e.start_switch(&env, &sug.to, how, &sug.reason, false, false) {
+                Ok(t) => ok(SwitchResponse {
+                    ok: true,
+                    transition: Some(t),
+                    message: None,
+                    blocked_by: None,
+                })?,
+                Err(rf) => ok(refusal(rf))?,
+            })
+        }
+        ("POST", "/v1/transition/cancel") => ok(OkResponse::ok(
+            e.cancel(s(body, "id").unwrap_or("")).map_err(ApiErr::not_found)?,
+        )),
+        ("POST", "/v1/unpin") => {
+            let env = env_param(e, body);
+            let mut inner = e.lock();
+            if let Some(st) = inner.envs.get_mut(&env) {
+                st.pin = None;
+            }
+            e.record(&inner, "unpin", json!({"env": env}), false);
+            e.emit(
+                &mut inner,
+                "state",
+                Some(&env),
+                "Pin cleared; suggestions and automatic switching resume.",
+            );
+            ok(OkResponse::ok("pin cleared"))
+        }
+        ("POST", "/v1/step") => ok(e.step(&parse(body)?)),
+        ("POST", "/v1/adoption") => ok(OkResponse::ok(e.adoption(&parse(body)?).map_err(ApiErr::invalid)?)),
+        ("POST", "/v1/recover") => ok(e.recover(&parse(body)?)),
+        ("POST", "/v1/failure") => {
+            e.record_failure(&parse(body)?);
+            ok(OkResponse::ok("recorded"))
+        }
+        ("POST", "/v1/unknown") => {
+            let env = env_param(e, body);
+            match s(body, "action") {
+                Some("ignore") => ok(OkResponse::ok(e.ignore_unknown(&env)?)),
+                _ => Err(ApiErr::invalid("action: ignore (register uses /v1/accounts/register)")),
+            }
+        }
+        ("GET", "/v1/lanes") => ok(e.lane_views()),
+        ("POST", "/v1/lanes/create") => ok(e.lane_create(s(body, "name").unwrap_or(""))?),
+        ("POST", "/v1/lanes/check") => ok(e.lane_check(s(body, "name").unwrap_or(""))?),
+        ("POST", "/v1/lanes/delete") => ok(OkResponse::ok(e.lane_delete(s(body, "name").unwrap_or(""))?)),
+        ("POST", p) if p.starts_with("/v1/handoff/") => ok(e.handoff(
+            &p["/v1/handoff/".len()..],
+            s(body, "sessionId").unwrap_or(""),
+            s(body, "toEnv").unwrap_or(""),
+        )?),
+        ("POST", "/v1/engine") => match s(body, "action") {
+            Some("pause") | Some("resume") => {
+                let pause = s(body, "action") == Some("pause");
+                let mut inner = e.lock();
+                inner.config.automation_paused = pause;
+                e.save_config(&inner).map_err(ApiErr::invalid)?;
+                e.record(&inner, "automation", json!({"paused": pause}), false);
+                let text = if pause {
+                    "Automation paused. Manual switching still works."
+                } else {
+                    "Automation resumed."
+                };
+                e.emit(&mut inner, "state", None, text);
+                ok(OkResponse::ok(text))
+            }
+            Some("stop") => {
+                let _ = std::fs::write(e.dd.stopped_marker(), now_ms().to_string());
+                e.shutdown.store(true, Ordering::SeqCst);
+                e.events_cv.notify_all();
+                ok(OkResponse::ok("engine stopping; Claude keeps working without Quayflow"))
+            }
+            _ => Err(ApiErr::invalid("action: pause, resume or stop")),
+        },
+        ("GET", "/v1/policy") => {
+            let inner = e.lock();
+            let envs: Vec<Value> = inner
+                .envs
+                .iter()
+                .map(|(id, st)| json!({"env": id, "managed": st.managed}))
+                .collect();
+            ok(json!({"envs": envs, "dOrg": inner.config.d_org}))
+        }
+        ("POST", "/v1/policy/dorg") => ok(OkResponse::ok(e.set_dorg(
+            body.get("enable").and_then(|v| v.as_bool()).unwrap_or(false),
+            s(body, "confirmOrg"),
+            s(body, "acknowledge"),
+        )?)),
+        ("GET", "/v1/compat") => ok(e.lock().compat.values().cloned().collect::<Vec<_>>()),
+        ("POST", "/v1/compat/check") => {
+            let mut inner = e.lock();
+            let versions: Vec<String> = inner.compat.keys().cloned().collect();
+            for v in versions {
+                let mut rec = crate::core::static_check(&v);
+                if let Some(old) = inner.compat.get(&v) {
+                    rec.live_pass = old.live_pass;
+                    rec.live_detail = old.live_detail.clone();
+                }
+                e.save_compat(&rec);
+                inner.compat.insert(v, rec);
+            }
+            let ids: Vec<EnvId> = inner.envs.keys().cloned().collect();
+            for id in ids {
+                e.refresh_env(&mut inner, &id);
+            }
+            ok(inner.compat.values().cloned().collect::<Vec<_>>())
+        }
+        ("POST", "/v1/compat/reset") => {
+            // After a Claude update or a manual canary pass, forget a recorded live failure.
+            let v = s(body, "version").unwrap_or("").to_string();
+            let mut inner = e.lock();
+            let rec = inner
+                .compat
+                .get_mut(&v)
+                .ok_or_else(|| ApiErr::not_found("no record for that version"))?;
+            rec.live_pass = body.get("livePass").and_then(|x| x.as_bool());
+            rec.live_detail = s(body, "detail").map(String::from);
+            let rec = rec.clone();
+            e.save_compat(&rec);
+            e.record(
+                &inner,
+                "compat.live",
+                json!({"version": v, "livePass": rec.live_pass}),
+                true,
+            );
+            ok(rec)
+        }
+        ("POST", "/v1/canary/start") => {
+            let mut inner = e.lock();
+            if inner.config.consents.live_canary.is_none() {
+                return Err(ApiErr::refused(
+                    "the live canary needs consent (quayflow consent live-canary on)",
+                ));
+            }
+            inner.canary = Some(CanaryRun {
+                since: now_ms(),
+                steps: vec![],
+            });
+            ok(OkResponse::ok("canary recording"))
+        }
+        ("GET", "/v1/canary") => ok(e
+            .lock()
+            .canary
+            .as_ref()
+            .map(|c| json!({"since": c.since, "steps": c.steps}))),
+        ("POST", "/v1/canary/stop") => {
+            let c = e.lock().canary.take();
+            ok(c.map(|c| json!({"since": c.since, "steps": c.steps})))
+        }
+        ("POST", "/v1/canary/switch") => {
+            let env = env_param(e, body);
+            let to = {
+                let inner = e.lock();
+                e.find_account(&inner, s(body, "to").unwrap_or(""))?
+            };
+            Ok(
+                match e.start_switch(&env, &to, SwitchHow::Canary, "version canary", false, true) {
+                    Ok(t) => ok(SwitchResponse {
+                        ok: t.state.written(),
+                        transition: Some(t),
+                        message: None,
+                        blocked_by: None,
+                    })?,
+                    Err(rf) => ok(refusal(rf))?,
+                },
+            )
+        }
+        ("POST", "/v1/report") => {
+            let (path, preview) = e.build_report().map_err(ApiErr::invalid)?;
+            ok(ReportResponse { path, preview })
+        }
+        ("POST", "/v1/poll") => {
+            e.observe(true);
+            ok(OkResponse::ok("polled"))
+        }
+        _ => Err(ApiErr::not_found("unknown route")),
+    }
+}
+
+/// Handle one HTTP request (token, body limit, request-id cache).
+pub fn handle(e: &Shared, mut req: tiny_http::Request) {
+    let method = req.method().as_str().to_string();
+    let url = req.url().to_string();
+    let (path, query) = url.split_once('?').unwrap_or((&url, ""));
+    let (path, query) = (path.to_string(), query.to_string());
+    let token_ok = req
+        .headers()
+        .iter()
+        .any(|h| h.field.equiv("x-quayflow-token") && h.value.as_str() == e.token);
+    let respond = |req: tiny_http::Request, status: u16, body: Value| {
+        let header = tiny_http::Header::from_bytes(&b"content-type"[..], &b"application/json"[..]).expect("header");
+        let _ = req.respond(
+            tiny_http::Response::from_string(body.to_string())
+                .with_status_code(status)
+                .with_header(header),
+        );
+    };
+    if !token_ok {
+        return respond(req, 403, json!({"error": "bad token", "code": "bad_token"}));
+    }
+    let mut raw = Vec::new();
+    let read = req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut raw);
+    if read.is_err() || raw.len() > MAX_BODY {
+        return respond(req, 413, json!({"error": "request too large", "code": "invalid"}));
+    }
+    let body: Value = if raw.is_empty() {
+        json!({})
+    } else {
+        match serde_json::from_slice(&raw) {
+            Ok(v) => v,
+            Err(_) => return respond(req, 400, json!({"error": "body is not JSON", "code": "invalid"})),
+        }
+    };
+    let request_id = body.get("requestId").and_then(|v| v.as_str()).map(String::from);
+    if let Some(rid) = &request_id {
+        if let Some((_, v)) = e.lock().request_cache.iter().find(|(k, _)| k == rid) {
+            return respond(req, 200, v.clone());
+        }
+    }
+    match route(e, &method, &path, &query, &body) {
+        Ok(v) => {
+            if let Some(rid) = request_id {
+                let mut inner = e.lock();
+                inner.request_cache.push_back((rid, v.clone()));
+                while inner.request_cache.len() > 256 {
+                    inner.request_cache.pop_front();
+                }
+            }
+            respond(req, 200, v)
+        }
+        Err(err) => {
+            if err.status >= 500 {
+                e.log("error", "api.error", json!({"path": path, "error": err.message}));
+            }
+            respond(req, err.status, json!({"error": err.message, "code": err.code}))
+        }
+    }
+}

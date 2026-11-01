@@ -1,0 +1,6 @@
+/target/
+**/.claude-plugin/types/
+node_modules/
+*.tmp
+/dist/
+.DS_Store

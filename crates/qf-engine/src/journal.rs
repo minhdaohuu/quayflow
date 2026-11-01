@@ -1,0 +1,233 @@
+//! Durable journal and sanitized logs (FR-22).
+//!
+//! The journal is append-only JSONL, fsynced before a transition writes. Logs rotate per
+//! day, keep 7 days, and stop at a size cap. Both hold opaque ids and sanitized reasons
+//! only: never tokens, prompts, responses, emails, labels, raw arguments or provider bodies.
+
+use qf_model::time::{day_stamp, now_ms};
+use serde_json::{json, Value};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+/// Remove anything that looks like a credential, and replace known labels by ids.
+pub fn scrub(text: &str, labels: &[(String, String)]) -> String {
+    let mut out = text.to_string();
+    for (label, id) in labels {
+        if label.len() >= 2 {
+            out = out.replace(label.as_str(), &format!("#{id}"));
+        }
+    }
+    // Token-like strings: sk-ant-..., long base64/hex runs, bearer values, emails.
+    let mut cleaned = String::with_capacity(out.len());
+    for word in out.split_inclusive(|c: char| c.is_whitespace() || c == '"' || c == ',') {
+        let core = word.trim_end_matches(|c: char| c.is_whitespace() || c == '"' || c == ',');
+        let tail = &word[core.len()..];
+        // UUIDs (session ids) and plain hex digests (file hashes) are opaque ids, not secrets.
+        let b = core.as_bytes();
+        let uuid = (core.len() == 36
+            && [8, 13, 18, 23].iter().all(|i| b[*i] == b'-')
+            && core.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
+            || (core.len() == 64 && core.chars().all(|c| c.is_ascii_hexdigit()));
+        let tokenish = core.starts_with("sk-ant-")
+            || (!uuid && core.len() >= 32 && core.chars().all(|c| c.is_ascii_alphanumeric() || "-_=+/.".contains(c)))
+            || (core.contains('@') && core.contains('.') && !core.starts_with('@'));
+        if tokenish {
+            cleaned.push_str("[redacted]");
+        } else {
+            cleaned.push_str(core);
+        }
+        cleaned.push_str(tail);
+    }
+    cleaned
+}
+
+fn scrub_value(v: &mut Value, labels: &[(String, String)]) {
+    match v {
+        Value::String(s) => *s = scrub(s, labels),
+        Value::Array(a) => a.iter_mut().for_each(|x| scrub_value(x, labels)),
+        Value::Object(o) => {
+            o.retain(|k, _| {
+                let k = k.to_ascii_lowercase();
+                !(k.contains("token") || k.contains("secret") || k.contains("email") || k == "prompt" || k == "answer")
+            });
+            o.values_mut().for_each(|x| scrub_value(x, labels));
+        }
+        _ => {}
+    }
+}
+
+pub struct Journal {
+    path: PathBuf,
+    lock: Mutex<()>,
+}
+
+impl Journal {
+    pub fn new(path: PathBuf) -> Self {
+        Journal {
+            path,
+            lock: Mutex::new(()),
+        }
+    }
+
+    /// Append one record. `durable` fsyncs (required before a transition write).
+    pub fn append(
+        &self,
+        event: &str,
+        mut data: Value,
+        labels: &[(String, String)],
+        durable: bool,
+    ) -> std::io::Result<()> {
+        scrub_value(&mut data, labels);
+        let mut rec = json!({"ts": now_ms(), "event": event});
+        if let (Some(r), Value::Object(d)) = (rec.as_object_mut(), data) {
+            for (k, v) in d {
+                if k != "ts" && k != "event" {
+                    r.insert(k, v);
+                }
+            }
+        }
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(p) = self.path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let mut f = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        f.write_all(format!("{rec}\n").as_bytes())?;
+        if durable {
+            f.sync_all()?;
+        }
+        Ok(())
+    }
+
+    pub fn read_all(&self) -> Vec<Value> {
+        std::fs::read_to_string(&self.path)
+            .map(|t| t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn tail(&self, n: usize) -> Vec<Value> {
+        let all = self.read_all();
+        let start = all.len().saturating_sub(n);
+        all[start..].to_vec()
+    }
+
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+pub struct Logger {
+    dir: PathBuf,
+    retention_days: u64,
+    max_bytes: u64,
+    lock: Mutex<()>,
+}
+
+impl Logger {
+    pub fn new(dir: PathBuf, retention_days: u64, max_mb: u64) -> Self {
+        let l = Logger {
+            dir,
+            retention_days,
+            max_bytes: max_mb * 1024 * 1024,
+            lock: Mutex::new(()),
+        };
+        l.prune();
+        l
+    }
+
+    fn file(&self) -> PathBuf {
+        self.dir.join(format!("quayflow-{}.jsonl", day_stamp(now_ms())))
+    }
+
+    /// Delete log files older than the retention period.
+    pub fn prune(&self) {
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(self.retention_days * 86_400);
+        if let Ok(d) = std::fs::read_dir(&self.dir) {
+            for e in d.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with("quayflow-") && name.ends_with(".jsonl") {
+                    if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+                        if m < cutoff {
+                            let _ = std::fs::remove_file(e.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Log a sanitized record. Failure to log never interrupts work.
+    pub fn log(&self, level: &str, event: &str, mut data: Value, labels: &[(String, String)]) {
+        scrub_value(&mut data, labels);
+        let rec = json!({"ts": now_ms(), "level": level, "event": event, "pid": std::process::id(), "data": data});
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let path = self.file();
+        if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > self.max_bytes {
+            return;
+        }
+        let _ = std::fs::create_dir_all(&self.dir);
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = f.write_all(format!("{rec}\n").as_bytes());
+        }
+    }
+
+    pub fn tail(&self, n: usize) -> Vec<String> {
+        std::fs::read_to_string(self.file())
+            .map(|t| {
+                let lines: Vec<&str> = t.lines().collect();
+                lines[lines.len().saturating_sub(n)..]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrub_removes_secrets_and_labels() {
+        let labels = vec![("Work Org".to_string(), "abc123".to_string())];
+        let s = scrub(
+            "switch Work Org token sk-ant-oat01-xyz and me@example.com AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            &labels,
+        );
+        assert!(!s.contains("Work Org"));
+        assert!(s.contains("#abc123"));
+        assert!(!s.contains("sk-ant"));
+        assert!(!s.contains("example.com"));
+        assert!(!s.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+    }
+
+    #[test]
+    fn journal_never_writes_token_fields() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::new(d.path().join("j.jsonl"));
+        j.append(
+            "x",
+            json!({"accessToken": "sk-ant-oat-1", "nested": {"refreshToken": "r", "ok": 1}, "reason": "uses sk-ant-ort-2", "email": "a@b.c"}),
+            &[],
+            true,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(d.path().join("j.jsonl")).unwrap();
+        assert!(
+            !text.contains("sk-ant") && !text.contains("\"r\"") && !text.contains("a@b.c"),
+            "{text}"
+        );
+        assert_eq!(j.read_all()[0]["nested"]["ok"], 1);
+    }
+
+    #[test]
+    fn logger_caps_size() {
+        let d = tempfile::tempdir().unwrap();
+        let l = Logger::new(d.path().to_path_buf(), 7, 0);
+        l.log("info", "a", json!({}), &[]);
+        l.log("info", "b", json!({}), &[]);
+        assert_eq!(l.tail(10).len(), 1, "stops writing past the cap");
+    }
+}

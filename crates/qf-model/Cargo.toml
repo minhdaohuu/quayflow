@@ -1,0 +1,16 @@
+[package]
+name = "qf-model"
+description = "Quayflow shared types: accounts, groups, usage, sessions, transitions, events and the v1 API schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+chrono.workspace = true
+
+[lints]
+workspace = true

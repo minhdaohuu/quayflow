@@ -1,0 +1,1079 @@
+//! Engine state and the automation loop: watcher, observation, decisions.
+
+use crate::journal::{Journal, Logger};
+use crate::paths::DataDir;
+use qf_adapter::Env;
+use qf_model::api::{ActivityItem, EngineEvent, InPlace};
+use qf_model::time::now_ms;
+use qf_model::*;
+use qf_provider::{ProviderError, Schedule};
+use qf_vault::{Login, Vault};
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
+
+pub type Shared = Arc<Engine>;
+
+#[derive(Debug)]
+pub struct EnvState {
+    pub env: Env,
+    pub live: Option<AccountId>,
+    pub signed_out: bool,
+    /// Live login is not a registered account (hash of its account UUID).
+    pub unknown: Option<String>,
+    pub last_stamp: Option<(u128, u64)>,
+    pub own_stamp: Option<(u128, u64)>,
+    pub transition: Option<Transition>,
+    pub cancel: Arc<AtomicBool>,
+    pub last_switch: Option<Transition>,
+    pub last_proactive: Option<i64>,
+    pub pin: Option<Pin>,
+    pub suggestion: Option<Suggestion>,
+    pub adoption: Vec<ClientAdoption>,
+    pub sessions: Vec<SessionInfo>,
+    pub decision: String,
+    pub external_changes: Vec<i64>,
+    pub other_switcher: bool,
+    pub managed: ManagedLogin,
+    pub policy_fp: Option<String>,
+    pub in_place: InPlace,
+    pub lane_canary: bool,
+}
+
+impl EnvState {
+    pub fn new(env: Env) -> Self {
+        EnvState {
+            env,
+            live: None,
+            signed_out: false,
+            unknown: None,
+            last_stamp: None,
+            own_stamp: None,
+            transition: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            last_switch: None,
+            last_proactive: None,
+            pin: None,
+            suggestion: None,
+            adoption: vec![],
+            sessions: vec![],
+            decision: "starting".into(),
+            external_changes: vec![],
+            other_switcher: false,
+            managed: ManagedLogin::default(),
+            policy_fp: None,
+            in_place: InPlace {
+                allowed: false,
+                reason: "not checked yet".into(),
+                governing_version: None,
+            },
+            lane_canary: false,
+        }
+    }
+
+    pub fn blocking_transition(&self) -> bool {
+        self.transition.as_ref().is_some_and(|t| {
+            matches!(
+                t.state,
+                TransitionState::Requested
+                    | TransitionState::Preparing
+                    | TransitionState::IdleWait
+                    | TransitionState::Applying
+            )
+        })
+    }
+
+    /// Why automation (automatic switching and recovery) is paused here, if it is.
+    pub fn pause_reason(&self, cfg: &Config) -> Option<String> {
+        if cfg.automation_paused {
+            return Some("automation paused by you (/quay resume)".into());
+        }
+        if self.signed_out {
+            return Some("no login in this environment".into());
+        }
+        if let Some(u) = &self.unknown {
+            return Some(format!(
+                "the live login #{u} is not registered: register it (/quay register) or switch manually{}",
+                if cfg.ignored_unknown.contains(u) {
+                    " (notice acknowledged)"
+                } else {
+                    ""
+                }
+            ));
+        }
+        if self.other_switcher {
+            return Some(
+                "the login changed repeatedly without Quayflow: another tool may be switching accounts".into(),
+            );
+        }
+        if !self.in_place.allowed {
+            return Some(format!("in-place switching disabled: {}", self.in_place.reason));
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Signin {
+    pub id: String,
+    pub env: Env,
+    pub state: String,
+    pub reauth: Option<AccountId>,
+    pub message: Option<String>,
+    pub identity: Option<api::SigninIdentity>,
+    pub login: Option<Login>,
+    pub started_at: i64,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CanaryRun {
+    pub since: i64,
+    /// (ts, session, index, agent, account, stopReason)
+    pub steps: Vec<Value>,
+}
+
+pub struct Inner {
+    pub config: Config,
+    pub observations: Vec<Observation>,
+    pub schedule: Schedule,
+    pub envs: BTreeMap<EnvId, EnvState>,
+    pub compat: BTreeMap<String, CompatRecord>,
+    /// session id -> (account, ts) of its last verified request
+    pub verified: HashMap<String, (AccountId, i64)>,
+    /// recovery incident keys already handled
+    pub incidents: HashMap<String, i64>,
+    /// session id -> genuine progress since its last recovery
+    pub progressed: HashMap<String, bool>,
+    pub signins: HashMap<String, Signin>,
+    pub canary: Option<CanaryRun>,
+    pub request_cache: VecDeque<(String, Value)>,
+    pub activity: VecDeque<ActivityItem>,
+    /// Last model a session reported.
+    pub session_model: HashMap<String, String>,
+}
+
+pub struct Events {
+    pub seq: u64,
+    pub list: VecDeque<EngineEvent>,
+}
+
+pub struct Engine {
+    pub dd: DataDir,
+    pub vault: Vault,
+    pub journal: Journal,
+    pub log: Logger,
+    pub inner: Mutex<Inner>,
+    /// Serializes credential operations across environments.
+    pub cred_lock: Mutex<()>,
+    pub events: Mutex<Events>,
+    pub events_cv: Condvar,
+    pub started_at: i64,
+    pub token: String,
+    pub shutdown: AtomicBool,
+    pub exe_sha256: String,
+    pub default_env: Env,
+    /// Disable network calls (tests).
+    pub offline: bool,
+}
+
+pub fn random_hex(n: usize) -> String {
+    let mut b = vec![0u8; n];
+    let _ = getrandom::getrandom(&mut b);
+    hex::encode(b)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct ObsFile {
+    observations: Vec<Observation>,
+    schedule: Schedule,
+}
+
+impl Engine {
+    pub fn new(dd: DataDir, default_env: Env, offline: bool) -> Result<Shared, String> {
+        dd.ensure()
+            .map_err(|e| format!("data folder {}: {e}", dd.root.display()))?;
+        let config = load_config(&dd)?;
+        let obs: ObsFile = std::fs::read_to_string(dd.observations())
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let mut schedule = obs.schedule;
+        schedule.after_restart(&obs.observations);
+        let mut compat = BTreeMap::new();
+        if let Ok(d) = std::fs::read_dir(dd.compat_dir()) {
+            for e in d.flatten() {
+                if let Some(r) = std::fs::read_to_string(e.path())
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<CompatRecord>(&t).ok())
+                {
+                    compat.insert(r.version.clone(), r);
+                }
+            }
+        }
+        let mut envs = BTreeMap::new();
+        envs.insert(default_env.id.clone(), EnvState::new(default_env.clone()));
+        if let Ok(d) = std::fs::read_dir(dd.lanes()) {
+            for e in d.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if e.path().is_dir() && qf_adapter::lanes::valid_name(&name) {
+                    let env = qf_adapter::lanes::lane_env(&dd.lanes(), &name);
+                    let mut st = EnvState::new(env);
+                    st.lane_canary = lane_meta(&dd, &name).get("canaryPassedAt").is_some_and(|v| v.is_i64());
+                    envs.insert(EnvId(name), st);
+                }
+            }
+        }
+        let log = Logger::new(dd.logs(), config.tuning.log_retention_days, config.tuning.log_max_mb);
+        let exe_sha256 = std::env::current_exe()
+            .ok()
+            .and_then(|p| std::fs::read(p).ok())
+            .map(|b| {
+                use sha2::Digest;
+                hex::encode(sha2::Sha256::digest(&b))
+            })
+            .unwrap_or_default();
+        let engine = Arc::new(Engine {
+            vault: Vault::new(dd.vault()),
+            journal: Journal::new(dd.journal()),
+            log,
+            inner: Mutex::new(Inner {
+                config,
+                observations: obs.observations,
+                schedule,
+                envs,
+                compat,
+                verified: HashMap::new(),
+                incidents: HashMap::new(),
+                progressed: HashMap::new(),
+                signins: HashMap::new(),
+                canary: None,
+                request_cache: VecDeque::new(),
+                activity: VecDeque::new(),
+                session_model: HashMap::new(),
+            }),
+            cred_lock: Mutex::new(()),
+            events: Mutex::new(Events {
+                seq: 0,
+                list: VecDeque::new(),
+            }),
+            events_cv: Condvar::new(),
+            started_at: now_ms(),
+            token: random_hex(24),
+            shutdown: AtomicBool::new(false),
+            exe_sha256,
+            default_env,
+            offline,
+            dd,
+        });
+        crate::reconcile::reconcile(&engine);
+        {
+            let mut inner = engine.lock();
+            let ids: Vec<EnvId> = inner.envs.keys().cloned().collect();
+            for id in ids {
+                engine.read_live(&mut inner, &id, true);
+                engine.refresh_env(&mut inner, &id);
+            }
+        }
+        engine.log(
+            "info",
+            "engine.start",
+            json!({"version": ENGINE_VERSION, "protocol": PROTOCOL}),
+        );
+        Ok(engine)
+    }
+
+    pub fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn labels(inner: &Inner) -> Vec<(String, String)> {
+        inner
+            .config
+            .accounts
+            .iter()
+            .map(|a| (a.label.clone(), a.id.0.clone()))
+            .collect()
+    }
+
+    pub fn log(&self, level: &str, event: &str, data: Value) {
+        let labels = Engine::labels(&self.lock());
+        self.log.log(level, event, data, &labels);
+    }
+
+    /// Journal a record; `durable` fsyncs. Returns false when it could not be recorded.
+    pub fn record(&self, inner: &Inner, event: &str, data: Value, durable: bool) -> bool {
+        let labels = Engine::labels(inner);
+        let ok = self.journal.append(event, data.clone(), &labels, durable).is_ok();
+        self.log.log("info", event, data, &labels);
+        ok
+    }
+
+    pub fn emit(&self, inner: &mut Inner, kind: &str, env: Option<&EnvId>, text: &str) {
+        inner.activity.push_back(ActivityItem {
+            ts: now_ms(),
+            kind: kind.into(),
+            text: text.into(),
+        });
+        while inner.activity.len() > 200 {
+            inner.activity.pop_front();
+        }
+        let mut ev = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        ev.seq += 1;
+        let seq = ev.seq;
+        ev.list.push_back(EngineEvent {
+            seq,
+            ts: now_ms(),
+            kind: kind.into(),
+            env: env.cloned(),
+            text: Some(text.into()),
+        });
+        while ev.list.len() > 500 {
+            ev.list.pop_front();
+        }
+        self.events_cv.notify_all();
+    }
+
+    pub fn seq(&self) -> u64 {
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).seq
+    }
+
+    pub fn save_config(&self, inner: &Inner) -> Result<(), String> {
+        inner.config.validate()?;
+        let text = serde_json::to_string_pretty(&inner.config).map_err(|e| e.to_string())?;
+        qf_vault::atomic_write(&self.dd.config(), text.as_bytes()).map_err(|e| e.to_string())
+    }
+
+    pub fn save_observations(&self, inner: &Inner) {
+        let f = ObsFile {
+            observations: inner.observations.clone(),
+            schedule: inner.schedule.clone(),
+        };
+        if let Ok(t) = serde_json::to_string(&f) {
+            let _ = qf_vault::atomic_write(&self.dd.observations(), t.as_bytes());
+        }
+    }
+
+    pub fn save_compat(&self, rec: &CompatRecord) {
+        if let Ok(t) = serde_json::to_string_pretty(rec) {
+            let _ = qf_vault::atomic_write(
+                &self.dd.compat_dir().join(format!("{}.json", rec.version)),
+                t.as_bytes(),
+            );
+        }
+    }
+
+    /// The environment a session runs in (registry lookup), default when unknown.
+    pub fn env_of_session(&self, inner: &Inner, session_id: &str) -> EnvId {
+        inner
+            .envs
+            .iter()
+            .find(|(_, st)| st.sessions.iter().any(|s| s.session_id == session_id))
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| self.default_env.id.clone())
+    }
+
+    /// Groups governing an environment: the running sessions' groups, or the default group.
+    pub fn governing<'a>(inner: &'a Inner, env: &EnvId) -> Vec<&'a Group> {
+        let cfg = &inner.config;
+        let mut names: Vec<&str> = inner
+            .envs
+            .get(env)
+            .map(|st| st.sessions.iter().filter_map(|s| s.group.as_deref()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names.dedup();
+        if names.is_empty() {
+            names.push(&cfg.default_group);
+        }
+        names.iter().filter_map(|n| cfg.group(n)).collect()
+    }
+
+    pub fn ctx<'a>(inner: &'a Inner, env: &EnvId, model: Option<&'a str>) -> Option<qf_policy::Ctx<'a>> {
+        let st = inner.envs.get(env)?;
+        Some(qf_policy::Ctx {
+            now: now_ms(),
+            accounts: &inner.config.accounts,
+            governing: Engine::governing(inner, env),
+            sessions: &st.sessions,
+            all_groups: &inner.config.groups,
+            observations: &inner.observations,
+            live: st.live.as_ref().filter(|_| st.unknown.is_none()),
+            managed: &st.managed,
+            tuning: &inner.config.tuning,
+            pin: st.pin.as_ref(),
+            last_proactive_switch: st.last_proactive,
+            model,
+            busy_transition: st.blocking_transition(),
+        })
+    }
+
+    /// Read the live identity of an environment from `.claude.json` (no token read).
+    pub fn read_live(&self, inner: &mut Inner, env_id: &EnvId, initial: bool) {
+        let Some(st) = inner.envs.get(env_id) else { return };
+        let env = st.env.clone();
+        let uuid = qf_adapter::read_identity(&env);
+        let has_login = qf_adapter::read_login(&env).ok().flatten().is_some();
+        let known_ids: Vec<AccountId> = inner.config.accounts.iter().map(|a| a.id.clone()).collect();
+        let st = inner.envs.get_mut(env_id).expect("env");
+        st.last_stamp = qf_adapter::login::credentials_stamp(&env);
+        match uuid.filter(|_| has_login) {
+            None => {
+                st.live = None;
+                st.signed_out = true;
+                st.unknown = None;
+            }
+            Some(u) => {
+                let id = AccountId::from_uuid(&u);
+                st.signed_out = false;
+                if known_ids.contains(&id) {
+                    st.unknown = None;
+                } else {
+                    st.unknown = Some(id.0.clone());
+                }
+                st.live = Some(id);
+            }
+        }
+        let _ = initial;
+    }
+
+    /// Sessions, policy, version gating for one environment.
+    pub fn refresh_env(&self, inner: &mut Inner, env_id: &EnvId) {
+        let Some(st) = inner.envs.get(env_id) else { return };
+        let env = st.env.clone();
+        let mut sessions = qf_adapter::sessions::read_sessions(&env);
+        for s in &mut sessions {
+            s.group = Some(inner.config.resolve_group(s.cwd.as_deref()).to_string());
+        }
+        // Policy: re-check when the policy files change (FR-06a).
+        let fp = qf_adapter::policy::fingerprint(&env);
+        let recheck = inner
+            .envs
+            .get(env_id)
+            .map(|s| s.policy_fp.as_ref() != Some(&fp))
+            .unwrap_or(true);
+        let managed = recheck.then(|| qf_adapter::policy::detect(&env));
+        // Version gating (FR-24): every running version must pass; the oldest governs.
+        let mut versions: Vec<String> = sessions.iter().filter_map(|s| s.version.clone()).collect();
+        versions.sort_by(|a, b| compare_versions(a, b));
+        versions.dedup();
+        if versions.is_empty() {
+            if let Some(v) = installed_claude_version() {
+                versions.push(v);
+            }
+        }
+        for v in &versions {
+            if !inner.compat.contains_key(v) {
+                let rec = static_check(v);
+                self.save_compat(&rec);
+                let _ = self.record(
+                    inner,
+                    "compat.static",
+                    json!({"version": v, "pass": rec.static_pass, "detail": rec.static_detail}),
+                    false,
+                );
+                inner.compat.insert(v.clone(), rec);
+            }
+        }
+        let governing_version = versions.first().cloned();
+        let failing = versions
+            .iter()
+            .find(|v| !inner.compat.get(*v).is_some_and(|r| r.in_place_allowed()));
+        let is_lane = !env_id.is_default();
+        let lane_canary = inner.envs.get(env_id).map(|s| s.lane_canary).unwrap_or(false);
+        let in_place = match (governing_version.as_ref(), failing) {
+            (None, _) => InPlace {
+                allowed: false,
+                reason: "no Claude version found to check".into(),
+                governing_version: None,
+            },
+            (_, Some(v)) => {
+                let r = inner.compat.get(v);
+                let why = match r {
+                    Some(r) if !r.static_pass => {
+                        format!("Claude {v} failed the static check ({})", r.static_detail.join("; "))
+                    }
+                    Some(r) => format!(
+                        "Claude {v} did not adopt a switched login ({})",
+                        r.live_detail.clone().unwrap_or_default()
+                    ),
+                    None => format!("Claude {v} not checked"),
+                };
+                InPlace {
+                    allowed: false,
+                    reason: why,
+                    governing_version: governing_version.clone(),
+                }
+            }
+            (Some(v), None) if is_lane && !lane_canary => InPlace {
+                allowed: false,
+                reason: "this lane has not passed its check yet (quayflow lanes check)".into(),
+                governing_version: Some(v.clone()),
+            },
+            (Some(v), None) => InPlace {
+                allowed: true,
+                reason: format!("Claude {v} passed the static check"),
+                governing_version: Some(v.clone()),
+            },
+        };
+        let st = inner.envs.get_mut(env_id).expect("env");
+        // Adoption entries of clients that ended no longer wait.
+        let alive: Vec<String> = sessions.iter().map(|s| s.session_id.clone()).collect();
+        for a in st.adoption.iter_mut() {
+            if a.state == AdoptionState::PendingNextRequest && !alive.contains(&a.session_id) {
+                a.state = AdoptionState::Adopted;
+                a.at = Some(now_ms());
+                a.last_request_account = None;
+            }
+        }
+        st.sessions = sessions;
+        if let Some(m) = managed {
+            st.managed = m;
+            st.policy_fp = Some(fp);
+        }
+        st.in_place = in_place;
+    }
+
+    // ---------------- watcher ----------------
+
+    /// Classify login file changes: our own write, a native refresh (captured into the
+    /// vault), or a different identity (unknown login or another switcher).
+    pub fn watch(&self) {
+        let ids: Vec<EnvId> = self.lock().envs.keys().cloned().collect();
+        for id in ids {
+            let (env, last, own, prev_live) = {
+                let inner = self.lock();
+                let Some(st) = inner.envs.get(&id) else { continue };
+                (st.env.clone(), st.last_stamp, st.own_stamp, st.live.clone())
+            };
+            let stamp = qf_adapter::login::credentials_stamp(&env);
+            if stamp == last {
+                continue;
+            }
+            if stamp.is_some() && stamp == own {
+                if let Some(s) = self.lock().envs.get_mut(&id) {
+                    s.last_stamp = stamp;
+                }
+                continue;
+            }
+            // Read a consistent login under Claude's read locks; skip this round if held.
+            let _cred = self.cred_lock.lock().unwrap_or_else(|e| e.into_inner());
+            let login = match qf_adapter::lock::acquire_read(&env, Duration::from_secs(3)) {
+                Ok(held) => {
+                    let l = qf_adapter::read_login(&env);
+                    drop(held);
+                    l
+                }
+                Err(_) => continue,
+            };
+            let mut inner = self.lock();
+            let Some(st) = inner.envs.get_mut(&id) else { continue };
+            st.last_stamp = stamp;
+            match login {
+                Ok(Some(login)) => {
+                    let h = AccountId(login.account_hash().unwrap_or_default());
+                    let registered = inner.config.account(&h).is_some();
+                    let same = prev_live.as_ref() == Some(&h);
+                    if registered {
+                        let captured = self.capture(&mut inner, &h, &login);
+                        if let Some(a) = inner.config.account_mut(&h) {
+                            if a.health == Health::StaleAccess {
+                                a.health = Health::Ok;
+                            }
+                        }
+                        let st = inner.envs.get_mut(&id).expect("env");
+                        st.unknown = None;
+                        st.signed_out = false;
+                        st.live = Some(h.clone());
+                        if same {
+                            if captured {
+                                self.record(&inner, "vault.capture", json!({"account": h, "env": id}), false);
+                            }
+                        } else {
+                            self.external_change(&mut inner, &id, Some(&h));
+                        }
+                        inner.schedule.poke(&h);
+                    } else {
+                        let st = inner.envs.get_mut(&id).expect("env");
+                        st.unknown = Some(h.0.clone());
+                        st.live = Some(h.clone());
+                        st.signed_out = false;
+                        if !same {
+                            self.external_change(&mut inner, &id, None);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    let st = inner.envs.get_mut(&id).expect("env");
+                    if !st.signed_out {
+                        st.signed_out = true;
+                        st.live = None;
+                        st.unknown = None;
+                        self.record(&inner, "login.signed_out", json!({"env": id}), false);
+                        self.emit(
+                            &mut inner,
+                            "notice",
+                            Some(&id),
+                            "No login in this environment: Claude was signed out. Automation is paused.",
+                        );
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+
+    fn external_change(&self, inner: &mut Inner, env: &EnvId, to: Option<&AccountId>) {
+        let now = now_ms();
+        let st = inner.envs.get_mut(env).expect("env");
+        st.external_changes.retain(|t| now - t < 10 * 60_000);
+        st.external_changes.push(now);
+        st.suggestion = None;
+        st.pin = None;
+        let repeated = st.external_changes.len() >= 2;
+        if repeated {
+            st.other_switcher = true;
+        }
+        let unknown = st.unknown.clone();
+        self.record(
+            inner,
+            "login.external_change",
+            json!({"env": env, "to": to, "unknown": unknown, "repeated": repeated}),
+            true,
+        );
+        let text = match (to, repeated) {
+            (_, true) => "The login changed repeatedly without Quayflow: another tool may be switching accounts. Automation is paused.".to_string(),
+            (Some(id), false) => format!("The login changed outside Quayflow to {}.", inner.config.label(id)),
+            (None, false) => "The live login is not a registered account. Automation is paused: register it (/quay register) or ignore.".into(),
+        };
+        self.emit(inner, "notice", Some(env), &text);
+    }
+
+    /// Store a login in its vault entry when it is newer than the stored copy.
+    /// Never restores an old snapshot over a newer refresh (FR-21).
+    pub fn capture(&self, inner: &mut Inner, id: &AccountId, login: &Login) -> bool {
+        if inner.config.account(id).is_none() {
+            return false;
+        }
+        match self.vault.load(id.as_str()) {
+            Ok(stored) if stored.same_tokens(login) => false,
+            Ok(stored) if stored.expires_at().unwrap_or(0) > login.expires_at().unwrap_or(0) => false,
+            Ok(_) | Err(qf_vault::VaultError::NotFound) => match self.vault.store(id.as_str(), login) {
+                Ok(()) => true,
+                Err(e) => {
+                    self.log.log(
+                        "error",
+                        "vault.capture_failed",
+                        json!({"account": id, "error": e.to_string()}),
+                        &[],
+                    );
+                    false
+                }
+            },
+            Err(e) => {
+                if let Some(a) = inner.config.account_mut(id) {
+                    a.health = Health::VaultError;
+                }
+                self.log.log(
+                    "error",
+                    "vault.read_failed",
+                    json!({"account": id, "error": e.to_string()}),
+                    &[],
+                );
+                false
+            }
+        }
+    }
+
+    // ---------------- observation ----------------
+
+    pub fn observe(&self, force: bool) {
+        if self.offline {
+            return;
+        }
+        let now = now_ms();
+        let jobs: Vec<(AccountId, Option<Env>)> = {
+            let inner = self.lock();
+            inner
+                .config
+                .accounts
+                .iter()
+                .filter(|a| a.health != Health::RefreshRejected)
+                .filter(|a| force || inner.schedule.due(&a.id, now))
+                .map(|a| {
+                    let live_env = inner
+                        .envs
+                        .values()
+                        .find(|s| s.live.as_ref() == Some(&a.id) && s.unknown.is_none())
+                        .map(|s| s.env.clone());
+                    (a.id.clone(), live_env)
+                })
+                .collect()
+        };
+        for (id, live_env) in jobs {
+            // The live account's freshest token is in the environment, not the vault.
+            let login = match &live_env {
+                Some(env) => qf_adapter::read_login(env)
+                    .ok()
+                    .flatten()
+                    .filter(|l| l.account_hash().as_deref() == Some(id.as_str())),
+                None => None,
+            }
+            .or_else(|| self.vault.load(id.as_str()).ok());
+            let Some(login) = login else {
+                let mut inner = self.lock();
+                if let Some(a) = inner.config.account_mut(&id) {
+                    a.health = Health::VaultError;
+                }
+                continue;
+            };
+            let token = login.access_token().unwrap_or_default().to_string();
+            let r = qf_provider::fetch_usage(&id, &token, login.expires_at(), now_ms());
+            let mut inner = self.lock();
+            let t = inner.config.tuning.clone();
+            match r {
+                Ok(o) => {
+                    let live = live_env.is_some();
+                    inner
+                        .schedule
+                        .on_success(&id, now_ms(), live, t.live_poll_s, t.idle_poll_s);
+                    merge_observation(&mut inner.observations, o, false);
+                    if let Some(a) = inner.config.account_mut(&id) {
+                        if a.health == Health::StaleAccess {
+                            a.health = Health::Ok;
+                        }
+                    }
+                }
+                Err(e) => {
+                    if e == ProviderError::Expired && live_env.is_none() {
+                        if let Some(a) = inner.config.account_mut(&id) {
+                            if a.health == Health::Ok {
+                                a.health = Health::StaleAccess;
+                            }
+                        }
+                    }
+                    inner
+                        .schedule
+                        .on_error(&id, now_ms(), &e, t.live_poll_s, t.backoff_max_s);
+                    self.log.log(
+                        "warn",
+                        "usage.error",
+                        json!({"account": id, "error": e.to_string()}),
+                        &[],
+                    );
+                }
+            }
+            self.save_observations(&inner);
+        }
+    }
+
+    /// Fold a client's rate-limit view into the live account's observation.
+    pub fn session_observation(&self, inner: &mut Inner, account: &AccountId, limits: &[api::SessionRateLimit]) {
+        let windows: Vec<Window> = limits
+            .iter()
+            .filter_map(|l| {
+                let pct = l.percent_used?;
+                let key = match l.kind.as_deref()? {
+                    "five_hour" => "5h".to_string(),
+                    "seven_day" => "7d".to_string(),
+                    k if k.starts_with("seven_day_") => format!("7d:{}", capitalize(&k["seven_day_".len()..])),
+                    _ => return None,
+                };
+                let resets_at = match &l.resets_at {
+                    Some(Value::Number(n)) => n.as_i64().map(|v| if v < 10_000_000_000 { v * 1000 } else { v }),
+                    Some(Value::String(s)) => qf_model::time::parse_rfc3339_ms(s),
+                    _ => None,
+                };
+                Some(Window { key, pct, resets_at })
+            })
+            .collect();
+        if windows.is_empty() {
+            return;
+        }
+        merge_observation(
+            &mut inner.observations,
+            Observation {
+                account: account.clone(),
+                ts: now_ms(),
+                windows,
+                source: "session".into(),
+            },
+            true,
+        );
+    }
+
+    // ---------------- decisions ----------------
+
+    pub fn tick(self: &Arc<Self>) {
+        self.watch();
+        let ids: Vec<EnvId> = self.lock().envs.keys().cloned().collect();
+        {
+            let mut inner = self.lock();
+            for id in &ids {
+                self.refresh_env(&mut inner, id);
+                self.finish_adoption(&mut inner, id);
+            }
+            self.expire_signins(&mut inner);
+        }
+        self.observe(false);
+        for id in ids {
+            self.decide(&id);
+        }
+    }
+
+    pub fn finish_adoption(&self, inner: &mut Inner, env: &EnvId) {
+        let Some(st) = inner.envs.get_mut(env) else { return };
+        let Some(t) = st.transition.as_mut() else { return };
+        if t.state != TransitionState::VerifyingAdoption {
+            return;
+        }
+        let tid = t.id.clone();
+        let pending = st
+            .adoption
+            .iter()
+            .any(|a| a.transition == tid && a.state == AdoptionState::PendingNextRequest);
+        let timed_out = t.written_at.is_some_and(|w| now_ms() - w > 30 * 60_000);
+        if !pending || timed_out {
+            let mismatch = st
+                .adoption
+                .iter()
+                .any(|a| a.transition == tid && a.state == AdoptionState::Mismatch);
+            t.state = if mismatch {
+                TransitionState::Uncertain
+            } else {
+                TransitionState::Completed
+            };
+            t.ended_at = Some(now_ms());
+            if timed_out && pending {
+                t.detail = Some("some clients made no request yet; they adopt at their next request".into());
+            }
+            let t = t.clone();
+            st.last_switch = Some(t.clone());
+            self.record(
+                inner,
+                "transition.completed",
+                json!({"id": t.id, "env": env, "state": t.state}),
+                false,
+            );
+        }
+    }
+
+    pub fn decide(self: &Arc<Self>, env: &EnvId) {
+        let mut inner = self.lock();
+        let Some(st) = inner.envs.get(env) else { return };
+        if let Some(why) = st.pause_reason(&inner.config) {
+            let st = inner.envs.get_mut(env).expect("env");
+            st.decision = format!("automation paused: {why}");
+            if st.suggestion.as_ref().is_some_and(|s| s.how != SwitchHow::Recovery) {
+                st.suggestion = None;
+            }
+            return;
+        }
+        let governing = Engine::governing(&inner, env);
+        let mode = qf_policy::effective_mode(&governing);
+        let Some(ctx) = Engine::ctx(&inner, env, None) else {
+            return;
+        };
+        let decision = qf_policy::proactive(&ctx);
+        drop(ctx);
+        match decision {
+            qf_policy::Proactive::None(why) => {
+                let st = inner.envs.get_mut(env).expect("env");
+                st.decision = why;
+                if st
+                    .suggestion
+                    .as_ref()
+                    .is_some_and(|s| s.how != SwitchHow::Recovery || now_ms() - s.ts > 15 * 60_000)
+                {
+                    st.suggestion = None;
+                }
+            }
+            qf_policy::Proactive::Switch {
+                to,
+                reason,
+                return_home,
+            } => {
+                let how = if return_home {
+                    SwitchHow::ReturnHome
+                } else {
+                    SwitchHow::Automatic
+                };
+                match mode {
+                    Mode::Manual => {
+                        inner.envs.get_mut(env).expect("env").decision = format!("Manual mode: {reason}");
+                    }
+                    Mode::Suggest => {
+                        let st = inner.envs.get(env).expect("env");
+                        if st.suggestion.as_ref().map(|s| &s.to) != Some(&to) {
+                            let from = st.live.clone();
+                            let s = Suggestion {
+                                id: random_hex(6),
+                                ts: now_ms(),
+                                env: env.clone(),
+                                from,
+                                to: to.clone(),
+                                how: if return_home {
+                                    SwitchHow::ReturnHome
+                                } else {
+                                    SwitchHow::Accepted
+                                },
+                                reason: reason.clone(),
+                            };
+                            self.record(
+                                &inner,
+                                "suggest",
+                                json!({"env": env, "to": to, "reason": reason}),
+                                false,
+                            );
+                            let text = format!(
+                                "Suggest switching to {}: {reason}. /quay accept",
+                                inner.config.label(&to)
+                            );
+                            let st = inner.envs.get_mut(env).expect("env");
+                            st.suggestion = Some(s);
+                            self.emit(&mut inner, "suggestion", Some(env), &text);
+                        }
+                        inner.envs.get_mut(env).expect("env").decision = format!("suggesting: {reason}");
+                    }
+                    Mode::Automatic => {
+                        inner.envs.get_mut(env).expect("env").decision = reason.clone();
+                        drop(inner);
+                        let r = self.start_switch(env, &to, how, &reason, true, false);
+                        if let Err(e) = r {
+                            if let Some(s) = self.lock().envs.get_mut(env) {
+                                s.decision = format!("automatic switch not started: {}", e.message);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn expire_signins(&self, inner: &mut Inner) {
+        let now = now_ms();
+        let stale: Vec<String> = inner
+            .signins
+            .values()
+            .filter(|s| now - s.started_at > 30 * 60_000 && s.state != "saved")
+            .map(|s| s.id.clone())
+            .collect();
+        for id in stale {
+            if let Some(s) = inner.signins.remove(&id) {
+                let _ = qf_adapter::login::retire(&s.env, Duration::from_secs(3));
+                let _ = std::fs::remove_dir_all(&s.env.config_dir);
+            }
+        }
+    }
+
+    pub fn wait_events(&self, since: u64, wait: Duration) -> api::EventsResponse {
+        let mut ev = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        if ev.seq <= since && !wait.is_zero() {
+            let (g, _) = self
+                .events_cv
+                .wait_timeout_while(ev, wait, |e| e.seq <= since && !self.shutdown.load(Ordering::SeqCst))
+                .unwrap_or_else(|e| e.into_inner());
+            ev = g;
+        }
+        api::EventsResponse {
+            seq: ev.seq,
+            events: ev.list.iter().filter(|e| e.seq > since).cloned().collect(),
+        }
+    }
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Keep one observation per account; a session view overrides the windows it carries
+/// and keeps the engine's per-model windows.
+pub fn merge_observation(list: &mut Vec<Observation>, o: Observation, partial: bool) {
+    match list.iter_mut().find(|x| x.account == o.account) {
+        Some(existing) if partial => {
+            let mut windows = o.windows.clone();
+            for w in &existing.windows {
+                if !windows.iter().any(|n| n.key == w.key) {
+                    windows.push(w.clone());
+                }
+            }
+            existing.windows = windows;
+            existing.ts = o.ts;
+            existing.source = o.source;
+        }
+        Some(existing) => *existing = o,
+        None => list.push(o),
+    }
+}
+
+pub fn load_config(dd: &DataDir) -> Result<Config, String> {
+    match std::fs::read_to_string(dd.config()) {
+        Ok(t) => {
+            let c: Config = serde_json::from_str(&t).map_err(|e| format!("config.json is not valid: {e}"))?;
+            c.validate().map_err(|e| format!("config.json: {e}"))?;
+            Ok(c)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let c = Config::default();
+            let text = serde_json::to_string_pretty(&c).map_err(|e| e.to_string())?;
+            qf_vault::atomic_write(&dd.config(), text.as_bytes()).map_err(|e| e.to_string())?;
+            Ok(c)
+        }
+        Err(e) => Err(format!("config.json: {e}")),
+    }
+}
+
+pub fn lane_meta(dd: &DataDir, name: &str) -> Value {
+    std::fs::read_to_string(dd.lanes().join(name).join(".quayflow-lane.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| json!({}))
+}
+
+pub fn installed_claude_version() -> Option<String> {
+    let dir = qf_adapter::env::home_dir()
+        .join(".local")
+        .join("share")
+        .join("claude")
+        .join("versions");
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .max_by(|a, b| compare_versions(a, b))
+}
+
+pub fn static_check(version: &str) -> CompatRecord {
+    let mut rec = CompatRecord {
+        version: version.into(),
+        checked_at: now_ms(),
+        static_pass: false,
+        static_detail: vec![],
+        live_pass: None,
+        live_detail: None,
+    };
+    match qf_adapter::canary::version_binary(version) {
+        None => rec.static_detail.push(format!(
+            "binary for Claude {version} not found (native install expected)"
+        )),
+        Some(p) => match qf_adapter::canary::scan(&p) {
+            Ok(found) => {
+                rec.static_pass = found.iter().all(|(_, ok)| *ok);
+                rec.static_detail = found
+                    .iter()
+                    .filter(|(_, ok)| !ok)
+                    .map(|(l, _)| format!("missing {l}"))
+                    .collect();
+            }
+            Err(e) => rec.static_detail.push(format!("binary unreadable: {e}")),
+        },
+    }
+    rec
+}
