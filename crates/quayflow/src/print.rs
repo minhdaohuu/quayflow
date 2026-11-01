@@ -20,6 +20,9 @@ pub fn status(v: &Value) {
         e["pid"],
         e["integrity"].as_str().unwrap_or("")
     );
+    if let Some(h) = e["exeSha256"].as_str().filter(|h| !h.is_empty()) {
+        println!("Build SHA-256: {h}");
+    }
     let labels: Vec<(String, String)> = v["accounts"]
         .as_array()
         .into_iter()

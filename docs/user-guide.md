@@ -102,6 +102,8 @@ Turning on Automatic needs explicit approval: `quayflow mode automatic --group D
 
 Defaults, adjustable per group: proactive threshold 85% of the account's binding usage window; a candidate must be at least 10 points below the threshold; 5 minutes between proactive switches. The binding window is the fullest of the five-hour, seven-day and per-model weekly windows. Quayflow uses only fresh usage readings: at most 5 minutes old for the live account and 60 minutes for idle ones. A missing or stale reading is never treated as zero and never triggers an automatic switch.
 
+**Idle accounts and expired tokens.** Quayflow never refreshes tokens; only Claude does, for the live account. An account that stays idle has its access token expire after some hours, and its usage can then no longer be read. Once its last reading is older than 60 minutes, it is no longer a candidate for automatic switching or usage-limit recovery. `/quay` shows it as stale. You can still switch to it by hand (`quayflow use <account>`), after which Claude refreshes it and readings resume. How to handle this better is an open owner decision (see [Known limits](known-limits.md#switching-behavior)).
+
 ## What a switch does
 
 - A switch targets a **credential environment**, not a terminal window. By default this is `~/.claude`, which all your Claude sessions share. **Every session using it moves to the new account at its next request.** `/quay` lists the running sessions it can see. Other clients, such as editor extensions, may also use the environment and may not be listed.
@@ -234,6 +236,7 @@ The same account used on several machines shares one allowance and one usage-rea
 | `claude plugin marketplace add` fails | Private repository: `gh auth login` then `gh auth setup-git`; without an SSH key set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` |
 | Windows blocks `quayflow.exe` (SmartScreen, Smart App Control, company policy) or antivirus flags it | See [Verifying a release](verify-release.md#windows-protections-and-quayflow) |
 | No switch happens near the limit | Check the mode (Suggest only suggests), a pin, the cooldown, group conflicts (`/quay` names the blocking session), stale readings, or a paused engine. `/quay` explains each exclusion |
+| An idle account is never chosen automatically | Its token expired while idle, so its usage reading is stale. Switch to it by hand once (`quayflow use <account>`). See [Modes](#modes) |
 | Headless job stopped at a usage limit | Its group is not in Automatic mode, or every account was exhausted and Claude's own wait was not enabled |
 | An account shows "set aside" | Its refresh token was refused. Run `quayflow reauth <account>` |
 | "Unknown login" notice | See [Unknown logins](#unknown-logins-and-other-switchers) |

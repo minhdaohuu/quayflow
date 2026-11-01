@@ -15,6 +15,8 @@ pub struct HelloRequest {
     pub session_id: Option<String>,
     #[serde(default)]
     pub headless: bool,
+    #[serde(default)]
+    pub claude_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +87,10 @@ pub struct AccountView {
     pub unavailable_models: Vec<String>,
     #[serde(default)]
     pub rank: Option<Rank>,
+    /// Opaque organization hash and its local display name.
+    pub org: String,
+    #[serde(default)]
+    pub org_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +114,10 @@ pub struct LiveLogin {
     /// No login at all in the environment (signed out).
     #[serde(default)]
     pub signed_out: bool,
+    #[serde(default)]
+    pub kind: Option<AccountKind>,
+    #[serde(default)]
+    pub subscription: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +141,9 @@ pub struct EnvView {
     pub governing_groups: Vec<String>,
     pub in_place: InPlace,
     pub managed: ManagedLogin,
+    /// Display names of the enforced organizations, where a registered account belongs to them.
+    #[serde(default)]
+    pub managed_org_names: Vec<String>,
     #[serde(default)]
     pub transition: Option<Transition>,
     #[serde(default)]
@@ -155,6 +168,8 @@ pub struct SessionView {
     pub session_id: String,
     pub env: EnvId,
     pub group: String,
+    /// "assigned" (trusted project assignment) or "default".
+    pub group_source: String,
     /// Account this session's last verified request used.
     #[serde(default)]
     pub verified_account: Option<AccountId>,

@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "es2023", "lib": ["es2023"], "types": [],
+    "module": "esnext", "moduleResolution": "bundler",
+    "strict": true, "noUncheckedIndexedAccess": true, "noUnusedLocals": true,
+    "noEmit": true, "skipLibCheck": true,
+    "jsx": "react", "jsxFactory": "h", "jsxFragmentFactory": "Fragment"
+  },
+  "include": ["host-types/claude-code-2.1.316.d.ts", "quayflow/hooks", "quayflow/types", "quayflow/tests"]
+}

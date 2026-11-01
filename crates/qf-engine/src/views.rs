@@ -102,6 +102,26 @@ impl Engine {
                     false,
                 );
             }
+            // Kind and plan of the live login, for review before registering it (no token is exposed).
+            let live_kind: Option<(AccountKind, Option<String>)> = match (&st.live, &st.unknown) {
+                (Some(l), None) => cfg.account(l).map(|a| (a.kind, a.subscription.clone())),
+                (Some(_), Some(_)) => qf_adapter::read_login(&st.env)
+                    .ok()
+                    .flatten()
+                    .map(|l| (l.kind(), l.subscription().map(String::from))),
+                _ => None,
+            };
+            let managed_org_names: Vec<String> = st
+                .managed
+                .force_org
+                .iter()
+                .filter_map(|h| {
+                    cfg.accounts
+                        .iter()
+                        .find(|a| &a.org == h)
+                        .and_then(|a| a.org_name.clone())
+                })
+                .collect();
             envs.push(EnvView {
                 id: id.clone(),
                 config_dir: st.env.config_dir.display().to_string(),
@@ -110,11 +130,14 @@ impl Engine {
                     known: st.live.is_some() && st.unknown.is_none(),
                     label: st.live.as_ref().filter(|_| st.unknown.is_none()).map(|l| cfg.label(l)),
                     signed_out: st.signed_out,
+                    kind: live_kind.as_ref().map(|x| x.0),
+                    subscription: live_kind.as_ref().and_then(|x| x.1.clone()),
                 },
                 mode: qf_policy::effective_mode(&governing),
                 governing_groups: governing.iter().map(|g| g.name.clone()).collect(),
                 in_place: st.in_place.clone(),
                 managed: st.managed.clone(),
+                managed_org_names,
                 transition: st.transition.clone(),
                 last_switch: st.last_switch.clone(),
                 pin: st.pin.clone().filter(|p| p.until > now),
@@ -137,6 +160,16 @@ impl Engine {
             SessionView {
                 session_id: sid.into(),
                 group: cfg.resolve_group(cwd.as_deref()).to_string(),
+                group_source: if cfg.projects.iter().any(|p| {
+                    let pp = normalize_path(&p.path);
+                    cwd.as_deref()
+                        .map(normalize_path)
+                        .is_some_and(|c| c == pp || c.starts_with(&format!("{pp}\\")))
+                }) {
+                    "assigned".into()
+                } else {
+                    "default".into()
+                },
                 verified_account: inner.verified.get(sid).map(|v| v.0.clone()),
                 verified_at: inner.verified.get(sid).map(|v| v.1),
                 adoption: st.and_then(|s| s.adoption.iter().rev().find(|a| a.session_id == sid).cloned()),
@@ -206,6 +239,8 @@ impl Engine {
                     eligibility,
                     unavailable_models: a.unavailable_models.clone(),
                     rank: cfg.groups.iter().find(|g| g.contains(&a.id)).map(|g| g.rank_of(&a.id)),
+                    org: a.org.clone(),
+                    org_name: a.org_name.clone(),
                 }
             })
             .collect();

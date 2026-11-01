@@ -276,6 +276,7 @@ impl Engine {
             registered_at: now_ms(),
             health: Health::Ok,
             unavailable_models: vec![],
+            org_name: login.org_name(),
         };
         inner.config.accounts.push(account);
         let r = self.apply_members(&mut inner, group, std::slice::from_ref(&id), &[], accept);
@@ -380,6 +381,7 @@ impl Engine {
                         registered_at: now_ms(),
                         health: Health::Ok,
                         unavailable_models: vec![],
+                        org_name: p.login.org_name(),
                     });
                     new_ids.push(id);
                     out.push(format!("{}: imported as \"{label}\"", p.name));
@@ -586,6 +588,7 @@ impl Engine {
                 registered_at: now_ms(),
                 health: Health::Ok,
                 unavailable_models: vec![],
+                org_name: login.org_name(),
             });
             match self.apply_members(&mut inner, &group, std::slice::from_ref(&id_acc), &[], accept) {
                 Ok(r) if r.ok => {}
@@ -871,7 +874,7 @@ impl Engine {
             if !enforced.iter().any(|o| o == org) {
                 return Err(ApiErr::invalid("name the enforcing organization exactly as shown"));
             }
-            if !acknowledge.is_some_and(|a| a.trim().eq_ignore_ascii_case("I accept the risk")) {
+            if !acknowledge.is_some_and(|a| a.trim().to_ascii_lowercase().starts_with("i accept the risk")) {
                 return Err(ApiErr::invalid("type \"I accept the risk\" to confirm"));
             }
             inner.config.d_org = DOrgSetting {

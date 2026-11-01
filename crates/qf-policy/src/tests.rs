@@ -15,6 +15,7 @@ fn acct(id: &str, kind: AccountKind) -> Account {
         registered_at: 0,
         health: Health::Ok,
         unavailable_models: vec![],
+        org_name: None,
     }
 }
 

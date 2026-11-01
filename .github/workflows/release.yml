@@ -1,0 +1,241 @@
+# Release: reproducible build, hashes, build-provenance attestations, GitHub Release.
+#
+# Trigger: push a tag vX.Y.Z (the tag must equal the workspace version in
+# Cargo.toml and, when present, mod/quayflow/.claude-plugin/plugin.json).
+#
+# Reproducibility: pinned toolchain (rust-toolchain.toml), Cargo.lock with
+# --locked, SOURCE_DATE_EPOCH = tag commit time, path prefixes remapped,
+# /Brepro for a deterministic PE header, release profile strips and disables
+# incremental builds. The same commit is built twice in separate jobs and
+# separate directories; the release fails if the binaries differ.
+#
+# Attestations: GitHub only issues artifact attestations for public
+# repositories (or private ones on GitHub Enterprise Cloud). While this
+# repository is private, the attest step is allowed to fail and the release
+# notes say the assets are not attested; installers then need -SkipAttestation
+# when gh is signed in. Once public, every asset is attested and verified below.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      epoch: ${{ steps.meta.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        name: Check versions and read the commit time
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') { throw "Tag $tag is not vX.Y.Z" }
+          $version = $Matches[1]
+          $cargo = Get-Content Cargo.toml -Raw
+          if ($cargo -notmatch '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"') { throw 'No [workspace.package] version in Cargo.toml' }
+          if ($Matches[1] -ne $version) { throw "Cargo.toml version $($Matches[1]) does not match tag $tag" }
+          $plugin = 'mod/quayflow/.claude-plugin/plugin.json'
+          if (Test-Path $plugin) {
+            $pv = (Get-Content $plugin -Raw | ConvertFrom-Json).version
+            if ($pv -and $pv -ne $version) { throw "Mod version $pv does not match tag $tag" }
+          }
+          $epoch = (git log -1 --format=%ct $env:GITHUB_SHA).Trim()
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "epoch=$epoch" >> $env:GITHUB_OUTPUT
+          Write-Host "Version $version, SOURCE_DATE_EPOCH $epoch"
+
+  build:
+    needs: prepare
+    runs-on: windows-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - slot: a
+            dir: src-a
+          - slot: b
+            dir: deeper/second/src-b
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.epoch }}
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ${{ matrix.dir }}
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        shell: pwsh
+        working-directory: ${{ matrix.dir }}
+        run: |
+          rustup toolchain install
+          rustc -Vv
+          cargo -V
+      - name: Build (reproducible)
+        shell: pwsh
+        working-directory: ${{ matrix.dir }}
+        run: |
+          $src = (Get-Location).Path
+          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
+          # CARGO_ENCODED_RUSTFLAGS (0x1f-separated) keeps paths with spaces intact.
+          $flags = @(
+            "--remap-path-prefix=$src=.",
+            "--remap-path-prefix=$cargoHome=/cargo",
+            '-C', 'link-arg=/Brepro'
+          )
+          $env:CARGO_ENCODED_RUSTFLAGS = $flags -join [char]0x1f
+          cargo build --release --locked -p quayflow
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item target/release/quayflow.exe, target/release/quayflow-bg.exe out/
+          Get-FileHash out/* -Algorithm SHA256 | Format-Table Hash, Path -AutoSize
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.slot }}
+          path: ${{ matrix.dir }}/out/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-a
+          path: build-a
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-b
+          path: build-b
+      - name: Compare the two builds
+        shell: pwsh
+        run: |
+          $diff = 0
+          foreach ($n in 'quayflow.exe', 'quayflow-bg.exe') {
+            $a = (Get-FileHash "build-a/$n" -Algorithm SHA256).Hash
+            $b = (Get-FileHash "build-b/$n" -Algorithm SHA256).Hash
+            Write-Host "$n  a=$a  b=$b"
+            if ($a -ne $b) { $diff++; Write-Host "::error::$n is not reproducible (two builds differ)" }
+          }
+          if ($diff) { exit 1 }
+      - name: Assemble assets and SHA256SUMS
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force assets | Out-Null
+          Copy-Item build-a/quayflow.exe, build-a/quayflow-bg.exe assets/
+          Copy-Item installer/install.ps1, shell/Quayflow.psm1 assets/
+          $lines = Get-ChildItem assets -File | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          }
+          # sha256sum format, LF line endings, so `sha256sum -c SHA256SUMS` works too.
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path assets) 'SHA256SUMS'), (($lines -join "`n") + "`n"))
+          Get-Content assets/SHA256SUMS
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@v2
+        continue-on-error: ${{ github.event.repository.private }}
+        with:
+          subject-path: |
+            assets/quayflow.exe
+            assets/quayflow-bg.exe
+            assets/install.ps1
+            assets/Quayflow.psm1
+            assets/SHA256SUMS
+      - name: Create the GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTESTED: ${{ steps.attest.outcome }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $sums = Get-Content assets/SHA256SUMS -Raw
+          $attest = if ($env:ATTESTED -eq 'success') {
+            "Every asset has a GitHub build-provenance attestation: ``gh attestation verify <file> --repo ${{ github.repository }}``."
+          } else {
+            '**Not attested**: this repository is private, and GitHub issues artifact attestations only for public repositories. Verify the SHA-256 hashes; install with `-SkipAttestation` if the GitHub CLI is signed in.'
+          }
+          $notes = @"
+          Quayflow $tag for Windows (x64).
+
+          Install (per user, no administrator rights):
+
+          ``````powershell
+          irm https://github.com/${{ github.repository }}/releases/download/$tag/install.ps1 | iex
+          ``````
+
+          Safer: download ``install.ps1``, check it against SHA256SUMS below, read it, then run it. See docs/verify-release.md.
+
+          Integrity: reproducible build (verified by two independent builds in this workflow), SHA-256 hashes below. Not Authenticode-signed. $attest
+
+          ``````text
+          $sums``````
+
+          Users are responsible for complying with their provider's terms and their organization's rules. Quayflow is not affiliated with or endorsed by Anthropic. MIT License.
+          "@
+          Set-Content -Path notes.md -Value $notes -Encoding utf8
+          $flags = @()
+          if ($tag -match '-') { $flags += '--prerelease' }
+          gh release create $tag (Get-ChildItem assets -File).FullName --title "Quayflow $tag" --notes-file notes.md --verify-tag @flags
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  verify:
+    needs: publish
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Download the published assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download '${{ github.ref_name }}' --repo '${{ github.repository }}' --dir dl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dl
+      - name: Check SHA256SUMS
+        shell: pwsh
+        run: |
+          $bad = 0
+          $expected = @('quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1')
+          $seen = @()
+          foreach ($line in Get-Content dl/SHA256SUMS) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { Write-Host "::error::Bad line: $line"; $bad++; continue }
+            $name = $Matches[2]; $seen += $name
+            $actual = (Get-FileHash "dl/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $Matches[1]) { Write-Host "::error::$name hash mismatch"; $bad++ } else { Write-Host "$name OK" }
+          }
+          foreach ($n in $expected) { if ($seen -notcontains $n) { Write-Host "::error::$n missing from SHA256SUMS"; $bad++ } }
+          if ($bad) { exit 1 }
+      - name: Verify attestations
+        if: ${{ !github.event.repository.private }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem dl -File) {
+            gh attestation verify $f.FullName --repo '${{ github.repository }}'
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::attestation failed for $($f.Name)"; $bad++ }
+          }
+          if ($bad) { exit 1 }
+      - name: Attestations skipped (private repository)
+        if: ${{ github.event.repository.private }}
+        shell: pwsh
+        run: Write-Host '::warning::Repository is private; GitHub does not issue artifact attestations here, so none were verified.'

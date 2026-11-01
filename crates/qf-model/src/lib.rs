@@ -93,6 +93,9 @@ pub struct Account {
     /// Models learned to be unavailable for this account (`model_not_found` after a switch).
     #[serde(default)]
     pub unavailable_models: Vec<String>,
+    /// Organization display name from the local login record. Shown in the UI only (never logged).
+    #[serde(default)]
+    pub org_name: Option<String>,
 }
 
 /// One usage window of one account.
@@ -297,6 +300,9 @@ pub struct Transition {
     pub locked_ms: Option<u64>,
     #[serde(default)]
     pub detail: Option<String>,
+    /// Machine code when the transition failed: "lock_held", "vault", "pre_write", "post_write", "cancelled".
+    #[serde(default)]
+    pub failure: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -476,6 +482,7 @@ mod tests {
             ended_at: None,
             locked_ms: Some(300),
             detail: None,
+            failure: None,
         };
         let s = serde_json::to_string(&t).unwrap();
         assert!(s.contains("\"how\":\"recovery\""));
@@ -494,6 +501,7 @@ mod tests {
             registered_at: 0,
             health: Health::Ok,
             unavailable_models: vec![],
+            org_name: None,
         };
         let m = ManagedLogin {
             force_org: vec!["org1".into()],

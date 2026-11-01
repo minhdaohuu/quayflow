@@ -181,6 +181,40 @@ fn expand_env(s: &str) -> String {
     out
 }
 
+/// Effective Windows PowerShell 5.1 execution policy (Group Policy, then user, then machine;
+/// Windows client default is Restricted). Profiles only load under RemoteSigned, Unrestricted or Bypass.
+#[cfg(windows)]
+pub fn ps51_execution_policy() -> String {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    let read = |hive, path: &str, value: &str| -> Option<String> {
+        RegKey::predef(hive)
+            .open_subkey(path)
+            .ok()?
+            .get_value::<String, _>(value)
+            .ok()
+    };
+    let gpo = r"Software\Policies\Microsoft\Windows\PowerShell";
+    let ids = r"Software\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell";
+    read(HKEY_LOCAL_MACHINE, gpo, "ExecutionPolicy")
+        .or_else(|| read(HKEY_CURRENT_USER, gpo, "ExecutionPolicy"))
+        .or_else(|| read(HKEY_CURRENT_USER, ids, "ExecutionPolicy"))
+        .or_else(|| read(HKEY_LOCAL_MACHINE, ids, "ExecutionPolicy"))
+        .unwrap_or_else(|| "Restricted".into())
+}
+
+#[cfg(not(windows))]
+pub fn ps51_execution_policy() -> String {
+    "Unrestricted".into()
+}
+
+pub fn profiles_load(policy: &str) -> bool {
+    matches!(
+        policy.to_ascii_lowercase().as_str(),
+        "remotesigned" | "unrestricted" | "bypass"
+    )
+}
+
 pub fn profile_paths() -> Vec<PathBuf> {
     let d = documents_dir();
     vec![

@@ -1,0 +1,19 @@
+{
+  "name": "quayflow",
+  "owner": {
+    "name": "Quayflow",
+    "url": "https://github.com/minhdaohuu/quayflow"
+  },
+  "metadata": {
+    "description": "Quayflow: manage approved Claude accounts and switch between them without leaving your session. Not affiliated with or endorsed by Anthropic."
+  },
+  "plugins": [
+    {
+      "name": "quayflow",
+      "source": "./mod/quayflow",
+      "description": "Quayflow Mod: account usage, suggestions and switching inside Claude Code (/quay), backed by the local Quayflow engine (quayflow.exe).",
+      "license": "MIT",
+      "homepage": "https://github.com/minhdaohuu/quayflow"
+    }
+  ]
+}

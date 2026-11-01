@@ -320,7 +320,16 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             Some("install") => match local::shell_install(dd, &local::profile_paths()) {
                 Ok(p) => {
                     let _ = local::set_consent(dd, "promptHook", true);
-                    println!("Prompt hook installed in:\n  {}\nOpen a new PowerShell window to load it. Windows PowerShell 5.1 needs an execution policy that allows local scripts (RemoteSigned).", p.join("\n  "));
+                    println!("Prompt hook installed in:
+  {}
+Open a new PowerShell window to load it.", p.join("
+  "));
+                    let policy = local::ps51_execution_policy();
+                    if !local::profiles_load(&policy) {
+                        println!("Note: Windows PowerShell 5.1's execution policy is {policy}, so it does not load profiles. To use the hook there, run in Windows PowerShell:
+  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+Quayflow does not change it for you. PowerShell 7 is not affected.");
+                    }
                     0
                 }
                 Err(e) => fail(e),

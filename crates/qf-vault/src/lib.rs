@@ -37,6 +37,12 @@ impl Login {
     pub fn org_uuid(&self) -> Option<&str> {
         self.account.get("organizationUuid").and_then(|v| v.as_str())
     }
+    pub fn org_name(&self) -> Option<String> {
+        self.account
+            .get("organizationName")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    }
     pub fn account_hash(&self) -> Option<String> {
         self.account_uuid().map(qf_model::identity_hash)
     }

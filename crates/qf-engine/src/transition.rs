@@ -125,6 +125,7 @@ impl Engine {
                 ended_at: None,
                 locked_ms: None,
                 detail: None,
+                failure: None,
             };
             if !self.record(
                 &inner,
@@ -189,7 +190,18 @@ impl Engine {
 
     fn end(&self, env: &EnvId, tid: &str, state: TransitionState, detail: String) {
         let mut inner = self.lock();
-        if let Some(t) = self.set_state(&mut inner, env, tid, state, Some(detail.clone())) {
+        let failure = match state {
+            TransitionState::Cancelled => "cancelled",
+            TransitionState::Uncertain => "post_write",
+            _ if detail.contains("lock stayed held") => "lock_held",
+            _ if detail.contains("protected copy") => "vault",
+            _ => "pre_write",
+        };
+        if let Some(mut t) = self.set_state(&mut inner, env, tid, state, Some(detail.clone())) {
+            t.failure = Some(failure.to_string());
+            if let Some(cur) = inner.envs.get_mut(env).and_then(|s| s.transition.as_mut()) {
+                cur.failure = Some(failure.to_string());
+            }
             inner.envs.get_mut(env).expect("env").last_switch = Some(t.clone());
             self.record(
                 &inner,

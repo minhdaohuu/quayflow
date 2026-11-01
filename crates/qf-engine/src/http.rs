@@ -96,7 +96,7 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
             e.record(
                 &inner,
                 "hello",
-                json!({"protocol": h.protocol, "mod": h.mod_version, "compatible": compatible, "headless": h.headless}),
+                json!({"protocol": h.protocol, "mod": h.mod_version, "compatible": compatible, "headless": h.headless, "claudeVersion": h.claude_version}),
                 false,
             );
             ok(HelloResponse {
@@ -227,9 +227,11 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
                 Err(rf) => ok(refusal(rf))?,
             })
         }
-        ("POST", "/v1/transition/cancel") => ok(OkResponse::ok(
-            e.cancel(s(body, "id").unwrap_or("")).map_err(ApiErr::not_found)?,
-        )),
+        ("POST", "/v1/transition/cancel") => {
+            let msg = e.cancel(s(body, "id").unwrap_or("")).map_err(ApiErr::not_found)?;
+            let started = msg.starts_with("Transition already started");
+            Ok(json!({"ok": true, "message": msg, "started": started}))
+        }
         ("POST", "/v1/unpin") => {
             let env = env_param(e, body);
             let mut inner = e.lock();

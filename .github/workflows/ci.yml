@@ -1,0 +1,140 @@
+# CI: Rust workspace, Mod, PowerShell scripts. Windows only (Quayflow v0.1 is Windows-only).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: windows-latest
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        shell: pwsh
+        run: |
+          rustup toolchain install
+          rustc -Vv
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo test
+        run: cargo test --workspace --locked
+      - name: Build debug binaries for the smoke test
+        run: cargo build --locked -p quayflow
+      # Real quayflow.exe against a fake Claude environment: temporary
+      # CLAUDE_CONFIG_DIR and QUAYFLOW_HOME, network off, no real logins.
+      - name: Smoke test (fake environment)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/e2e/smoke-fake-env.ps1 -Exe target\debug\quayflow.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  mod:
+    name: Mod (marketplace, type check, validate, tests)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # Type check against Claude Code's host declarations in mod/host-types/.
+      # That file is Claude Code's, so it is gitignored and not in the repo:
+      # on CI this step normally skips with a warning (non-blocking). Run it
+      # locally where the file exists. validate --strict and tests stay blocking.
+      - name: Type-check the Mod
+        shell: pwsh
+        run: |
+          if (-not (Get-ChildItem mod/host-types -Filter *.d.ts -ErrorAction SilentlyContinue)) {
+            Write-Host '::warning::mod/host-types has no declaration file; TypeScript type check skipped.'
+            exit 0
+          }
+          npx -y -p typescript@5.6.3 tsc -p mod/tsconfig.ci.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Installing Claude Code needs no sign-in. validate and test need none
+      # either: the Mod's tests mock everything beneath the plugin.
+      - name: Install Claude Code
+        shell: pwsh
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+      - name: Validate the marketplace and the Mod (strict)
+        shell: pwsh
+        run: |
+          claude plugin validate --strict .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          claude plugin validate --strict mod/quayflow
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Mod tests (claude plugin test)
+        shell: pwsh
+        run: |
+          # An empty config dir proves the tests need no signed-in Claude.
+          $env:CLAUDE_CONFIG_DIR = Join-Path $env:RUNNER_TEMP 'claude-empty'
+          New-Item -ItemType Directory -Force $env:CLAUDE_CONFIG_DIR | Out-Null
+          claude plugin test mod/quayflow
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  powershell:
+    name: PowerShell (analyzer, shell hook, installer sandbox)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse every script in PowerShell 7 and Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          $check = {
+            $bad = 0
+            foreach ($f in Get-ChildItem -Path installer, shell -Include *.ps1, *.psm1 -Recurse) {
+              $t = $null; $e = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$t, [ref]$e)
+              if ($e.Count) { $bad++; Write-Host "::error file=$($f.FullName)::$($e[0].Message)" } else { Write-Host "$($f.Name) OK" }
+            }
+            exit $bad
+          }
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($check.ToString()))
+          foreach ($ps in 'pwsh', 'powershell.exe') {
+            Write-Host "== $ps"
+            & $ps -NoProfile -NonInteractive -EncodedCommand $encoded
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AcceptLicense
+          # Write-Host is deliberate (installer UI; the prompt hook must not write
+          # to the output stream). ShouldProcess does not fit internal helpers.
+          $exclude = 'PSAvoidUsingWriteHost', 'PSUseShouldProcessForStateChangingFunctions', 'PSUseSingularNouns'
+          $results = Get-ChildItem -Path installer, shell -Include *.ps1, *.psm1 -Recurse |
+            ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning, Error -ExcludeRule $exclude }
+          $results | Format-Table ScriptName, Line, RuleName, Message -AutoSize -Wrap
+          if ($results) { exit 1 }
+      - name: Shell hook self-test (PowerShell 7 and 5.1)
+        shell: pwsh
+        run: ./shell/test-Quayflow.ps1
+      - name: Installer sandbox test (PowerShell 7 and 5.1)
+        shell: pwsh
+        run: ./installer/test-install.ps1
