@@ -8,7 +8,7 @@ The [release conditions](requirements.md#release-conditions-for-v01) require rec
 - **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1` and the manual steps below). Only this kind of evidence can pass a scenario.
 
 
-**Status on 2026-11-03:** Logic, Smoke and Simulation pass in CI. The first real-login run (`real-switching.ps1`, cases H, S, R1, R2) passed 13/13 on 2026-11-03 with two real accounts (one organization, one personal) on Claude Code 2.1.316. That run used a **local build of commit `0e657ca`** (GNU toolchain), not a published release, so the rows below say "Passed (local build)"; they must be repeated on the release build before v0.1 ships.
+**Status on 2026-11-03:** Logic, Smoke and Simulation pass in CI. The first real-login runs passed on 2026-11-03: `real-switching.ps1` (cases H, S, R1, R2) 13/13 and `real-lanes.ps1` 8/8, with two real accounts (one organization, one personal) on Claude Code 2.1.316. That run used a **local build of commit `0e657ca`** (GNU toolchain), not a published release, so the rows below say "Passed (local build)"; they must be repeated on the release build before v0.1 ships.
 
 An earlier real run the same day found a defect, fixed in `0e657ca`: a request that was already in flight when a switch was written finished on the previous account (as designed) and was taken as proof that Claude does not adopt a switched login, which turned in-place switching off. Requests are now classified by when they started.
 
@@ -25,7 +25,7 @@ An earlier real run the same day found a defect, fixed in `0e657ca`: a request t
 | AC-09 | Threshold and stale usage | Policy tests `stale_is_never_zero`, `threshold_switches_to_lowest_fresh_with_margin` | Not run | Watch `quayflow status` over a session |
 | AC-10 | Account ranking | Policy `ranks_break_close_choices_only`, exclusions explained in status | Not run | `quayflow status` eligibility column |
 | AC-11 | Group conflict | Logic `group_conflict_names_the_blocking_session` | Not run | Two sessions in different groups; `/quay use` |
-| AC-12 | Lanes | Logic `create_check_delete_keeps_shared_setup`, `lanes_switch_independently` | Not run (release condition) | `quayflow lanes create work`; run Claude with plugins in the lane |
+| AC-12 | Lanes | Logic `create_check_delete_keeps_shared_setup`, `lanes_switch_independently` | Passed (local build, 2026-11-03): `real-lanes.ps1` 8/8. Links created and checked, second account switched into the lane, a real Claude session in the lane saw a linked skill, lane login was the target account, default login unchanged, links intact after the session, shared skills survived deletion | `quayflow lanes create work`; run Claude with plugins in the lane |
 | AC-13 | Mid-job switch | Logic `manual_switch_pins_and_tracks_adoption`, `request_in_flight_at_the_switch_is_not_adoption_evidence` | Passed (local build, 2026-11-03): case H, 2 requests before the swap on the first account, 3 after on the second | `real-switching.ps1 -Case H` |
 | AC-14 | Concurrent requests and subagents | Logic: concurrent recovery shares one switch | Passed (local build, 2026-11-03): case S, two parallel subagents, 4 requests before and 4 after the swap on the expected accounts | `real-switching.ps1 -Case S` |
 | AC-15 | Local tools and user input | — | Passed (local build, 2026-11-03): case H, sequential tools continued across the swap in the same process | Case H (tools continue; no replay) |
