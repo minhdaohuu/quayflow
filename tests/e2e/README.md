@@ -55,7 +55,7 @@ Always run them with `pwsh -File`, never dot-sourced (`. script`): they end with
    quayflow add --label personal --group Default
    ```
 
-   If the two accounts are an organization and a personal account, repeat the command with `--accept-disclosure` after reading the notice.
+   If the two accounts are an organization and a personal account, `add` shows a one-time notice and asks you to accept it; the sign-in is kept while you decide.
 
 5. Allow the engine to record which account served each request during these tests, then check:
 

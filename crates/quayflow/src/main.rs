@@ -562,13 +562,24 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
                 println!("Cancelled. Your current login is unchanged.");
                 return 1;
             }
-            let r = c.post(
-                "/v1/accounts/signin/confirm",
-                json!({"id": id, "label": a.val("label"), "group": a.val("group"), "acceptDisclosure": a.has("accept-disclosure")}),
-            );
-            if let Err(ClientError::Api { code, .. }) = &r {
+            let confirm = |accept: bool| {
+                c.post(
+                    "/v1/accounts/signin/confirm",
+                    json!({"id": id, "label": a.val("label"), "group": a.val("group"), "acceptDisclosure": accept}),
+                )
+            };
+            let mut r = confirm(a.has("accept-disclosure"));
+            // A mixed group needs a one-time disclosure: ask here, so the sign-in is not lost.
+            if let Err(ClientError::Api { code, message, .. }) = &r {
                 if code == "needs_disclosure" {
-                    let _ = c.post("/v1/accounts/signin/cancel", json!({"id": id}));
+                    println!("{message}");
+                    if ask_yes("Accept this once for the group?") {
+                        r = confirm(true);
+                    } else {
+                        let _ = c.post("/v1/accounts/signin/cancel", json!({"id": id}));
+                        println!("Cancelled. Nothing was added; your current login is unchanged.");
+                        return 1;
+                    }
                 }
             }
             return say(r);
