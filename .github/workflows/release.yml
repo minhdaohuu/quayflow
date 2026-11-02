@@ -99,7 +99,7 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item target/release/quayflow.exe, target/release/quayflow-bg.exe out/
           Get-FileHash out/* -Algorithm SHA256 | Format-Table Hash, Path -AutoSize
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.slot }}
           path: ${{ matrix.dir }}/out/*.exe
