@@ -21,7 +21,7 @@ Switch between your approved Claude accounts without leaving your Claude Code se
 > [!IMPORTANT]
 > **You are responsible for complying with your provider's terms and your organization's rules**, including rules about which accounts may process your organization's work. Quayflow is an independent open-source project and is **not affiliated with or endorsed by Anthropic**.
 
-**Status:** v0.1, Windows only, private pilot. Official builds stay in the pilot until v0.1 passes its [acceptance scenarios](docs/acceptance.md).
+**Status:** v0.1 private pilot. Quayflow targets every platform Claude Code runs on; **Windows is the first release (MVP)**, with macOS and Linux to follow. Official builds stay in the pilot until v0.1 passes its [acceptance scenarios](docs/acceptance.md).
 
 ## What and why
 
@@ -229,8 +229,8 @@ Without Visual Studio Build Tools, set `$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-p
 
 ## Roadmap
 
-- **v0.1 (now):** Windows 10/11 x64 private pilot. Release once every [acceptance scenario](docs/acceptance.md) passes against real logins.
-- **Next:** macOS and Linux support (platform credential storage, shell integration), public release with build attestations.
+- **v0.1 (now, MVP):** Windows 10/11 x64 private pilot. Release once every [acceptance scenario](docs/acceptance.md) passes against real logins.
+- **Next:** macOS and Linux, each with the platform's own credential protection (Keychain, Secret Service) and shell integration; public release with build attestations.
 
 Have a use case that is not covered? [Open an issue](https://github.com/minhdaohuu/quayflow/issues/new/choose).
 

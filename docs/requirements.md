@@ -2,6 +2,10 @@
 
 The functional requirements Quayflow v0.1 is built and tested against. Code comments, the technical specification and the acceptance table refer to these IDs (FR-xx; acceptance scenarios AC-xx are listed in [acceptance.md](acceptance.md)).
 
+## Platform scope
+
+Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. Windows 10/11 x64 is the first release (the v0.1 MVP), so the requirements below name Windows mechanisms (DPAPI, PowerShell, `%LOCALAPPDATA%`). Later platforms meet the same requirements with their own equivalents: OS credential protection for the vault, the platform's shell for same-terminal replacement and the platform's per-user data folder. New code should keep platform-specific parts behind the existing module boundaries (vault, adapter paths and locks, shell integration, installer) so that the policy, engine and Mod stay shared.
+
 ## Onboarding and accounts
 
 | ID | Requirement |

@@ -1,5 +1,7 @@
 # Quayflow v0.1 technical specification
 
+> Scope: this specification describes the Windows MVP. Quayflow targets all platforms Claude Code runs on; platform-specific parts (DPAPI vault, Windows paths and locks, PowerShell integration, installer) are isolated so that macOS and Linux can provide their own. See [requirements.md](requirements.md#platform-scope).
+
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
 ## 1. Components and files

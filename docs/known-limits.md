@@ -4,7 +4,7 @@ Quayflow v0.1 is a private-pilot release. This page lists what it does not do, w
 
 ## Platform and scope
 
-- **Windows only**, x64. macOS and Linux are planned later; the architecture does not prevent them.
+- **Windows first.** Quayflow targets all platforms Claude Code runs on; v0.1 (the MVP) supports Windows 10/11 x64 only. macOS and Linux follow, with their own credential protection and shell integration (see [requirements.md](requirements.md#platform-scope)).
 - **Subscription logins only** (claude.ai sign-in). Quayflow never moves a session to API-key or other billing.
 - **One Windows user.** The engine, vault and settings are per user. Nothing is shared between users or machines.
 - **No telemetry, no cloud component.** Every decision is made locally, from usage readings taken on this machine.

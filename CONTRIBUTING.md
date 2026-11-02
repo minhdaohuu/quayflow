@@ -29,6 +29,9 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 
 ## Development setup
 
+Quayflow targets all platforms Claude Code runs on; Windows is the first release (MVP). Keep platform-specific code (vault, paths and locks, shell integration, installer) behind its module boundary so the policy, engine and Mod stay shared. See [Platform scope](docs/requirements.md#platform-scope).
+
+
 - Windows 10/11, Rust 1.98 (pinned in `rust-toolchain.toml`), Node 20+ for the Mod, Claude Code 2.1.316 or later.
 - With Visual Studio Build Tools: `cargo build`. Without them, use the GNU toolchain locally: `$env:RUSTUP_TOOLCHAIN = "1.98.0-x86_64-pc-windows-gnu"` (releases are always built with MSVC in CI).
 
