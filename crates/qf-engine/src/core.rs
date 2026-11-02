@@ -546,10 +546,10 @@ impl Engine {
     pub fn watch(&self) {
         let ids: Vec<EnvId> = self.lock().envs.keys().cloned().collect();
         for id in ids {
-            let (env, last, own, prev_live) = {
+            let (env, last, own) = {
                 let inner = self.lock();
                 let Some(st) = inner.envs.get(&id) else { continue };
-                (st.env.clone(), st.last_stamp, st.own_stamp, st.live.clone())
+                (st.env.clone(), st.last_stamp, st.own_stamp)
             };
             let stamp = qf_adapter::login::credentials_stamp(&env);
             if stamp == last {
@@ -573,6 +573,16 @@ impl Engine {
             };
             let mut inner = self.lock();
             let Some(st) = inner.envs.get_mut(&id) else { continue };
+            // Re-check under the engine lock: a Quayflow switch may have written these files and
+            // completed since the snapshot above. Our own write is never an external change.
+            if stamp.is_some() && stamp == st.own_stamp {
+                st.last_stamp = stamp;
+                continue;
+            }
+            if st.blocking_transition() {
+                continue; // our own switch is writing; it records the new stamp when it completes
+            }
+            let prev_live = st.live.clone();
             st.last_stamp = stamp;
             match login {
                 Ok(Some(login)) => {
