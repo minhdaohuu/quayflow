@@ -18,6 +18,32 @@ $qfHome = if ($env:QUAYFLOW_HOME) { $env:QUAYFLOW_HOME } else { Join-Path $env:L
 $qf = (Get-Command quayflow -ErrorAction SilentlyContinue).Source
 if (-not $qf) { $qf = Join-Path $qfHome 'bin\quayflow.exe' }
 $claude = (Get-Command claude -CommandType Application | Select-Object -First 1).Source
+
+if ($MyInvocation.InvocationName -eq '.') {
+    Write-Error 'Run this script with: pwsh -File <script> (dot-sourcing would close your shell when it exits).'
+    return
+}
+$engineFile = Join-Path $qfHome 'engine.json'
+$alive = $false
+if (Test-Path $engineFile) {
+    try {
+        $c0 = Get-Content -Raw $engineFile | ConvertFrom-Json
+        Invoke-RestMethod "http://127.0.0.1:$($c0.port)/v1/state" -Headers @{ 'x-quayflow-token' = $c0.token } -TimeoutSec 5 | Out-Null
+        $alive = $true
+    } catch { $alive = $false }
+}
+if (-not $alive) {
+    Write-Host @"
+The Quayflow engine is not running for this user ($qfHome).
+Set up first (see tests/e2e/README.md):
+  1. Install:   pwsh -File installer/install.ps1 -Source dist -MarketplaceSource <repo path>
+  2. Register:  quayflow onboard ; quayflow register --label <name> --group Default
+  3. Add:       quayflow add --label <name2> --group Default
+  4. Consent:   quayflow consent live-canary on
+  5. Check:     quayflow status
+"@
+    exit 2
+}
 function Api([string]$m, [string]$r, $b) {
     $c = Get-Content -Raw (Join-Path $qfHome 'engine.json') | ConvertFrom-Json
     $a = @{ Uri = "http://127.0.0.1:$($c.port)$r"; Method = $m; Headers = @{ 'x-quayflow-token' = $c.token } }
