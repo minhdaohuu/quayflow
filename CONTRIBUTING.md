@@ -25,7 +25,7 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 | `installer/` | `install.ps1` |
 | `tests/e2e` | Fake-environment smoke test and owner-run real-login scenarios |
 | `docs/` | Requirements, technical spec, user guide, security notes, acceptance |
-| `assets/` | Logo mark |
+| `assets/brand/` | Logo, app icon and palette ([usage](assets/brand/README.md)) |
 
 ## Development setup
 

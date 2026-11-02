@@ -29,6 +29,7 @@ getrandom = "0.2"
 memchr = "2"
 junction = "1"
 winreg = "0.52"
+winresource = "0.1.34"
 tempfile = "3"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",

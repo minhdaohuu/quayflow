@@ -13,3 +13,4 @@ All notable changes to this project are documented here. The format follows [Kee
 - DPAPI vault with refresh capture, unknown-login protection and PoC import.
 - Lanes with linked shared setup; Open New Session and same-terminal Replace (PowerShell 7 and 5.1) with full history.
 - Claude Code Mod with `/quay` pane, status line and request hooks; installer; updater with hash and attestation checks; uninstall.
+- Brand assets in `assets/brand/`: logo for light and dark backgrounds, harbor mark, application icon (embedded in both executables with product and version information), palette and social preview.

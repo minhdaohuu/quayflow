@@ -1,6 +1,9 @@
 <div align="center">
 
-# Quayflow
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/quayflow-logo-dark.png">
+  <img src="assets/brand/quayflow-logo-light.png" alt="Quayflow" width="360">
+</picture>
 
 **Change your port. Keep your flow.**
 
