@@ -14,6 +14,8 @@ Switch between your approved Claude accounts without leaving your Claude Code se
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D4)
 
+[Features](#features) · [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start) · [Documentation](#documentation) · [Roadmap](#roadmap)
+
 </div>
 
 > [!IMPORTANT]
@@ -32,20 +34,83 @@ Quayflow does that switch for you, in place. The running session continues on th
 - **It never touches your work.** No killed tools, no lost input, no replayed actions, and at most one retry of a request that hit a confirmed usage limit.
 - **Your normal commands stay.** You keep typing `claude` and `claude -p`. There is no wrapper or launcher, and no change to how commands resolve.
 
+## Features
+
+| Feature | What it does |
+|---|---|
+| **In-place switching** | The running session moves to the next account at its next request: same conversation, same process, about 300 ms under Claude's own credential locks. |
+| **Usage-aware** | Watches each account's five-hour, seven-day and per-model windows. Suggests (or, in Automatic mode, makes) a switch near the threshold, and returns to your Preferred account when it has room. |
+| **Groups as approvals** | You decide which accounts may serve which projects. Organization-managed login rules are detected and respected. |
+| **Hard-limit recovery** | On a confirmed usage limit: one switch and at most one retry of that request. Concurrent failures share one switch. |
+| **Verified, not assumed** | Every switch is checked against the account that each client's next request actually used. A mismatch turns in-place switching off for that Claude version. |
+| **Lanes** | Keep one session on a different account in a separate environment that still links your shared Claude setup. |
+| **Headless-safe** | `claude -p` output is unchanged and never prompts. Without Quayflow running, Claude behaves exactly as before. |
+| **Local only** | Logins are sealed with the operating system's per-user protection. No telemetry; logs are scrubbed. |
+
 ## How it works
 
-```text
- claude / claude -p              unmodified Claude Code client
-        |
- Quayflow Mod                    plugin: /quay, status line, failure detection,
-        |                        one retry, "which account did this request use?"
-        |  loopback API (token, versioned handshake)
-        v
- quayflow.exe                    per-user engine (Rust, no window): groups, usage,
-        |                        decisions, DPAPI vault, journal
-        |  atomic swap under Claude's own credential locks
-        v
- ~/.claude  (or a lane)          every session moves at its next request
+```mermaid
+flowchart LR
+    subgraph CC["Claude Code (unmodified)"]
+        direction TB
+        S1["claude<br/>interactive session"]
+        S2["claude -p<br/>headless job"]
+        MOD["Quayflow Mod<br/>/quay pane · status line<br/>limit detection · one retry"]
+        S1 --- MOD
+        S2 --- MOD
+    end
+
+    ENG["quayflow engine<br/>groups · usage · policy<br/>journal · reconciliation"]
+    VAULT[("Encrypted vault<br/>saved logins")]
+    USAGE[["Claude usage API"]]
+    ENV[("Claude environment<br/>~/.claude or a lane")]
+
+    MOD <-->|"loopback API<br/>per-run token"| ENG
+    ENG <--> VAULT
+    ENG -->|"reads usage windows"| USAGE
+    ENG ==>|"atomic login swap<br/>under Claude's locks"| ENV
+    S1 -.->|"login read at<br/>next request"| ENV
+    S2 -.-> ENV
+```
+
+**A switch, step by step**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant C as Claude session
+    participant M as Quayflow Mod
+    participant E as quayflow engine
+    participant F as Login files
+
+    E->>E: Account A reaches 85% of its binding window
+    alt Suggest mode (default)
+        E-->>M: Candidate: account B (same group)
+        M-->>You: Status line shows the suggestion
+        You->>M: /quay accept
+        M->>E: Switch to B
+    else Automatic mode (approved per group)
+        E->>E: Pick B by eligibility, then remaining allowance
+    end
+    Note over C: A request in flight finishes on A
+    E->>F: Swap A → B under Claude's credential locks
+    C->>F: Next request reads login B
+    M->>E: Report the identity the request used
+    E-->>M: Adoption verified ✓
+```
+
+**When a request hits a usage limit**
+
+```mermaid
+flowchart LR
+    R["Request fails"] --> Q{"Confirmed<br/>usage limit?"}
+    Q -- "no" --> P["Pass the error through<br/>unchanged"]
+    Q -- "yes" --> S["One switch to an eligible account<br/>(shared by concurrent failures)"]
+    S --> T["Retry the same request once,<br/>in the same process"]
+    T --> D{"Succeeded?"}
+    D -- "yes" --> OK["Session continues"]
+    D -- "no" --> W["Claude's own usage-limit<br/>behavior takes over"]
 ```
 
 1. You register your logins and put them in **groups**.
@@ -148,6 +213,9 @@ pwsh -File tests/e2e/smoke-fake-env.ps1 -Exe target\release\quayflow.exe   # fak
 
 Without Visual Studio Build Tools, set `$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-pc-windows-gnu'` for local development. Releases are built by CI with MSVC.
 
+<details>
+<summary><b>Repository layout</b></summary>
+
 | Path | Content |
 |---|---|
 | `crates/` | Rust workspace: engine, vault, adapter, policy, provider, CLI |
@@ -156,6 +224,15 @@ Without Visual Studio Build Tools, set `$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-p
 | `installer/` | `install.ps1` |
 | `tests/e2e/` | Fake-environment smoke test; owner-run real-login scenarios |
 | `.github/workflows/` | CI and the reproducible release workflow |
+
+</details>
+
+## Roadmap
+
+- **v0.1 (now):** Windows 10/11 x64 private pilot. Release once every [acceptance scenario](docs/acceptance.md) passes against real logins.
+- **Next:** macOS and Linux support (platform credential storage, shell integration), public release with build attestations.
+
+Have a use case that is not covered? [Open an issue](https://github.com/minhdaohuu/quayflow/issues/new/choose).
 
 ## Contributing
 
