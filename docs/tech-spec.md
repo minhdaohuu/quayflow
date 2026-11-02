@@ -46,6 +46,8 @@ PoC data in `%USERPROFILE%\.quayflow-poc` is imported once with `quayflow migrat
 - Usage: `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer <access>` and `anthropic-beta: oauth-2025-04-20`; fields `five_hour`, `seven_day` (`utilization`, `resets_at`), `limits[]` (`scope.model.display_name`, `percent`, `resets_at`). Extra fields ignored.
 - Profile: `GET https://api.anthropic.com/api/oauth/profile` (same headers) gives `account.uuid`, `organization.uuid`.
 - Sign-in: `claude auth login` under `CLAUDE_CONFIG_DIR=<temp>`.
+- Custom API origin (observed 2026-11-02 against a loopback fake): with a subscription login, `ANTHROPIC_BASE_URL` redirects inference requests (`POST /v1/messages?beta=true`, streaming, `Authorization: Bearer <access token>`, `anthropic-beta` including `oauth-2025-04-20`). With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, one `claude -p` turn made exactly one request to the fake.
+- Usage-limit recognition (same observation): a `429` is reported as the subscription limit ("You've hit your 5-hour limit · resets …") only when the unified headers say so: `anthropic-ratelimit-unified-status: rejected`, `-representative-claim: five_hour`, `-5h-status: rejected`, `-5h-utilization`, `-5h-reset` (epoch seconds), `-overage-status: rejected`. Without them Claude reports "Server is temporarily limiting requests (not your usage limit)". `claude -p` did not retry the 429 itself.
 
 ## 4. Identity and classification
 
