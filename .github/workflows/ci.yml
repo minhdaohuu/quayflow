@@ -53,6 +53,11 @@ jobs:
         run: |
           pwsh -NoProfile -File tests/e2e/smoke-fake-env.ps1 -Exe target\debug\quayflow.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: CLI behavior test (fake environment)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/e2e/cli-fake-env.ps1 -Exe target\debug\quayflow.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   mod:
     name: Mod (marketplace, type check, validate, tests)

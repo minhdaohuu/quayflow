@@ -23,7 +23,7 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 | `mod/quayflow` | The Claude Code Mod (TypeScript) |
 | `shell/` | Opt-in PowerShell prompt hook |
 | `installer/` | `install.ps1` |
-| `tests/e2e` | Fake-environment smoke test and owner-run real-login scenarios |
+| `tests/e2e` | Fake-environment smoke and CLI tests; owner-run real-login scenarios |
 | `docs/` | Requirements, technical spec, user guide, security notes, acceptance |
 | `assets/brand/` | Logo, app icon and palette ([usage](assets/brand/README.md)) |
 
@@ -40,6 +40,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 pwsh -File tests/e2e/smoke-fake-env.ps1        # real quayflow.exe against a fake environment
+pwsh -File tests/e2e/cli-fake-env.ps1          # CLI behavior and error paths, fake environment
 claude plugin validate mod/quayflow
 claude plugin test mod/quayflow
 ```

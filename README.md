@@ -209,6 +209,7 @@ Read [Known limits](docs/known-limits.md) before relying on Quayflow for unatten
 cargo build --release --locked -p quayflow   # toolchain pinned by rust-toolchain.toml (1.98.0, MSVC)
 cargo test --workspace --locked
 pwsh -File tests/e2e/smoke-fake-env.ps1 -Exe target\release\quayflow.exe   # fake environment, no real logins
+pwsh -File tests/e2e/cli-fake-env.ps1 -Exe target\release\quayflow.exe     # CLI behavior and error paths
 ```
 
 Without Visual Studio Build Tools, set `$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-pc-windows-gnu'` for local development. Releases are built by CI with MSVC.
@@ -222,7 +223,7 @@ Without Visual Studio Build Tools, set `$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-p
 | `mod/quayflow/` | The Mod (TypeScript Claude Code plugin) |
 | `shell/` | PowerShell integration (`Quayflow.psm1`) |
 | `installer/` | `install.ps1` |
-| `tests/e2e/` | Fake-environment smoke test; owner-run real-login scenarios |
+| `tests/e2e/` | Fake-environment smoke and CLI tests; owner-run real-login scenarios |
 | `.github/workflows/` | CI and the reproducible release workflow |
 
 </details>

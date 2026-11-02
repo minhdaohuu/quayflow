@@ -25,7 +25,7 @@ Accounts and groups
   register --label L --group G [--accept-disclosure]
   add --label L --group G [--accept-disclosure]    sign in to another account (new window)
   reauth <account>             sign in again for an account that was set aside
-  remove <account> | label <account> <new label>
+  remove <account> [--yes] | label <account> <new label>
   use <account> [--idle-wait] [--env E]            switch now (pins your choice)
   accept | unpin
   mode <manual|suggest|automatic> [--group G] [--approve]
@@ -108,11 +108,11 @@ fn connect(dd: &DataDir) -> Result<Client, ClientError> {
 fn say(v: Result<Value, ClientError>) -> i32 {
     match v {
         Ok(v) => {
-            if let Some(m) = v["message"].as_str() {
-                println!("{m}");
-            } else if v.get("ok") == Some(&json!(false)) {
+            if v.get("ok") == Some(&json!(false)) {
                 println!("{}", v["message"].as_str().unwrap_or("refused"));
                 return 1;
+            } else if let Some(m) = v["message"].as_str() {
+                println!("{m}");
             } else {
                 println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             }
@@ -174,9 +174,14 @@ fn main() {
 }
 
 fn run(a: &Args, dd: &DataDir) -> i32 {
-    let cmd = a.p(0).unwrap_or("help");
+    // `quayflow --version` and `quayflow --help` behave like the subcommands.
+    let cmd = match a.p(0) {
+        Some(c) => c,
+        None if a.has("version") => "version",
+        None => "help",
+    };
     match cmd {
-        "help" | "-h" => {
+        "help" | "-h" | "/?" => {
             println!("{HELP}");
             0
         }
@@ -230,6 +235,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         "remove" => {
             let Some(acct) = a.p(1) else { return fail("remove <account>") };
             if !a.has("yes") && !ask_yes(&format!("Remove {acct} from Quayflow (its protected copy is deleted; history stays)?")) {
+                println!("Cancelled; nothing was removed.");
                 return 1;
             }
             say(connect(dd).and_then(|c| c.post("/v1/accounts/remove", json!({"account": acct}))))
@@ -394,7 +400,11 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
         "consent" => {
             let (Some(name), Some(state)) = (a.p(1), a.p(2)) else { return fail("consent <name> <on|off>") };
             let Some(field) = local::consent_field(name) else { return fail("unknown consent name") };
-            let on = state == "on";
+            let on = match state {
+                "on" => true,
+                "off" => false,
+                _ => return fail("consent <name> <on|off>"),
+            };
             if let Err(e) = local::set_consent(dd, field, on) {
                 return fail(e);
             }
@@ -455,20 +465,48 @@ fn group_cmd(dd: &DataDir, a: &Args) -> i32 {
         "add" | "remove" => {
             let accts: Vec<String> = a.pos.iter().skip(3).cloned().collect();
             let key = if op == "add" { "add" } else { "remove" };
-            match c.post("/v1/groups/members", json!({"group": g, key: accts, "acceptDisclosure": a.has("accept-disclosure")})) {
+            match c.post(
+                "/v1/groups/members",
+                json!({"group": g, key: accts, "acceptDisclosure": a.has("accept-disclosure")}),
+            ) {
                 Ok(v) if v["needsDisclosure"] == json!(true) => {
-                    println!("{}\n\nRepeat with --accept-disclosure to accept this once for the group.", v["disclosure"].as_str().unwrap_or(""));
+                    println!(
+                        "{}\n\nRepeat with --accept-disclosure to accept this once for the group.",
+                        v["disclosure"].as_str().unwrap_or("")
+                    );
                     2
                 }
                 r => say(r.map(|_| json!({"message": "membership updated"}))),
             }
         }
         "preferred" => say(c.post("/v1/groups/preferred", json!({"group": g, "account": a.p(3)}))),
-        "rank" => say(c.post("/v1/groups/rank", json!({"group": g, "account": a.p(3), "rank": a.p(4)}))),
-        "tuning" => say(c.post(
-            "/v1/groups/tuning",
-            json!({"group": g, "threshold": a.val("threshold").and_then(|x| x.parse::<f64>().ok()), "margin": a.val("margin").and_then(|x| x.parse::<f64>().ok())}),
+        "rank" => say(c.post(
+            "/v1/groups/rank",
+            json!({"group": g, "account": a.p(3), "rank": a.p(4)}),
         )),
+        "tuning" => {
+            let num = |f: &str| -> Result<Option<f64>, String> {
+                match a.val(f) {
+                    None if a.has(f) => Err(format!("--{f} needs a number")),
+                    None => Ok(None),
+                    Some(x) => match x.parse::<f64>() {
+                        Ok(n) if n.is_finite() => Ok(Some(n)),
+                        _ => Err(format!("--{f} must be a number, not \"{x}\"")),
+                    },
+                }
+            };
+            let (threshold, margin) = match (num("threshold"), num("margin")) {
+                (Ok(t), Ok(m)) => (t, m),
+                (Err(e), _) | (_, Err(e)) => return fail(e),
+            };
+            if threshold.is_none() && margin.is_none() {
+                return fail("group tuning G [--threshold N] [--margin N]");
+            }
+            say(c.post(
+                "/v1/groups/tuning",
+                json!({"group": g, "threshold": threshold, "margin": margin}),
+            ))
+        }
         _ => fail("group list|create|delete|default|add|remove|preferred|rank|tuning"),
     }
 }

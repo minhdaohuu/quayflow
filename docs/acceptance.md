@@ -3,7 +3,7 @@
 The [release conditions](requirements.md#release-conditions-for-v01) require recorded results on Windows against the **product build**. This table keeps three kinds of evidence apart. They are not interchangeable.
 
 - **Logic:** Rust unit and scenario tests on a fake Claude environment (`cargo test`; scenarios in `crates/qf-engine/tests/engine.rs`). They prove decisions and file handling. They cannot prove client adoption, isolation or refresh behavior.
-- **Smoke:** `tests/e2e/smoke-fake-env.ps1`, which runs the real `quayflow.exe` process against a fake environment (21 checks).
+- **Smoke:** `tests/e2e/smoke-fake-env.ps1`, which runs the real `quayflow.exe` process against a fake environment (21 checks), and `tests/e2e/cli-fake-env.ps1`, which covers CLI argument validation and error paths the same way (70 checks).
 - **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1` and the manual steps below). Only this kind of evidence can pass a scenario.
 
 

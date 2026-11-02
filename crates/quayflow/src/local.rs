@@ -381,6 +381,9 @@ fn have(cmd: &str) -> bool {
 }
 
 fn download(assets: &[&str], dest: &Path, version: Option<&str>) -> Result<(), String> {
+    if std::env::var_os("QUAYFLOW_OFFLINE").is_some() {
+        return Err("network access is disabled (QUAYFLOW_OFFLINE is set)".into());
+    }
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     if have("gh") {
         let mut c = qf_adapter::process::hidden("gh");
@@ -408,7 +411,13 @@ fn download(assets: &[&str], dest: &Path, version: Option<&str>) -> Result<(), S
             Some(v) => format!("https://github.com/{REPO}/releases/download/{v}/{a}"),
             None => format!("https://github.com/{REPO}/releases/latest/download/{a}"),
         };
-        let resp = agent.get(&url).call().map_err(|e| format!("{a}: {e}"))?;
+        let resp = agent.get(&url).call().map_err(|e| match e {
+            ureq::Error::Status(404, _) => format!(
+                "no published release found at https://github.com/{REPO}/releases{} (no release yet, or the repository is private and the GitHub CLI is not signed in)",
+                version.map(|v| format!("/tag/{v}")).unwrap_or_default()
+            ),
+            e => format!("{a}: {e}"),
+        })?;
         let mut bytes = vec![];
         std::io::Read::read_to_end(&mut resp.into_reader(), &mut bytes).map_err(|e| e.to_string())?;
         std::fs::write(dest.join(a), bytes).map_err(|e| e.to_string())?;

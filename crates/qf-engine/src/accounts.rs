@@ -339,7 +339,14 @@ impl Engine {
             .name
             .clone();
         let mut new_ids = vec![];
-        for entry in qf_vault::read_poc_vault(&self.vault, &poc) {
+        let entries = qf_vault::read_poc_vault(&self.vault, &poc);
+        if entries.is_empty() {
+            return Ok(vec![format!(
+                "No PoC logins found at {}; nothing was imported.",
+                poc.display()
+            )]);
+        }
+        for entry in entries {
             match entry {
                 Err((name, e)) => out.push(format!("{name}: skipped ({e})")),
                 Ok(p) => {
