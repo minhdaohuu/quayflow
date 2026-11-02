@@ -8,35 +8,37 @@ The [release conditions](requirements.md#release-conditions-for-v01) require rec
 - **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1` and the manual steps below). Only this kind of evidence can pass a scenario.
 
 
-**Status on 2026-11-02:** Logic and Smoke pass on the development machine. **No scenario has been run against the product build with real logins yet**, so none is marked passed.
+**Status on 2026-11-03:** Logic, Smoke and Simulation pass in CI. The first real-login run (`real-switching.ps1`, cases H, S, R1, R2) passed 13/13 on 2026-11-03 with two real accounts (one organization, one personal) on Claude Code 2.1.316. That run used a **local build of commit `0e657ca`** (GNU toolchain), not a published release, so the rows below say "Passed (local build)"; they must be repeated on the release build before v0.1 ships.
+
+An earlier real run the same day found a defect, fixed in `0e657ca`: a request that was already in flight when a switch was written finished on the previous account (as designed) and was taken as proof that Claude does not adopt a switched login, which turned in-place switching off. Requests are now classified by when they started.
 
 | ID | Scenario | Logic / Smoke evidence | Real (product build) | How to run |
 |---|---|---|---|---|
 | AC-01 | Ordinary interactive launch | Smoke: engine start, single instance, no window | Not run | Install, run `claude`, check status line |
-| AC-02 | Ordinary headless launch | — | Not run | `real-switching.ps1 -Case H` (one JSON result) |
+| AC-02 | Ordinary headless launch | — | Passed (local build, 2026-11-03): cases H, S, R1 each exited 0 with one JSON result | `real-switching.ps1 -Case H` (one JSON result) |
 | AC-03 | Register existing login | Logic `register_requires_consent_and_group`; Smoke | Not run | `/quay register` or `quayflow register` |
 | AC-04 | Add or cancel another login | — (needs sign-in window) | Not run | `quayflow add`, cancel once, complete once |
 | AC-05 | Reauthenticate, duplicate, remove, dead refresh | Logic: duplicate, `model_not_found`/auth fallback | Not run | `quayflow reauth`, `remove`; dead token needs a revoked login |
 | AC-06 | Unassigned project uses Default | Logic `project_resolution_longest_match` | Not run | Start Claude in an unassigned folder; `/quay status` |
 | AC-07 | Explicit project / hostile repository | Logic (assignments only from the engine's config) | Not run | Assign a folder; add `.claude/` content in the repo; check the group |
-| AC-08 | Suggest in headless | Logic `recovery_refuses_unconfirmed_limits_and_suggest_mode_only_records` | Not run | `real-switching.ps1 -Case R2` |
+| AC-08 | Suggest in headless | Logic `recovery_refuses_unconfirmed_limits_and_suggest_mode_only_records` | Passed (local build, 2026-11-03): case R2, no switch, live account unchanged | `real-switching.ps1 -Case R2` |
 | AC-09 | Threshold and stale usage | Policy tests `stale_is_never_zero`, `threshold_switches_to_lowest_fresh_with_margin` | Not run | Watch `quayflow status` over a session |
 | AC-10 | Account ranking | Policy `ranks_break_close_choices_only`, exclusions explained in status | Not run | `quayflow status` eligibility column |
 | AC-11 | Group conflict | Logic `group_conflict_names_the_blocking_session` | Not run | Two sessions in different groups; `/quay use` |
 | AC-12 | Lanes | Logic `create_check_delete_keeps_shared_setup`, `lanes_switch_independently` | Not run (release condition) | `quayflow lanes create work`; run Claude with plugins in the lane |
-| AC-13 | Mid-job switch | Logic `manual_switch_pins_and_tracks_adoption` | Not run | `real-switching.ps1 -Case H` |
-| AC-14 | Concurrent requests and subagents | Logic: concurrent recovery shares one switch | Not run | `real-switching.ps1 -Case S` |
-| AC-15 | Local tools and user input | — | Not run | Case H (tools continue; no replay) |
+| AC-13 | Mid-job switch | Logic `manual_switch_pins_and_tracks_adoption`, `request_in_flight_at_the_switch_is_not_adoption_evidence` | Passed (local build, 2026-11-03): case H, 2 requests before the swap on the first account, 3 after on the second | `real-switching.ps1 -Case H` |
+| AC-14 | Concurrent requests and subagents | Logic: concurrent recovery shares one switch | Passed (local build, 2026-11-03): case S, two parallel subagents, 4 requests before and 4 after the swap on the expected accounts | `real-switching.ps1 -Case S` |
+| AC-15 | Local tools and user input | — | Passed (local build, 2026-11-03): case H, sequential tools continued across the swap in the same process | Case H (tools continue; no replay) |
 | AC-16 | Lock held before write | Logic `held_lock_leaves_login_unchanged`; Smoke | Not run | Covered by Smoke on the real binary; repeat with real login optional |
 | AC-17 | Post-write uncertainty | Logic: uncertain path reconciled from file state | Not run | Kill the engine during a switch (manual) |
-| AC-18 | Account adoption | Logic adoption tracking | Not run | Cases H and S (per-request identity) |
+| AC-18 | Account adoption | Logic adoption tracking | Passed (local build, 2026-11-03): cases H and S, per-request identity matched the switch | Cases H and S (per-request identity) |
 | AC-19 | Synthetic pre-request verification | Not built: out-of-group switches are refused | n/a | — |
 | AC-20 | Refresh race | Logic `native_refresh_is_captured_into_the_vault` | Not run | Long session across a token refresh; vault stays valid |
-| AC-21 | Hard-limit recovery | Logic `recovery_automatic_switches_once_and_retries_once` | Not run; **real limit is a release condition** | `real-switching.ps1 -Case R1` (simulated), then a real limit |
+| AC-21 | Hard-limit recovery | Logic `recovery_automatic_switches_once_and_retries_once`; Simulation | Simulated limit passed (local build, 2026-11-03): case R1, one recovery decision with a switch and one retry; **a real usage limit is still a release condition** | `real-switching.ps1 -Case R1` (simulated), then a real limit |
 | AC-22 | Unknown side effect | Logic: one retry of the failed request only | Not run | Review journal after R1 |
 | AC-23 | All accounts exhausted | Logic `all_exhausted_switches_to_soonest_without_retry` | Not run (**release condition**: Claude's wait adopts a switch) | Needs all accounts at a limit |
 | AC-24 | Deadline, cancellation, exited process | Logic: aborted requests never retried (Mod tests) | Not run | Ctrl+C during a held job |
-| AC-25 | Headless output | — | Not run | Cases H, S, R1 check one JSON result |
+| AC-25 | Headless output | — | Passed (local build, 2026-11-03): cases H, S, R1, one JSON result each | Cases H, S, R1 check one JSON result |
 | AC-26 | Open or replace with full history | Logic history copy tests | Not run | `/quay replace <lane>` in PowerShell 7 and 5.1 |
 | AC-27 | Failed handoff | Logic `refuses_diverged_destination` | Not run | Diverge a lane copy; retry handoff |
 | AC-28 | Engine stop, crash, restart | Logic `crash_reconciliation_never_replays`; Smoke stop respected | Not run (release condition) | Kill the engine mid-switch; restart; read journal |
