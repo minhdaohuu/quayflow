@@ -307,7 +307,7 @@ pub fn shell_claim(dd: &DataDir, pid: u32) -> i32 {
 pub fn handoff_resume(dd: &DataDir, session: &str, to: &str, wait_pid: Option<u32>, cwd: Option<&str>) -> i32 {
     if let Some(pid) = wait_pid {
         if qf_adapter::process::is_alive(pid) {
-            println!("Quayflow: waiting for the original session to end (type /exit there). The conversation continues here.");
+            outln!("Quayflow: waiting for the original session to end (type /exit there). The conversation continues here.");
             while qf_adapter::process::is_alive(pid) {
                 std::thread::sleep(Duration::from_millis(500));
             }

@@ -125,13 +125,13 @@ pub fn live(dd: &DataDir) -> i32 {
         .map(|v| v["result"] == "OK")
         .unwrap_or(false);
     let passed = swapped_at > 0 && ok_before && ok_after && code == 0 && one_json;
-    println!(
+    outln!(
         "{} live adoption at next request: before swap {} request(s) on #{from}, after swap {} on #{to}",
         if ok_before && ok_after { "PASS" } else { "FAIL" },
         before.len(),
         after.len()
     );
-    println!(
+    outln!(
         "{} headless output: exit {code}, one JSON result OK: {one_json}",
         if code == 0 && one_json { "PASS" } else { "FAIL" }
     );
@@ -141,7 +141,7 @@ pub fn live(dd: &DataDir) -> i32 {
             json!({"version": version, "livePass": passed, "detail": format!("manual live canary {}", if passed { "passed" } else { "failed" })}),
         );
     }
-    println!(
+    outln!(
         "\n{} for Claude {version}",
         if passed { "CANARY PASSED" } else { "CANARY FAILED" }
     );

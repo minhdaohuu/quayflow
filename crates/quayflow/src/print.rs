@@ -14,17 +14,17 @@ fn age(s: i64) -> String {
 
 pub fn status(v: &Value) {
     let e = &v["engine"];
-    println!(
+    outln!(
         "Quayflow engine {} (pid {}) · {}",
         e["version"].as_str().unwrap_or("?"),
         e["pid"],
         e["integrity"].as_str().unwrap_or("")
     );
     if let Some(h) = e["exeSha256"].as_str().filter(|h| !h.is_empty()) {
-        println!("Build SHA-256: {h}");
+        outln!("Build SHA-256: {h}");
     }
     if let Some(s) = e["simulation"].as_str() {
-        println!("[warn] SIMULATION MODE: usage and profile calls go to the fake API at {s} (QUAYFLOW_SIM_API)");
+        outln!("[warn] SIMULATION MODE: usage and profile calls go to the fake API at {s} (QUAYFLOW_SIM_API)");
     }
     let labels: Vec<(String, String)> = v["accounts"]
         .as_array()
@@ -46,7 +46,7 @@ pub fn status(v: &Value) {
             .unwrap_or_else(|| format!("#{id}"))
     };
     for env in v["envs"].as_array().into_iter().flatten() {
-        println!();
+        outln!();
         let live = &env["live"];
         let who = if live["signedOut"] == true {
             "signed out".to_string()
@@ -55,7 +55,7 @@ pub fn status(v: &Value) {
         } else {
             format!("unregistered login #{}", live["account"].as_str().unwrap_or("?"))
         };
-        println!(
+        outln!(
             "Environment {} · live: {who} · mode {} · groups {}",
             env["id"].as_str().unwrap_or("?"),
             env["mode"].as_str().unwrap_or("?"),
@@ -64,23 +64,23 @@ pub fn status(v: &Value) {
                 .map(|g| g.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", "))
                 .unwrap_or_default()
         );
-        println!("  decision: {}", env["decision"].as_str().unwrap_or("-"));
+        outln!("  decision: {}", env["decision"].as_str().unwrap_or("-"));
         if let Some(p) = env["pin"].as_object() {
-            println!(
+            outln!(
                 "  pinned: {} until {} (quayflow unpin)",
                 label(&p["account"]),
                 qf_model::time::to_rfc3339(p["until"].as_i64().unwrap_or(0))
             );
         }
         if let Some(s) = env["suggestion"].as_object() {
-            println!(
+            outln!(
                 "  suggestion: switch to {} — {} (quayflow accept)",
                 label(&s["to"]),
                 s["reason"].as_str().unwrap_or("")
             );
         }
         if let Some(t) = env["transition"].as_object() {
-            println!(
+            outln!(
                 "  transition: {} -> {} · {}",
                 label(&t["from"]),
                 label(&t["to"]),
@@ -88,14 +88,14 @@ pub fn status(v: &Value) {
             );
         }
         for n in env["notices"].as_array().into_iter().flatten() {
-            println!(
+            outln!(
                 "  [{}] {}",
                 n["level"].as_str().unwrap_or(""),
                 n["text"].as_str().unwrap_or("")
             );
         }
         let sessions = env["sessions"].as_array().cloned().unwrap_or_default();
-        println!(
+        outln!(
             "  sessions on this login ({}; other clients such as editor extensions may not be listed):",
             sessions.len()
         );
@@ -113,7 +113,7 @@ pub fn status(v: &Value) {
                     _ => String::new(),
                 })
                 .unwrap_or_default();
-            println!(
+            outln!(
                 "    {} · {} · group {} · Claude {}{ad}",
                 s["name"]
                     .as_str()
@@ -125,7 +125,7 @@ pub fn status(v: &Value) {
             );
         }
     }
-    println!("\nAccounts:");
+    outln!("\nAccounts:");
     for a in v["accounts"].as_array().into_iter().flatten() {
         let usage = match a["usage"].as_object() {
             Some(u) => {
@@ -147,7 +147,7 @@ pub fn status(v: &Value) {
             " "
         };
         let elig = a["eligibility"]["reason"].as_str().unwrap_or("");
-        println!(
+        outln!(
             "{live} {:<16} {:<12} {:<28} {}{note}",
             a["label"].as_str().unwrap_or("?"),
             a["kind"].as_str().unwrap_or("?"),
@@ -165,7 +165,7 @@ pub fn groups(v: &Value) {
     let default = v["defaultGroup"].as_str().unwrap_or("");
     for g in v["groups"].as_array().into_iter().flatten() {
         let name = g["name"].as_str().unwrap_or("?");
-        println!(
+        outln!(
             "{}{} · mode {} · threshold {}% · margin {} · home {}{}",
             name,
             if name == default { " (default)" } else { "" },
@@ -195,7 +195,7 @@ pub fn groups(v: &Value) {
                 .find(|x| x["id"] == id)
                 .and_then(|x| x["label"].as_str())
                 .unwrap_or(id);
-            println!("    {l}");
+            outln!("    {l}");
         }
     }
 }
@@ -203,10 +203,10 @@ pub fn groups(v: &Value) {
 pub fn lanes(v: &Value) {
     let list = v.as_array().cloned().unwrap_or_default();
     if list.is_empty() {
-        println!("No lanes. A lane is a separate Claude environment for sessions that need a different account (quayflow lanes create <name>).");
+        outln!("No lanes. A lane is a separate Claude environment for sessions that need a different account (quayflow lanes create <name>).");
     }
     for l in list {
-        println!(
+        outln!(
             "{} · {} · links {} · check {} · {} session(s)",
             l["name"].as_str().unwrap_or("?"),
             l["live"]
@@ -221,16 +221,16 @@ pub fn lanes(v: &Value) {
             },
             l["sessions"]
         );
-        println!("    {}", l["configDir"].as_str().unwrap_or(""));
+        outln!("    {}", l["configDir"].as_str().unwrap_or(""));
         for d in l["linkDetail"].as_array().into_iter().flatten() {
-            println!("    - {}", d.as_str().unwrap_or(""));
+            outln!("    - {}", d.as_str().unwrap_or(""));
         }
     }
 }
 
 pub fn compat(v: &Value) {
     for r in v.as_array().into_iter().flatten() {
-        println!(
+        outln!(
             "Claude {} · static {} · live {} {}",
             r["version"].as_str().unwrap_or("?"),
             if r["staticPass"] == true { "PASS" } else { "FAIL" },

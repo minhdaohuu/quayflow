@@ -1,9 +1,16 @@
 //! `quayflow`: the Quayflow engine and command line.
 
+/// `println!` that keeps piped output readable in Windows PowerShell (see `term`).
+macro_rules! outln {
+    () => { println!() };
+    ($($arg:tt)*) => { println!("{}", crate::term::fit(&format!($($arg)*))) };
+}
+
 mod canary;
 mod client;
 mod local;
 mod print;
+mod term;
 
 use client::{Client, ClientError};
 use qf_engine::DataDir;
@@ -97,7 +104,7 @@ impl Args {
 }
 
 fn fail(msg: impl std::fmt::Display) -> i32 {
-    eprintln!("quayflow: {msg}");
+    eprintln!("quayflow: {}", term::fit(&msg.to_string()));
     1
 }
 
@@ -109,21 +116,21 @@ fn say(v: Result<Value, ClientError>) -> i32 {
     match v {
         Ok(v) => {
             if v.get("ok") == Some(&json!(false)) {
-                println!("{}", v["message"].as_str().unwrap_or("refused"));
+                outln!("{}", v["message"].as_str().unwrap_or("refused"));
                 return 1;
             } else if let Some(m) = v["message"].as_str() {
-                println!("{m}");
+                outln!("{m}");
             } else {
                 println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             }
             0
         }
         Err(ClientError::Api { code, message, .. }) if code == "needs_disclosure" => {
-            println!("{message}\n\nRepeat the command with --accept-disclosure to accept this once for the group.");
+            outln!("{message}\n\nRepeat the command with --accept-disclosure to accept this once for the group.");
             2
         }
         Err(ClientError::Api { code, message, .. }) if code == "needs_approval" => {
-            println!("{message}\n\nRepeat with --approve to enable it.");
+            outln!("{message}\n\nRepeat with --approve to enable it.");
             2
         }
         Err(e) => fail(e),
@@ -143,16 +150,16 @@ fn switch_result(v: Result<Value, ClientError>) -> i32 {
     match v {
         Ok(v) if v["ok"] == json!(true) => {
             let t = &v["transition"];
-            println!(
+            outln!(
                 "Switch requested ({}). Each session uses the new account from its next request.",
                 t["state"].as_str().unwrap_or("?")
             );
             0
         }
         Ok(v) => {
-            println!("{}", v["message"].as_str().unwrap_or("refused"));
+            outln!("{}", v["message"].as_str().unwrap_or("refused"));
             if let Some(b) = v["blockedBy"].as_object() {
-                println!(
+                outln!(
                     "Blocking session: {} (pid {}). Move it into a lane: quayflow handoff replace --session {} --to <lane>",
                     b.get("name").and_then(|x| x.as_str()).unwrap_or("?"),
                     b.get("pid").and_then(|x| x.as_u64()).unwrap_or(0),
@@ -182,17 +189,17 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
     };
     match cmd {
         "help" | "-h" | "/?" => {
-            println!("{HELP}");
+            outln!("{HELP}");
             0
         }
         "version" | "-V" => {
-            println!("quayflow {} (protocol {})", qf_model::ENGINE_VERSION, qf_model::PROTOCOL);
+            outln!("quayflow {} (protocol {})", qf_model::ENGINE_VERSION, qf_model::PROTOCOL);
             0
         }
         "serve" => match qf_engine::serve(dd.clone(), qf_adapter::Env::default_env(), Duration::from_secs(2)) {
             Ok(true) => 0,
             Ok(false) => {
-                println!("A Quayflow engine is already running for this user.");
+                outln!("A Quayflow engine is already running for this user.");
                 0
             }
             Err(e) => fail(e),
@@ -225,7 +232,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             });
             match r {
                 Ok(v) => {
-                    println!("{}", v["note"].as_str().map(String::from).unwrap_or_else(|| format!("Registered {} in group \"{group}\". Nothing was switched.", v["label"].as_str().unwrap_or(&label))));
+                    outln!("{}", v["note"].as_str().map(String::from).unwrap_or_else(|| format!("Registered {} in group \"{group}\". Nothing was switched.", v["label"].as_str().unwrap_or(&label))));
                     0
                 }
                 Err(e) => say(Err(e)),
@@ -235,7 +242,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         "remove" => {
             let Some(acct) = a.p(1) else { return fail("remove <account>") };
             if !a.has("yes") && !ask_yes(&format!("Remove {acct} from Quayflow (its protected copy is deleted; history stays)?")) {
-                println!("Cancelled; nothing was removed.");
+                outln!("Cancelled; nothing was removed.");
                 return 1;
             }
             say(connect(dd).and_then(|c| c.post("/v1/accounts/remove", json!({"account": acct}))))
@@ -269,9 +276,9 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             }
             _ => match connect(dd).and_then(|c| c.get("/v1/state")) {
                 Ok(v) => {
-                    println!("Unassigned projects use \"{}\".", v["defaultGroup"].as_str().unwrap_or("?"));
+                    outln!("Unassigned projects use \"{}\".", v["defaultGroup"].as_str().unwrap_or("?"));
                     for p in v["projects"].as_array().into_iter().flatten() {
-                        println!("  {}  ->  {}", p["path"].as_str().unwrap_or(""), p["group"].as_str().unwrap_or(""));
+                        outln!("  {}  ->  {}", p["path"].as_str().unwrap_or(""), p["group"].as_str().unwrap_or(""));
                     }
                     0
                 }
@@ -314,9 +321,9 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             });
             match r {
                 Ok(v) => {
-                    println!("{}", v["message"].as_str().unwrap_or(""));
-                    println!("Files copied with integrity check: {}", v["fileCount"]);
-                    println!("Command: {}", v["command"].as_str().unwrap_or(""));
+                    outln!("{}", v["message"].as_str().unwrap_or(""));
+                    outln!("Files copied with integrity check: {}", v["fileCount"]);
+                    outln!("Command: {}", v["command"].as_str().unwrap_or(""));
                     0
                 }
                 Err(e) => fail(e),
@@ -326,13 +333,13 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             Some("install") => match local::shell_install(dd, &local::profile_paths()) {
                 Ok(p) => {
                     let _ = local::set_consent(dd, "promptHook", true);
-                    println!("Prompt hook installed in:
+                    outln!("Prompt hook installed in:
   {}
 Open a new PowerShell window to load it.", p.join("
   "));
                     let policy = local::ps51_execution_policy();
                     if !local::profiles_load(&policy) {
-                        println!("Note: Windows PowerShell 5.1's execution policy is {policy}, so it does not load profiles. To use the hook there, run in Windows PowerShell:
+                        outln!("Note: Windows PowerShell 5.1's execution policy is {policy}, so it does not load profiles. To use the hook there, run in Windows PowerShell:
   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 Quayflow does not change it for you. PowerShell 7 is not affected.");
                     }
@@ -343,7 +350,7 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
             Some("uninstall") => match local::shell_uninstall(dd, &local::profile_paths()) {
                 Ok(p) => {
                     let _ = local::set_consent(dd, "promptHook", false);
-                    println!("Prompt hook removed{}.", if p.is_empty() { " (none found)".to_string() } else { format!(" from {}", p.join(", ")) });
+                    outln!("Prompt hook removed{}.", if p.is_empty() { " (none found)".to_string() } else { format!(" from {}", p.join(", ")) });
                     0
                 }
                 Err(e) => fail(e),
@@ -376,20 +383,20 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
                 for e in v["envs"].as_array().into_iter().flatten() {
                     let m = &e["managed"];
                     let enforced = !m["forceOrg"].as_array().map(|x| x.is_empty()).unwrap_or(true) || !m["forceMethod"].is_null();
-                    println!(
+                    outln!(
                         "{}: {}",
                         e["env"].as_str().unwrap_or("?"),
                         if enforced { format!("enforced by {} (organization #{:?}, method {})", m["sources"], m["forceOrg"], m["forceMethod"]) } else { "no managed login enforcement".into() }
                     );
                 }
-                println!("Managed-login override setting: {}", if v["dOrg"]["enabled"] == json!(true) { "ON (recorded only; enforcement still respected)" } else { "off" });
+                outln!("Managed-login override setting: {}", if v["dOrg"]["enabled"] == json!(true) { "ON (recorded only; enforcement still respected)" } else { "off" });
                 0
             }
             Err(e) => fail(e),
         },
         "report" => match connect(dd).and_then(|c| c.post("/v1/report", json!({}))) {
             Ok(v) => {
-                println!("{}\n...\nSaved for your review: {}\nNothing was sent anywhere. Share it only if you choose to.", v["preview"].as_str().unwrap_or(""), v["path"].as_str().unwrap_or(""));
+                outln!("{}\n...\nSaved for your review: {}\nNothing was sent anywhere. Share it only if you choose to.", v["preview"].as_str().unwrap_or(""), v["path"].as_str().unwrap_or(""));
                 0
             }
             Err(e) => fail(e),
@@ -413,12 +420,12 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
                     return fail(format!("startup entry: {e}"));
                 }
             }
-            println!("{name}: {}", if on { "on" } else { "off" });
+            outln!("{name}: {}", if on { "on" } else { "off" });
             0
         }
         "update" => match local::update(dd, a.has("check"), a.val("version").as_deref()) {
             Ok(m) => {
-                println!("{m}");
+                outln!("{m}");
                 0
             }
             Err(e) => fail(e),
@@ -434,13 +441,13 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
                 return 1;
             }
             for n in local::uninstall(dd, a.has("delete-data")) {
-                println!("- {n}");
+                outln!("- {n}");
             }
             0
         }
         _ => {
             eprintln!("unknown command \"{cmd}\"\n");
-            println!("{HELP}");
+            outln!("{HELP}");
             2
         }
     }
@@ -470,7 +477,7 @@ fn group_cmd(dd: &DataDir, a: &Args) -> i32 {
                 json!({"group": g, key: accts, "acceptDisclosure": a.has("accept-disclosure")}),
             ) {
                 Ok(v) if v["needsDisclosure"] == json!(true) => {
-                    println!(
+                    outln!(
                         "{}\n\nRepeat with --accept-disclosure to accept this once for the group.",
                         v["disclosure"].as_str().unwrap_or("")
                     );
@@ -525,15 +532,15 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
         Err(e) => return fail(e),
     };
     let id = s["id"].as_str().unwrap_or("").to_string();
-    println!("A sign-in window opened. Sign in there with the account to add.");
+    outln!("A sign-in window opened. Sign in there with the account to add.");
     if let Some(m) = s["message"].as_str() {
-        println!("{m}");
+        outln!("{m}");
     }
-    println!(
+    outln!(
         "If no window appeared, run this in another terminal:\n  {}",
         s["command"].as_str().unwrap_or("")
     );
-    println!("Waiting for the sign-in to finish (Ctrl+C cancels; your current login is not touched)...");
+    outln!("Waiting for the sign-in to finish (Ctrl+C cancels; your current login is not touched)...");
     let deadline = std::time::Instant::now() + Duration::from_secs(15 * 60);
     loop {
         std::thread::sleep(Duration::from_secs(2));
@@ -543,23 +550,23 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
         };
         if st["state"] == "ready" {
             let ident = &st["identity"];
-            println!(
+            outln!(
                 "Signed in: {} account #{}{}",
                 ident["kind"].as_str().unwrap_or("?"),
                 ident["account"].as_str().unwrap_or("?"),
                 ident["display"].as_str().map(|d| format!(" ({d})")).unwrap_or_default()
             );
             if ident["unexpected"] == json!(true) {
-                println!("This is not the account being reauthenticated. Nothing was replaced.");
+                outln!("This is not the account being reauthenticated. Nothing was replaced.");
                 let _ = c.post("/v1/accounts/signin/cancel", json!({"id": id}));
                 return 1;
             }
             if let Some(d) = ident["duplicateOf"].as_str() {
-                println!("This account is already registered as \"{d}\"; its protected copy will be updated (not added as extra capacity).");
+                outln!("This account is already registered as \"{d}\"; its protected copy will be updated (not added as extra capacity).");
             }
             if !ask_yes("Store this account in Quayflow's protected vault?") {
                 let _ = c.post("/v1/accounts/signin/cancel", json!({"id": id}));
-                println!("Cancelled. Your current login is unchanged.");
+                outln!("Cancelled. Your current login is unchanged.");
                 return 1;
             }
             let confirm = |accept: bool| {
@@ -572,12 +579,12 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
             // A mixed group needs a one-time disclosure: ask here, so the sign-in is not lost.
             if let Err(ClientError::Api { code, message, .. }) = &r {
                 if code == "needs_disclosure" {
-                    println!("{message}");
+                    outln!("{message}");
                     if ask_yes("Accept this once for the group?") {
                         r = confirm(true);
                     } else {
                         let _ = c.post("/v1/accounts/signin/cancel", json!({"id": id}));
-                        println!("Cancelled. Nothing was added; your current login is unchanged.");
+                        outln!("Cancelled. Nothing was added; your current login is unchanged.");
                         return 1;
                     }
                 }
@@ -586,7 +593,7 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
         }
         if let Some(m) = st["message"].as_str() {
             if st["state"] == "waiting" && m.contains("verified") {
-                println!("{m}");
+                outln!("{m}");
             }
         }
         if std::time::Instant::now() > deadline {
@@ -597,7 +604,7 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
 }
 
 fn onboard(dd: &DataDir) -> i32 {
-    println!(
+    outln!(
         "Quayflow keeps several Claude accounts and switches between them inside running sessions.
 
 - The Mod (inside Claude) shows status and asks the engine to act. The engine (quayflow.exe,
@@ -631,7 +638,7 @@ fn onboard(dd: &DataDir) -> i32 {
         consents.insert(k.into(), json!(ask_yes(q)));
     }
     if consents["terms"] != json!(true) {
-        println!("Onboarding stopped: the terms notice must be accepted.");
+        outln!("Onboarding stopped: the terms notice must be accepted.");
         return 1;
     }
     let startup = consents["signinStartup"] == json!(true);
@@ -656,6 +663,6 @@ fn onboard(dd: &DataDir) -> i32 {
             eprintln!("startup entry not created: {e}");
         }
     }
-    println!("Saved. Next: quayflow register --label <name> --group Default");
+    outln!("Saved. Next: quayflow register --label <name> --group Default");
     0
 }

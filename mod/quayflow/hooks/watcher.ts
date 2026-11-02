@@ -64,9 +64,14 @@ export function startWatcher($: EngineInterface): void {
     while (mine === generation) {
       if (!Q.link.on) {
         const reason = Q.link.reason
-        // Stay off until the person acts (onboarding, /quay start, update).
+        // Never start the engine for these reasons, but notice when the person has acted
+        // elsewhere since: installed, set up, started or updated it from the command line.
+        // Only a handshake with an engine that is already running; nothing is started here.
         if (reason === 'no_consent' || reason === 'stopped_by_user' || reason === 'incompatible' || reason === 'not_installed') {
           await pause($, 30_000)
+          if (mine !== generation) break
+          await establish($, { allowStart: false }).catch(() => {})
+          await paintStatus($)
           continue
         }
         await establish($, { allowStart: false }).catch(() => {})

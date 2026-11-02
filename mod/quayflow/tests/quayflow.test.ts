@@ -230,6 +230,22 @@ describe('interactive sessions', () => {
     expect(w.routes()).toContain('/v1/events')
   })
 
+  test('a session opened before setup notices the engine once it runs, without starting it', async ($, on) => {
+    const w = world(on, { down: true, start: 'no_consent' })
+    await start($, w, true)
+    const off = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+    expect(off).toContain('not set up')
+    const starts = w.runs.length
+    // The person installs and sets up Quayflow from the command line; the engine now runs.
+    w.up()
+    await w.clock.advance(31_000)
+    await w.clock.settle()
+    const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+    expect(status).toMatch(/^Quayflow · suggest/)
+    // Only a handshake: the Mod never launched quayflow.exe for a sticky reason.
+    expect(w.runs.length).toBe(starts)
+  })
+
   test('an incompatible engine says how to update', async ($, on) => {
     const w = world(on, { hello: { compatible: false, protocol: 1, acceptedProtocols: [2], engineVersion: '0.3.0' } })
     await start($, w, true)

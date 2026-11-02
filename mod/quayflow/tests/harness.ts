@@ -126,6 +126,10 @@ export function world(on: On, a: Answers = {}) {
     ui,
     runs,
     clock,
+    /** The engine comes up by other means (installed, set up or started from the command line). */
+    up: () => {
+      down = false
+    },
     routes: () => sent.map(s => s.route),
     bodies: (route: string) => sent.filter(s => s.route === route).map(s => s.body ?? {}),
   }
