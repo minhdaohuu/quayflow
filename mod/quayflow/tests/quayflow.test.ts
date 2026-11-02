@@ -132,16 +132,26 @@ describe('request hook', () => {
       return ok(e)
     })
     await start($, w, false)
+    const t0 = Date.now()
     await step($)
     await step($, { ...STEP, index: 1 })
     const expected = await hash12(PROFILE_UUID)
     expect(expected).toHaveLength(12)
     // Every verify: true is answered (the live canary asks on every request).
+    const any = expect.any(Number)
     expect(w.bodies('/v1/adoption')).toEqual([
-      { sessionId: 'S1', account: expected, transition: 'tr-7' },
-      { sessionId: 'S1', account: expected, transition: 'tr-7' },
+      { sessionId: 'S1', account: expected, transition: 'tr-7', startedAt: any },
+      { sessionId: 'S1', account: expected, transition: 'tr-7', startedAt: any },
     ])
-    expect(w.bodies('/v1/step')[0]).toMatchObject({ sessionId: 'S1', turnId: 'turn-1', index: 0, ok: true, stopReason: 'end_turn', model: 'claude-opus-5-5' })
+    const steps = w.bodies('/v1/step')
+    expect(steps[0]).toMatchObject({ sessionId: 'S1', turnId: 'turn-1', index: 0, ok: true, stopReason: 'end_turn', model: 'claude-opus-5-5' })
+    // The start time is taken before the request, so the engine can tell requests that were
+    // already in flight at a switch from the first request after it.
+    const s0 = Number(steps[0]?.startedAt)
+    const s1 = Number(steps[1]?.startedAt)
+    expect(s0).toBeGreaterThanOrEqual(t0)
+    expect(s1).toBeGreaterThanOrEqual(s0)
+    expect(w.bodies('/v1/adoption')[0]?.startedAt).toBe(s0)
   })
 
   test('failure rules', () => {

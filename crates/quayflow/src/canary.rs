@@ -84,7 +84,12 @@ pub fn live(dd: &DataDir) -> i32 {
             .any(|s| s["stopReason"] == "tool_use" && s["agent"].is_null());
         if first_tool {
             match c.post("/v1/canary/switch", json!({"to": to})) {
-                Ok(v) if v["ok"] == true => swapped_at = qf_model::time::now_ms(),
+                // The write time, not the reply time: requests are classified by when they started.
+                Ok(v) if v["ok"] == true => {
+                    swapped_at = v["transition"]["writtenAt"]
+                        .as_i64()
+                        .unwrap_or_else(qf_model::time::now_ms)
+                }
                 Ok(v) => {
                     eprintln!("swap refused: {}", v["message"].as_str().unwrap_or(""));
                     break;
@@ -109,14 +114,11 @@ pub fn live(dd: &DataDir) -> i32 {
         .flatten()
         .filter(|s| s["account"].is_string())
         .collect();
-    let before: Vec<&&Value> = evid
-        .iter()
-        .filter(|s| s["ts"].as_i64().unwrap_or(0) < swapped_at)
-        .collect();
-    let after: Vec<&&Value> = evid
-        .iter()
-        .filter(|s| s["ts"].as_i64().unwrap_or(0) >= swapped_at)
-        .collect();
+    // A request belongs to the side of the swap on which it STARTED: one in flight at the
+    // write finishes on the previous account by design.
+    let started = |s: &Value| s["startedAt"].as_i64().or_else(|| s["ts"].as_i64()).unwrap_or(0);
+    let before: Vec<&&Value> = evid.iter().filter(|s| started(s) < swapped_at).collect();
+    let after: Vec<&&Value> = evid.iter().filter(|s| started(s) >= swapped_at).collect();
     let ok_before = !before.is_empty() && before.iter().all(|s| s["account"] == from.as_str());
     let ok_after = !after.is_empty() && after.iter().all(|s| s["account"] == to.as_str());
     let one_json = serde_json::from_str::<Value>(&out)

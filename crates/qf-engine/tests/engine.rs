@@ -176,6 +176,7 @@ fn manual_switch_pins_and_tracks_adoption() {
         session_id: SID.into(),
         account: Some(id("uuid-personal")),
         transition: r.transition,
+        ..Default::default()
     })
     .unwrap();
     let st = e.state_view(Some(SID), None);
@@ -200,6 +201,63 @@ fn manual_switch_pins_and_tracks_adoption() {
 }
 
 #[test]
+fn request_in_flight_at_the_switch_is_not_adoption_evidence() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let before = qf_model::time::now_ms() - 5_000;
+    e.start_switch(
+        &EnvId::default_env(),
+        &id("uuid-personal"),
+        SwitchHow::Manual,
+        "test",
+        false,
+        true,
+    )
+    .unwrap();
+    // A request that started before the write finishes on the old account: no verification asked.
+    let r = e.step(&StepReport {
+        session_id: SID.into(),
+        ok: true,
+        started_at: Some(before),
+        ..Default::default()
+    });
+    assert!(!r.verify, "in-flight request is not checked");
+    // Even if its identity arrives (live canary), it does not decide adoption.
+    let m = e
+        .adoption(&AdoptionReport {
+            session_id: SID.into(),
+            account: Some(id("uuid-org")),
+            transition: None,
+            started_at: Some(before),
+        })
+        .unwrap();
+    assert!(m.contains("in flight"), "{m}");
+    let st = e.state_view(Some(SID), None);
+    assert_eq!(st.envs[0].adoption[0].state, AdoptionState::PendingNextRequest);
+    assert!(st.envs[0].in_place.allowed, "in-place switching stays on");
+    // The next request, started after the write, is the evidence.
+    let after = qf_model::time::now_ms();
+    let r = e.step(&StepReport {
+        session_id: SID.into(),
+        ok: true,
+        started_at: Some(after),
+        ..Default::default()
+    });
+    assert!(r.verify);
+    e.adoption(&AdoptionReport {
+        session_id: SID.into(),
+        account: Some(id("uuid-personal")),
+        transition: r.transition,
+        started_at: Some(after),
+    })
+    .unwrap();
+    assert_eq!(
+        e.state_view(Some(SID), None).envs[0].adoption[0].state,
+        AdoptionState::Adopted
+    );
+}
+
+#[test]
 fn adoption_mismatch_disables_in_place_for_the_version() {
     let w = world();
     let e = engine_with_accounts(&w);
@@ -221,7 +279,8 @@ fn adoption_mismatch_disables_in_place_for_the_version() {
         e.adoption(&AdoptionReport {
             session_id: SID.into(),
             account: Some(id("uuid-org")),
-            transition: r.transition
+            transition: r.transition,
+            ..Default::default()
         })
         .unwrap(),
         "mismatch"
@@ -244,6 +303,18 @@ fn adoption_mismatch_disables_in_place_for_the_version() {
         )
         .unwrap_err();
     assert!(refused.message.contains("disabled"));
+    // The live canary can still run: it is how the version is checked again.
+    let t = e
+        .start_switch(
+            &EnvId::default_env(),
+            &id("uuid-org"),
+            SwitchHow::Canary,
+            "version canary",
+            false,
+            true,
+        )
+        .unwrap();
+    assert!(t.state.written());
 }
 
 #[test]

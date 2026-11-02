@@ -318,6 +318,11 @@ pub struct StepReport {
     pub model: Option<String>,
     #[serde(default)]
     pub rate_limits: Vec<SessionRateLimit>,
+    /// When the client started this request (ms since the epoch, same machine clock). A request
+    /// that started before a switch was written is in flight and finishes on the previous
+    /// account by design (FR-11); it is not evidence about adoption (FR-13).
+    #[serde(default)]
+    pub started_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -329,7 +334,7 @@ pub struct StepResponse {
     pub transition: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AdoptionReport {
     pub session_id: String,
@@ -338,6 +343,9 @@ pub struct AdoptionReport {
     pub account: Option<AccountId>,
     #[serde(default)]
     pub transition: Option<String>,
+    /// Start time of the request whose identity this is (see [`StepReport::started_at`]).
+    #[serde(default)]
+    pub started_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

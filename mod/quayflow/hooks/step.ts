@@ -84,7 +84,7 @@ function emptyResult(e: StepEvent): TurnStepResult {
 }
 
 /** POST /v1/step, then /v1/adoption when the engine asks for verification. */
-async function report($: EngineInterface, e: StepEvent, result: TurnStepResult, ok: boolean, limits: SessionRateLimitWire[]): Promise<void> {
+async function report($: EngineInterface, e: StepEvent, result: TurnStepResult, ok: boolean, limits: SessionRateLimitWire[], startedAt: number): Promise<void> {
   const body: StepReport = {
     sessionId: Q.sessionId,
     turnId: e.turnId,
@@ -94,6 +94,7 @@ async function report($: EngineInterface, e: StepEvent, result: TurnStepResult, 
     stopReason: result.stopReason,
     model: e.model,
     rateLimits: limits,
+    startedAt,
   }
   let res: StepResponse
   try {
@@ -109,7 +110,7 @@ async function report($: EngineInterface, e: StepEvent, result: TurnStepResult, 
   } catch {
     account = undefined
   }
-  await call($, 'POST', '/v1/adoption', { sessionId: Q.sessionId, account: account ?? null, transition: res.transition ?? null }, { timeoutMs: 3_000 }).catch(() => {})
+  await call($, 'POST', '/v1/adoption', { sessionId: Q.sessionId, account: account ?? null, transition: res.transition ?? null, startedAt }, { timeoutMs: 3_000 }).catch(() => {})
 }
 
 async function postFailure($: EngineInterface, e: StepEvent, result: TurnStepResult, limits: SessionRateLimitWire[], simulated: boolean, errorKind: string | undefined): Promise<void> {
@@ -152,6 +153,9 @@ async function askRecover($: EngineInterface, e: StepEvent, limits: SessionRateL
 /** The `turn.step` hook body. */
 export async function* onStep($: EngineInterface, e: TurnStepInput, next: StreamNext<'turn.step'>): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   const simulated = Q.link.on ? await takeSimulatedLimit($, e).catch(() => false) : false
+  // Taken before the request: a request already in flight when a switch is written finishes on
+  // the previous account by design, so the engine must not read it as adoption evidence.
+  let startedAt = Date.now()
   let result: TurnStepResult = simulated ? emptyResult(e) : yield* next(e)
   // A cancelled request is never recovered or retried, and is not a failure to report.
   if (next.signal.aborted) return result
@@ -162,7 +166,7 @@ export async function* onStep($: EngineInterface, e: TurnStepInput, next: Stream
     return result
   }
   const limits = await rateLimits($)
-  await report($, e, result, !failed, limits).catch(() => {})
+  await report($, e, result, !failed, limits, startedAt).catch(() => {})
   if (!failed || !Q.link.on) return result
 
   const errorKind = errorKindOf(result)
@@ -181,6 +185,7 @@ export async function* onStep($: EngineInterface, e: TurnStepInput, next: Stream
   const to = rec.toLabel ?? rec.to ?? 'the account already switched to'
   uiLog($, `Quayflow: ${rec.switched ? `switched to "${to}"` : `using "${to}"`} (${rec.why}); retrying the same request once.`)
   try {
+    startedAt = Date.now()
     result = yield* next(e)
   } catch (err) {
     uiLog($, `Quayflow: the retry could not run (${errorText(err)}).`)
@@ -188,7 +193,7 @@ export async function* onStep($: EngineInterface, e: TurnStepInput, next: Stream
   }
   if (next.signal.aborted) return result
   const retryFailed = isFailedRequest(result, false)
-  await report($, e, result, !retryFailed, await rateLimits($)).catch(() => {})
+  await report($, e, result, !retryFailed, await rateLimits($), startedAt).catch(() => {})
   if (retryFailed) await postFailure($, e, result, await rateLimits($), false, errorKindOf(result))
   return result
 }

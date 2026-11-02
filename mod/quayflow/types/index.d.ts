@@ -285,10 +285,12 @@ export type StepReport = {
   stopReason?: string | null
   model?: string
   rateLimits: SessionRateLimitWire[]
+  /** When this request started (ms since the epoch); requests in flight at a switch are not adoption evidence. */
+  startedAt?: number | null
 }
 export type StepResponse = { verify: boolean; transition?: string | null }
 
-export type AdoptionReport = { sessionId: string; account?: AccountId | null; transition?: string | null }
+export type AdoptionReport = { sessionId: string; account?: AccountId | null; transition?: string | null; startedAt?: number | null }
 
 export type RecoverRequest = {
   sessionId: string

@@ -98,15 +98,21 @@ function Invoke-SwitchCase([string]$c, [string]$prompt, [string]$tools, [scriptb
         $steps = (Api GET '/v1/canary').steps
         if (-not $swapped -and (& $when $steps)) {
             $r = Api POST '/v1/canary/switch' @{ to = $other.id }
-            if ($r.ok) { $swapped = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); Write-Host "switched to $($other.label)" }
+            if ($r.ok) {
+                # The write time: requests are classified by when they STARTED (one in flight at
+                # the write finishes on the previous account by design).
+                $swapped = if ($r.transition.writtenAt) { [int64]$r.transition.writtenAt } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+                Write-Host "switched to $($other.label)"
+            }
         }
         Start-Sleep -Milliseconds 300
     }
     $job.Process.WaitForExit(); Start-Sleep 2
     $run = Api POST '/v1/canary/stop' @{}
     $ev = @($run.steps | Where-Object { $_.account })
-    $before = @($ev | Where-Object { $_.ts -lt $swapped }); $after = @($ev | Where-Object { $_.ts -ge $swapped })
-    foreach ($s in $ev) { Write-Host ("  {0} {1}" -f $(if ($s.ts -ge $swapped) { 'after ' } else { 'before' }), $label["$($s.account)"]) }
+    function Started($s) { if ($s.startedAt) { [int64]$s.startedAt } else { [int64]$s.ts } }
+    $before = @($ev | Where-Object { (Started $_) -lt $swapped }); $after = @($ev | Where-Object { (Started $_) -ge $swapped })
+    foreach ($s in $ev) { Write-Host ("  {0} {1}" -f $(if ((Started $s) -ge $swapped) { 'after ' } else { 'before' }), $label["$($s.account)"]) }
     Check $c 'swap happened mid-job' ($swapped -gt 0)
     Check $c 'requests before the swap used the first account' ($before.Count -gt 0 -and -not ($before | Where-Object account -ne $from)) "$($before.Count) request(s)"
     Check $c 'requests after the swap used the second account' ($after.Count -gt 0 -and -not ($after | Where-Object account -ne $other.id)) "$($after.Count) request(s)"

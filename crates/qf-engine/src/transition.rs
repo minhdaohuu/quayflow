@@ -97,7 +97,8 @@ impl Engine {
             }
             drop(ctx);
             let st = inner.envs.get(env).expect("env");
-            if !st.in_place.allowed {
+            // The canary is how a disabled version is checked again, so it is not refused here.
+            if !st.in_place.allowed && how != SwitchHow::Canary {
                 return Err(Refusal::new(
                     "refused",
                     format!(
@@ -477,12 +478,21 @@ impl Engine {
                     .find(|a| a.session_id == r.session_id && a.state == AdoptionState::PendingNextRequest)
             })
             .map(|a| a.transition.clone());
+        // A request that started before the switch was written was in flight: it finishes on
+        // the previous account by design and says nothing about adoption.
+        let in_flight = match (&pending, r.started_at) {
+            (Some(tid), Some(started)) => self
+                .written_at(&inner, &env, tid)
+                .is_some_and(|written| started < written),
+            _ => false,
+        };
+        let pending = pending.filter(|_| !in_flight);
         if let Some(c) = inner.canary.as_mut() {
-            c.steps.push(json!({"ts": now_ms(), "session": r.session_id, "index": r.index, "agent": r.agent_id, "stopReason": r.stop_reason, "ok": r.ok}));
+            c.steps.push(json!({"ts": now_ms(), "startedAt": r.started_at, "session": r.session_id, "index": r.index, "agent": r.agent_id, "stopReason": r.stop_reason, "ok": r.ok, "inFlight": in_flight}));
         }
         // The session's rate limits describe the account its request used: fold them in only
         // when that is known to be the live account (no adoption pending for this client).
-        if pending.is_none() && r.ok && !r.rate_limits.is_empty() {
+        if pending.is_none() && !in_flight && r.ok && !r.rate_limits.is_empty() {
             let live = inner
                 .envs
                 .get(&env)
@@ -506,10 +516,21 @@ impl Engine {
         };
         inner.verified.insert(r.session_id.clone(), (account.clone(), now_ms()));
         if let Some(c) = inner.canary.as_mut() {
-            c.steps
-                .push(json!({"ts": now_ms(), "session": r.session_id, "account": account, "adoption": true}));
+            c.steps.push(json!({"ts": now_ms(), "startedAt": r.started_at, "session": r.session_id, "account": account, "adoption": true}));
         }
         let env = self.env_of_session(&inner, &r.session_id);
+        // Identity of a request that was already in flight at the write: not adoption evidence.
+        let pending_tid = inner.envs.get(&env).and_then(|st| {
+            st.adoption
+                .iter()
+                .find(|a| a.session_id == r.session_id && a.state == AdoptionState::PendingNextRequest)
+                .map(|a| a.transition.clone())
+        });
+        if let (Some(tid), Some(started)) = (&pending_tid, r.started_at) {
+            if self.written_at(&inner, &env, tid).is_some_and(|w| started < w) {
+                return Ok("request was in flight at the switch; still pending".into());
+            }
+        }
         let Some(st) = inner.envs.get_mut(&env) else {
             return Ok("unknown environment".into());
         };
@@ -582,6 +603,18 @@ impl Engine {
         }
         self.finish_adoption(&mut inner, &env);
         Ok(if ok { "adopted".into() } else { "mismatch".into() })
+    }
+}
+
+impl Engine {
+    /// When transition `tid` wrote the login in `env`, if known.
+    fn written_at(&self, inner: &Inner, env: &EnvId, tid: &str) -> Option<i64> {
+        let st = inner.envs.get(env)?;
+        [st.transition.as_ref(), st.last_switch.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|t| t.id == tid)
+            .and_then(|t| t.written_at)
     }
 }
 
