@@ -30,6 +30,8 @@ pub struct EnvState {
     pub last_switch: Option<Transition>,
     pub last_proactive: Option<i64>,
     pub pin: Option<Pin>,
+    /// An unpin received while this transition was still in progress: it must not pin on success.
+    pub unpinned_transition: Option<String>,
     pub suggestion: Option<Suggestion>,
     pub adoption: Vec<ClientAdoption>,
     pub sessions: Vec<SessionInfo>,
@@ -56,6 +58,7 @@ impl EnvState {
             last_switch: None,
             last_proactive: None,
             pin: None,
+            unpinned_transition: None,
             suggestion: None,
             adoption: vec![],
             sessions: vec![],
@@ -858,6 +861,25 @@ impl Engine {
                 false,
             );
         }
+    }
+
+    /// Clear the pin. A pinning switch still in flight is marked so that it does not pin again
+    /// when it completes.
+    pub fn unpin(&self, env: &EnvId) {
+        let mut inner = self.lock();
+        if let Some(st) = inner.envs.get_mut(env) {
+            st.pin = None;
+            if st.blocking_transition() {
+                st.unpinned_transition = st.transition.as_ref().map(|t| t.id.clone());
+            }
+        }
+        self.record(&inner, "unpin", json!({"env": env}), false);
+        self.emit(
+            &mut inner,
+            "state",
+            Some(env),
+            "Pin cleared; suggestions and automatic switching resume.",
+        );
     }
 
     pub fn decide(self: &Arc<Self>, env: &EnvId) {

@@ -247,6 +247,44 @@ fn adoption_mismatch_disables_in_place_for_the_version() {
 }
 
 #[test]
+fn unpin_during_an_in_flight_switch_is_not_lost() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    {
+        let mut inner = e.lock();
+        inner.config.tuning.lock_wait_s = 5;
+    }
+    // Claude holds its refresh lock, so the switch waits in flight.
+    std::fs::create_dir(w.env.refresh_lock()).unwrap();
+    let e2 = e.clone();
+    let switch = std::thread::spawn(move || {
+        e2.start_switch(
+            &EnvId::default_env(),
+            &id("uuid-personal"),
+            SwitchHow::Manual,
+            "test",
+            false,
+            true,
+        )
+        .unwrap()
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !e.lock().envs[&EnvId::default_env()].blocking_transition() {
+        assert!(std::time::Instant::now() < deadline, "switch never started");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    e.unpin(&EnvId::default_env());
+    std::fs::remove_dir(w.env.refresh_lock()).unwrap();
+    let t = switch.join().unwrap();
+    assert_eq!(t.state, TransitionState::VerifyingAdoption);
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+    assert!(
+        e.state_view(None, None).envs[0].pin.is_none(),
+        "the unpin given mid-switch holds"
+    );
+}
+
+#[test]
 fn held_lock_leaves_login_unchanged() {
     let w = world();
     let e = engine_with_accounts(&w);

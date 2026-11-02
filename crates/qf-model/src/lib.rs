@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod config;
+pub mod sim;
 pub mod time;
 
 use serde::{Deserialize, Serialize};

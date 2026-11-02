@@ -167,7 +167,11 @@ version
 | C4 PoC DPAPI blobs decrypt in Rust | The PoC stored `base64(ProtectedData.Protect(utf8 JSON, entropy, CurrentUser))`; Rust `CryptUnprotectData` with the same entropy reads it (unit test round-trips the format; owner runs `quayflow migrate-poc`) | Migration supported |
 | C5 Native sign-in in a temporary environment | `claude auth login` exists in 2.1.316. The engine opens it in a new console window (`CREATE_NEW_CONSOLE`) with `CLAUDE_CONFIG_DIR` set and detects completion by polling the temporary environment for `claudeAiOauth` + `oauthAccount`; the exact command is shown as a fallback | New window + detection |
 
-## 9. Build notes
+## 9. Simulation mode (tests only)
+
+`QUAYFLOW_SIM_API=http://127.0.0.1:<port>` sends the usage and profile calls to a fake server instead of `https://api.anthropic.com`. Only a loopback HTTP origin is accepted (`127.0.0.1` or `localhost`, a port, no path); any other value is ignored, so the setting cannot send a login token to another host. In simulation mode polling intervals below the normal 30 s / 60 s minimum are allowed, and `quayflow status` and `status --json` (`engine.simulation`) show that the mode is on. `QUAYFLOW_OFFLINE` disables these calls and update downloads altogether. The fake server is `tests/sim/fake_api.py`; `tests/e2e/sim-usage.ps1` drives it.
+
+## 10. Build notes
 
 - Local development on a machine without Visual Studio Build Tools: `RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-gnu` (no C compiler needed: HTTPS uses Windows SChannel through `native-tls`). Releases are built by CI with the pinned MSVC toolchain.
 - Reproducible release: pinned toolchain (`rust-toolchain.toml`), `Cargo.lock`, `--locked`, `strip`, no debug info, `-C link-arg=/Brepro`, `SOURCE_DATE_EPOCH` from the tag's commit, `--remap-path-prefix`.

@@ -190,6 +190,9 @@ pub struct EngineInfo {
     /// "not code-signed; provenance-attested" plus the executable's SHA-256.
     pub integrity: String,
     pub exe_sha256: String,
+    /// Set only in simulation mode (`QUAYFLOW_SIM_API`): the fake API origin in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub simulation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

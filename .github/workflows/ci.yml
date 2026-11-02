@@ -58,6 +58,12 @@ jobs:
         run: |
           pwsh -NoProfile -File tests/e2e/cli-fake-env.ps1 -Exe target\debug\quayflow.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Scripted usage over time from a loopback fake usage/profile API (tests/sim/fake_api.py).
+      - name: Simulation test (fake usage API)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/e2e/sim-usage.ps1 -Exe target\debug\quayflow.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   mod:
     name: Mod (marketplace, type check, validate, tests)

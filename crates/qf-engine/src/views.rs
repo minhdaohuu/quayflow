@@ -264,6 +264,7 @@ impl Engine {
                 integrity: "not code-signed; provenance-attested (verify with SHA256SUMS and gh attestation verify)"
                     .into(),
                 exe_sha256: self.exe_sha256.clone(),
+                simulation: qf_model::sim::api_base(),
             },
             onboarded: cfg.onboarded_at.is_some(),
             consents: cfg.consents.clone(),

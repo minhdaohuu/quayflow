@@ -23,6 +23,9 @@ pub fn status(v: &Value) {
     if let Some(h) = e["exeSha256"].as_str().filter(|h| !h.is_empty()) {
         println!("Build SHA-256: {h}");
     }
+    if let Some(s) = e["simulation"].as_str() {
+        println!("[warn] SIMULATION MODE: usage and profile calls go to the fake API at {s} (QUAYFLOW_SIM_API)");
+    }
     let labels: Vec<(String, String)> = v["accounts"]
         .as_array()
         .into_iter()

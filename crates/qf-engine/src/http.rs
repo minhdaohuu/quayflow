@@ -234,17 +234,7 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
         }
         ("POST", "/v1/unpin") => {
             let env = env_param(e, body);
-            let mut inner = e.lock();
-            if let Some(st) = inner.envs.get_mut(&env) {
-                st.pin = None;
-            }
-            e.record(&inner, "unpin", json!({"env": env}), false);
-            e.emit(
-                &mut inner,
-                "state",
-                Some(&env),
-                "Pin cleared; suggestions and automatic switching resume.",
-            );
+            e.unpin(&env);
             ok(OkResponse::ok("pin cleared"))
         }
         ("POST", "/v1/step") => ok(e.step(&parse(body)?)),

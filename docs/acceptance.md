@@ -4,6 +4,7 @@ The [release conditions](requirements.md#release-conditions-for-v01) require rec
 
 - **Logic:** Rust unit and scenario tests on a fake Claude environment (`cargo test`; scenarios in `crates/qf-engine/tests/engine.rs`). They prove decisions and file handling. They cannot prove client adoption, isolation or refresh behavior.
 - **Smoke:** `tests/e2e/smoke-fake-env.ps1`, which runs the real `quayflow.exe` process against a fake environment (21 checks), and `tests/e2e/cli-fake-env.ps1`, which covers CLI argument validation and error paths the same way (70 checks).
+- **Simulation:** `tests/e2e/sim-usage.ps1` scripts usage over time from a loopback fake of the usage and profile API (`tests/sim/fake_api.py`) and checks observation, suggestion, Automatic switching, return home, stale data, backoff, rejected tokens, hard-limit recovery, concurrent failures and the all-exhausted case (25 checks). It proves Quayflow's logic against these fakes, not that the real service behaves the same.
 - **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1` and the manual steps below). Only this kind of evidence can pass a scenario.
 
 

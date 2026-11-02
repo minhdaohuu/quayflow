@@ -399,7 +399,7 @@ impl Config {
         {
             return Err("tuning percentages must be in 1-100".into());
         }
-        if t.live_poll_s < 30 || t.idle_poll_s < 60 {
+        if !crate::sim::active() && (t.live_poll_s < 30 || t.idle_poll_s < 60) {
             return Err(
                 "polling faster than 30 s (live) or 60 s (idle) is not allowed: the usage endpoint is rate-limited"
                     .into(),

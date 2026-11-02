@@ -380,7 +380,8 @@ impl Engine {
         st.last_stamp = out.stamp;
         st.other_switcher = false;
         st.external_changes.clear();
-        st.pin = if t.how.pins() {
+        let unpinned = st.unpinned_transition.take().is_some_and(|id| id == t.id);
+        st.pin = if t.how.pins() && !unpinned {
             Some(Pin {
                 account: t.to.clone(),
                 until: pin_until,

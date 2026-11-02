@@ -14,6 +14,15 @@ pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const BETA: &str = "oauth-2025-04-20";
 
+/// The real endpoint, or the same path on the loopback fake server in simulation mode
+/// (see [`qf_model::sim`]).
+fn endpoint(real: &str) -> String {
+    match qf_model::sim::api_base() {
+        Some(base) => real.replacen("https://api.anthropic.com", &base, 1),
+        None => real.to_string(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderError {
     /// HTTP status with Retry-After seconds if given.
@@ -152,7 +161,7 @@ pub fn fetch_usage(
     if expires_at.is_some_and(|e| e < now + 60_000) {
         return Err(ProviderError::Expired);
     }
-    let v = get_json(USAGE_URL, access_token)?;
+    let v = get_json(&endpoint(USAGE_URL), access_token)?;
     parse_usage(account, now, &v)
 }
 
@@ -191,7 +200,7 @@ pub fn parse_profile(v: &serde_json::Value) -> Result<Profile, ProviderError> {
 
 /// First-party profile lookup: the identity behind an access token.
 pub fn fetch_profile(access_token: &str) -> Result<Profile, ProviderError> {
-    parse_profile(&get_json(PROFILE_URL, access_token)?)
+    parse_profile(&get_json(&endpoint(PROFILE_URL), access_token)?)
 }
 
 /// Per-account poll schedule with backoff (live every `live_s`, idle every `idle_s`,
