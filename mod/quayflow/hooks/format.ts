@@ -1,5 +1,5 @@
 // Pure text helpers shared by the status line, /quay text output and the pane.
-// Copy rules (design §7): no success wording when only stored, "Pending next
+// Copy rules: no success wording when only stored, "Pending next
 // request", no fake progress, unavailable usage is never 0%.
 import type {
   AccountView,
@@ -229,7 +229,7 @@ export function persistentWarnings(s: StateView, env: EnvView | undefined): stri
   return [...new Set(out)]
 }
 
-/** `Quayflow · <mode> · <account label> <binding%> <window> · <notice>` (FR-07, S10/S11/S56). */
+/** `Quayflow · <mode> · <account label> <binding%> <window> · <notice>` (FR-07). */
 export function statusLine(link: QuayLink, s: StateView | undefined): string | undefined {
   if (!link.on) {
     if (link.reason === 'connecting' && !link.message) return undefined

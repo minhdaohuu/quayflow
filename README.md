@@ -112,7 +112,7 @@ Everything is also available from the command line: `quayflow status`, `quayflow
 - **Terms and organization rules are your responsibility.** Quayflow is not affiliated with or endorsed by Anthropic.
 - **A switch moves every session of an environment** (by default `~/.claude`), each at its next request. Use lanes to keep a session on a different account.
 - **Saved logins** are encrypted with Windows DPAPI for your user. This does not protect against malware running as you. Quayflow never refreshes tokens; Claude does, and Quayflow saves the result. Logins never go into logs, reports or the Mod, and there is no telemetry.
-- **Organization-managed login enforcement is respected.** The managed-login override setting (D-ORG) is recorded but has no bypass path in this build. See [Security notes](docs/security.md#managed-login-enforcement-and-the-d-org-setting).
+- **Organization-managed login enforcement is respected.** The managed-login override setting is recorded but has no bypass path in this build. See [Security notes](docs/security.md#managed-login-enforcement-and-the-override-setting).
 - **Releases are not Authenticode-signed.** They are reproducible, hashed and provenance-attested. Smart App Control and signed-only company policies may block them. See [Verifying a release](docs/verify-release.md).
 - **Idle accounts go stale.** Quayflow never refreshes tokens, so an account left idle for some hours can no longer be observed. It stops being a candidate for automatic switching until it is used again; manual switching still works.
 - **Prompt cache is per account.** The first request after a switch reprocesses the conversation.
@@ -130,10 +130,8 @@ Read [Known limits](docs/known-limits.md) before relying on Quayflow for unatten
 
 | For contributors | |
 |---|---|
-| [Requirements (PRD)](docs/prd/) | Product requirements; v1.1 is current, earlier versions kept for history |
-| [UI/UX design](docs/design/) | Screen atlas, tokens and implementation handoff |
+| [Requirements](docs/requirements.md) | Functional requirements (FR-xx) and release conditions |
 | [Technical specification](docs/tech-spec.md) | Paths, schemas, API v1, CLI, Claude environment facts |
-| [Build plan](docs/build-plan.md) | Tasks, decisions and risks |
 | [Acceptance results](docs/acceptance.md) | Scenario results against the product build |
 | [Changelog](CHANGELOG.md) | Release history |
 

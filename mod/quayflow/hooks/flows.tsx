@@ -1,6 +1,5 @@
 // Flows of the /quay pane that are not top tabs: engine off and
-// incompatible states (S58, S60), first use (S01-S09), the switch flow
-// (S12, S26-S33), group conflict (S22) and trust views (S51-S56).
+// incompatible states, first use, the switch flow, group conflict and trust views.
 import type { EngineInterface } from 'claude-code'
 
 import type { EnvView, SigninStatus } from '../types'
@@ -256,7 +255,7 @@ export async function afterRegister($: EngineInterface, c: Ctx, labelText: strin
   await flash($, 'info', `Saved "${labelText}" to the vault in group ${group}. Nothing was switched.${note ? ` ${note}` : ''}`)
 }
 
-// Native sign-in for another account (S04-S06, S09).
+// Native sign-in for another account.
 
 let signinPoll = 0
 
@@ -323,7 +322,7 @@ function AddAccount($: EngineInterface, c: Ctx): JSX.Element {
       </Box>
     )
   }
-  // ready: identity review before saving (S06, S09)
+  // ready: identity review before saving
   const id = st.identity
   const dup = id?.duplicateOf
   const unexpected = id?.unexpected
@@ -613,7 +612,7 @@ export function Trust($: EngineInterface, c: Ctx): JSX.Element {
     )
   }
   if (sub === 'dorg') return DOrg($, c)
-  // managed enforcement (S54)
+  // managed enforcement
   const m = env.managed
   const excluded = s.accounts.filter(a => a.eligibility && !a.eligibility.eligible && /organi[sz]ation|managed|policy|enforc/i.test(a.eligibility.reason))
   return (

@@ -1,6 +1,5 @@
 <#
 Owner-run end-to-end scenarios against REAL Claude logins (product build).
-Ports of the PoC scripts poc/swap/test-midjob.ps1 and test-recovery.ps1.
 
 THIS SWITCHES YOUR LIVE CLAUDE LOGIN between two registered accounts and puts it back.
 Synthetic prompts only (model haiku). Run it yourself; read it first.

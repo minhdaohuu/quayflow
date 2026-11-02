@@ -202,8 +202,8 @@ pub struct Consents {
     pub live_canary: Option<i64>,
 }
 
-/// D-ORG managed-login override (FR-06a). Read and displayed; this build contains
-/// no code path that acts on it (see docs/tech-spec.md, decision B5).
+/// Managed-login override setting (FR-06a). Read and displayed; this build contains
+/// no code path that acts on it (see docs/security.md).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DOrgSetting {

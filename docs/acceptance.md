@@ -1,12 +1,11 @@
 # Acceptance status (Quayflow v0.1)
 
-PRD v1.1 §15 requires recorded results on Windows against the **product build**. This table keeps three kinds of evidence apart. They are not interchangeable.
+The [release conditions](requirements.md#release-conditions-for-v01) require recorded results on Windows against the **product build**. This table keeps three kinds of evidence apart. They are not interchangeable.
 
 - **Logic:** Rust unit and scenario tests on a fake Claude environment (`cargo test`; scenarios in `crates/qf-engine/tests/engine.rs`). They prove decisions and file handling. They cannot prove client adoption, isolation or refresh behavior.
 - **Smoke:** `tests/e2e/smoke-fake-env.ps1`, which runs the real `quayflow.exe` process against a fake environment (21 checks).
 - **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1` and the manual steps below). Only this kind of evidence can pass a scenario.
 
-PoC evidence (`poc/RESULTS.md`) is listed for context only.
 
 **Status on 2026-11-02:** Logic and Smoke pass on the development machine. **No scenario has been run against the product build with real logins yet**, so none is marked passed.
 
@@ -43,7 +42,7 @@ PoC evidence (`poc/RESULTS.md`) is listed for context only.
 | AC-29 | Vault inaccessible | Logic `protect_failure_writes_nothing` | Not run | Copy the vault to another Windows user and try to load |
 | AC-30 | Diagnostics and cleanup | Logic `journal_and_report_hold_no_secrets`; Smoke | Not run | `quayflow report`; `quayflow uninstall --delete-data` |
 | AC-31 | Unknown version | Logic: static check per version | Not run | Install a new Claude version; check `quayflow canary` |
-| AC-32 | Denied capability | PoC Gate 1 | n/a (no bypass built) | — |
+| AC-32 | Denied capability | No bypass code exists | n/a | — |
 | AC-33 | Update or mixed runtimes | Logic: oldest running version governs | Not run | Run two Claude versions; update |
 | AC-34 | Long-duration and fault testing | — | Not run | 24 h run with `quayflow status` sampling |
 | AC-35 | Mixed-identity group | Logic and Smoke: disclosure once | Not run | Register org + personal in Default |
@@ -56,7 +55,7 @@ PoC evidence (`poc/RESULTS.md`) is listed for context only.
 | AC-42 | Mod/engine version mismatch | Logic `handshake_rejects_incompatible_protocol`; Smoke | Not run | Old Mod with new engine |
 | AC-43 | Plan compatibility | Logic `model_not_found_after_switch_switches_back`, `plan_incompatibility_excludes` | Not run | Pro account + Opus-only model |
 
-## Release conditions (PRD §15)
+## Release conditions
 
 | Condition | Status |
 |---|---|
@@ -67,4 +66,4 @@ PoC evidence (`poc/RESULTS.md`) is listed for context only.
 | Crash reconciliation, version gating, dead-refresh-token handling built and passing | Built; logic passes; real runs open |
 | Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Built in the release workflow and updater; first tagged release pending |
 | Disclaimer published | Done (README, installer, onboarding) |
-| Managed-login override documented with its risk | Done (`docs/security.md`); override not implemented in this build (B5) |
+| Managed-login override documented with its risk | Done (`docs/security.md`); override not implemented in this build |

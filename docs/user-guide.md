@@ -189,7 +189,7 @@ If the login keeps changing without Quayflow, another account-switching tool is 
 
 ## Organization-managed login
 
-If your organization enforces its login (`forceLoginOrgUUID` or `forceLoginMethod` in managed settings), Quayflow respects it. Accounts that do not match are not candidates in that environment, and `/quay` shows the reason. Switching between matching accounts of the same organization works normally. `quayflow policy` shows the enforcement per environment. See [Security notes](security.md#managed-login-enforcement-and-the-d-org-setting) about the related setting.
+If your organization enforces its login (`forceLoginOrgUUID` or `forceLoginMethod` in managed settings), Quayflow respects it. Accounts that do not match are not candidates in that environment, and `/quay` shows the reason. Switching between matching accounts of the same organization works normally. `quayflow policy` shows the enforcement per environment. See [Security notes](security.md#managed-login-enforcement-and-the-override-setting) about the related setting.
 
 ## Engine control
 

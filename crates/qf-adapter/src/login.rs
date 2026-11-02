@@ -1,4 +1,4 @@
-//! Login read and atomic in-place swap (PRD §4 "Switching mechanism").
+//! Login read and atomic in-place swap (docs/tech-spec.md §3).
 //!
 //! Only `claudeAiOauth` in `.credentials.json` and `oauthAccount` in `.claude.json`
 //! are replaced; every other key is kept in order.

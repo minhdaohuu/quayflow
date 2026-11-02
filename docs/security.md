@@ -1,11 +1,11 @@
 # Quayflow security notes
 
-What Quayflow v0.1 touches on your machine, how it protects saved logins, and where that protection ends. Requirements references (FR-xx) are to the [PRD v1.1](prd/Quayflow-PRD-v1.1.md).
+What Quayflow v0.1 touches on your machine, how it protects saved logins, and where that protection ends. Requirement references (FR-xx) are to [requirements.md](requirements.md).
 
-## Managed login enforcement and the D-ORG setting
+## Managed login enforcement and the override setting
 
 > [!CAUTION]
-> **The managed-login override (D-ORG) works around your organization's access control.** Turning it on can violate your employment or organization policy and expose company work to non-organization accounts. **Responsibility is yours.**
+> **The managed-login override setting works around your organization's access control.** Turning it on can violate your employment or organization policy and expose company work to non-organization accounts. **Responsibility is yours.**
 >
 > **Not implemented in this build.** Quayflow v0.1 records the setting and shows its state, but contains no code path that bypasses enforcement. With the setting on or off, v0.1 behaves the same way: managed login enforcement is respected.
 
@@ -19,14 +19,14 @@ It checks again after each policy fetch (FR-06a).
 
 **Default: respected.** In an environment with enforcement, accounts that do not match the enforced organization or method are not candidates. `/quay` states the reason and that your organization's administrator controls it. Switching between matching accounts of the same organization works normally.
 
-**The override (owner decision D-ORG, against the reviewer's recommendation).** The PRD defines an opt-in setting that would disable this detection. Quayflow would then swap to accounts the organization's policy refuses at sign-in. The PRD requires that the setting:
+**The override setting.** The configuration has an opt-in setting that would disable this detection, so that Quayflow would swap to accounts the organization's policy refuses at sign-in. Its rules:
 
 - is off by default;
 - can be turned on only with an explicit confirmation that names the enforcing organization and states the risk (`quayflow` API `POST /v1/policy/dorg` takes the organization and a typed acknowledgment);
 - is shown in `/quay` and in the status line while on;
 - is recorded in the journal every time it allows a switch the policy would have refused.
 
-In v0.1 the confirmation, display and journal hooks exist, but the bypass itself was deliberately not written. This is the only place where the PRD allows Quayflow to act against a client or organization restriction. Claude Code's restriction on changing the credential selector inside organization sessions is never worked around.
+In v0.1 the confirmation, display and journal hooks exist, but the bypass itself was deliberately not written. Claude Code's restriction on changing the credential selector inside organization sessions is never worked around.
 
 ## What Quayflow touches
 
@@ -82,7 +82,7 @@ The PowerShell hook acts only on a claim file named for its own shell's process 
 
 ## Release integrity
 
-Releases are reproducible, hashed and provenance-attested, but **not Authenticode-signed** in v0.1 (decision D18). See [Verifying a release](verify-release.md).
+Releases are reproducible, hashed and provenance-attested, but **not Authenticode-signed** in v0.1 . See [Verifying a release](verify-release.md).
 
 ## Reporting a vulnerability
 

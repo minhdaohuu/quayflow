@@ -1,6 +1,6 @@
 # Quayflow v0.1 technical specification
 
-Companion to `docs/prd/Quayflow-PRD-v1.1.md` (requirements) and `docs/build-plan.md` (tasks). This file holds the routine details the PRD leaves to engineering: paths, schemas, constants, routes, commands, and the results of the early checks.
+Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
 ## 1. Components and files
 
@@ -16,7 +16,7 @@ Companion to `docs/prd/Quayflow-PRD-v1.1.md` (requirements) and `docs/build-plan
 
 | Path | Content |
 |---|---|
-| `config.json` | `qf_model::Config` (accounts metadata, groups, projects, tuning, consents, D-ORG setting). No credentials |
+| `config.json` | `qf_model::Config` (accounts metadata, groups, projects, tuning, consents, managed-login override setting). No credentials |
 | `vault\<account-id>.dpapi` | Base64 of a DPAPI blob (CurrentUser, entropy `quayflow-vault-v1`, `CRYPTPROTECT_UI_FORBIDDEN`) of `{"oauth": <claudeAiOauth>, "account": <oauthAccount>}` |
 | `backups\unknown-<hash>-<ts>.dpapi` | Protected backup of an unknown live login taken before a manual switch |
 | `observations.json` | Last usage observation per account with timestamps, and poll schedule state |
@@ -66,7 +66,7 @@ PoC data in `%USERPROFILE%\.quayflow-poc` is imported once with `quayflow migrat
 - `model_not_found` (or a model-unavailable error) on the first request after a switch marks the model unavailable for that account and switches back; that is the incident's single recovery. An authentication failure (`auth`) right after a switch sets the account aside (refresh rejected) and switches back the same way.
 - One login is never live in two environments at once (both clients would refresh the same token); such a switch is refused.
 
-**Known gap (owner decision needed):** Quayflow never refreshes tokens, so an idle account's access token expires after some hours and its usage can no longer be observed. Its last observation then ages past the 60-minute idle freshness limit, and the account stops being a candidate for automatic switching and recovery until it is used again. Options: accept it (current behavior; manual switching still works), allow recovery to use an account whose last observation is old but whose windows have all reset since (contradicts B2 for multi-machine use), or make idle accounts briefly live to let Claude refresh them (changes the shared login, not acceptable). Recorded in `docs/known-limits.md`.
+**Known gap (decision pending):** Quayflow never refreshes tokens, so an idle account's access token expires after some hours and its usage can no longer be observed. Its last observation then ages past the 60-minute idle freshness limit, and the account stops being a candidate for automatic switching and recovery until it is used again. Options: accept it (current behavior; manual switching still works), allow recovery to use an account whose last observation is old but whose windows have all reset since (contradicts B2 for multi-machine use), or make idle accounts briefly live to let Claude refresh them (changes the shared login, not acceptable). Recorded in `docs/known-limits.md`.
 
 ## 6. API v1
 

@@ -24,8 +24,8 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 | `shell/` | Opt-in PowerShell prompt hook |
 | `installer/` | `install.ps1` |
 | `tests/e2e` | Fake-environment smoke test and owner-run real-login scenarios |
-| `docs/` | PRD, design atlas, technical spec, build plan, user guide, acceptance |
-| `poc/` | Proof-of-concept scripts kept as the behavioral reference (not shipped) |
+| `docs/` | Requirements, technical spec, user guide, security notes, acceptance |
+| `assets/` | Logo mark |
 
 ## Development setup
 

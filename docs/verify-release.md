@@ -72,7 +72,7 @@ The workflow proves that two builds on GitHub's Windows runner are identical. A 
 
 ## Why releases are not code-signed
 
-Quayflow v0.1 executables are **not Authenticode-signed** (decision D18 in the [PRD](prd/Quayflow-PRD-v1.1.md)). This is common for open-source tools. A code-signing certificate costs money and needs a verified legal entity. The integrity properties above give a stronger link between the binary and its source: an Authenticode signature identifies who signed a file, but not what source it was built from. Signing can be added later, for example through SignPath's free program for open-source projects, without other changes.
+Quayflow v0.1 executables are **not Authenticode-signed**. This is common for open-source tools. A code-signing certificate costs money and needs a verified legal entity. The integrity properties above give a stronger link between the binary and its source: an Authenticode signature identifies who signed a file, but not what source it was built from. Signing can be added later, for example through SignPath's free program for open-source projects, without other changes.
 
 `quayflow status` and the `/quay` Settings tab show the build's version, its SHA-256, and "not code-signed; provenance-attested".
 

@@ -1,5 +1,5 @@
 //! Compatibility adapter: everything that knows how Claude Code keeps its login.
-//! The client behavior this relies on is observed, not documented (PRD §4); the static
+//! The client behavior this relies on is observed, not documented (docs/tech-spec.md §3); the static
 //! canary in [`canary`] checks the markers per Claude version.
 
 pub mod canary;

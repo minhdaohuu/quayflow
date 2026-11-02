@@ -1,5 +1,5 @@
 <#
-Owner-run check for lanes (AC-12, PRD §15 release condition "Claude reads and writes
+Owner-run check for lanes (AC-12, release condition "Claude reads and writes
 correctly through lane links"). Uses a REAL second account; read before running.
 
 Steps

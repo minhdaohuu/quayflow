@@ -1,6 +1,6 @@
 # Known limits of Quayflow v0.1
 
-Quayflow v0.1 is a private-pilot release. This page lists what it does not do, what depends on undocumented Claude Code behavior, and what has not yet been confirmed. Requirement references (FR-xx, AC-xx) are to the [PRD v1.1](prd/Quayflow-PRD-v1.1.md).
+Quayflow v0.1 is a private-pilot release. This page lists what it does not do, what depends on undocumented Claude Code behavior, and what has not yet been confirmed. Requirement references (FR-xx, AC-xx) are to [requirements.md](requirements.md) and [acceptance.md](acceptance.md).
 
 ## Platform and scope
 
@@ -27,8 +27,8 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 - **Prompt cache is per account.** The first request after a switch reprocesses the whole conversation: slower, and it uses more allowance on long conversations.
 - **Out-of-group switches are not offered.** Verification happens on each client's first request after the switch, so the destination must already be approved by the group. Pre-request verification for other cases is not built (AC-19).
 - **Attribution is read after each request.** If a switch lands while a request is starting, that request may be attributed to the new account. The request itself always goes wholly to one account.
-- **Idle accounts drop out of automatic switching after some hours (owner decision pending).** Quayflow never refreshes tokens, so an idle account's access token expires after some hours. Its usage can then no longer be read, its last reading ages past the 60-minute idle freshness limit, and it stops being a candidate for automatic switching and usage-limit recovery until it is live again. Manual switching to it still works (`quayflow use <account>`), and Claude refreshes it once it is live. The alternatives (trusting an old reading, or briefly making the account live so Claude refreshes it) are under review; see the technical specification, section 5.
-- **No pre-request hold in v0.1.** The PRD allows the Mod to hold a request briefly at the request boundary to choose the switch moment (FR-11). This build does not do that. A switch lands at each client's next request as it comes. Automatic mode can still prefer a moment when no listed session is busy (`--idle-wait`, up to 60 s).
+- **Idle accounts drop out of automatic switching after some hours.** Quayflow never refreshes tokens, so an idle account's access token expires after some hours. Its usage can then no longer be read, its last reading ages past the 60-minute idle freshness limit, and it stops being a candidate for automatic switching and usage-limit recovery until it is live again. Manual switching to it still works (`quayflow use <account>`), and Claude refreshes it once it is live. Alternatives are under review; see the technical specification, section 5.
+- **No pre-request hold in v0.1.** The requirements allow the Mod to hold a request briefly at the request boundary to choose the switch moment (FR-11). This build does not do that. A switch lands at each client's next request as it comes. Automatic mode can still prefer a moment when no listed session is busy (`--idle-wait`, up to 60 s).
 - **Headless jobs switch only in Automatic mode.** In Suggest mode a `claude -p` job never switches; a usage limit ends or pauses it as it would without Quayflow.
 - **One retry per failed request.** Quayflow never replays completed actions and never starts a hidden second process. A request that failed after side effects, such as a tool that already ran, is not retried blindly (AC-22).
 - **Quayflow does not wait for capacity.** When every account is exhausted, waiting and auto-resume are Claude's own behavior and depend on your Claude settings.
@@ -37,7 +37,7 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 
 ## Organization accounts
 
-- Managed login enforcement (`forceLoginOrgUUID`, `forceLoginMethod`) is respected. Accounts it refuses are not candidates. The D-ORG override setting is recorded but **not implemented** in this build (see [Security notes](security.md#managed-login-enforcement-and-the-d-org-setting)).
+- Managed login enforcement (`forceLoginOrgUUID`, `forceLoginMethod`) is respected. Accounts it refuses are not candidates. The managed-login override setting is recorded but **not implemented** in this build (see [Security notes](security.md#managed-login-enforcement-and-the-override-setting)).
 - Changing the credential selector (`CLAUDE_CONFIG_DIR`) inside a running organization session is held by Claude Code. Quayflow never works around that, so organization sessions switch only by the in-place swap or by Open/Replace.
 - Enforcement of an organization policy that differs from the cached one has not been observed; that needs an organization administrator.
 - Company machines often allow only signed software (next section).
@@ -69,7 +69,7 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 
 ## Not yet confirmed (v0.1 release conditions)
 
-These were not confirmed when this build was produced. The PRD requires each before v0.1 leaves the pilot (PRD section 15):
+These were not confirmed when this build was produced. Each is required before v0.1 leaves the pilot ([release conditions](requirements.md#release-conditions-for-v01)):
 
 - A real usage-limit failure handled end to end. Recovery has been tested with a simulated limit, and Claude's own retry must not compete with Quayflow's (AC-21).
 - Claude's own usage-limit wait adopting a login switched during the wait (AC-23).

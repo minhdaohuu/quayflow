@@ -120,7 +120,7 @@ function Body($: EngineInterface, c: Ctx): JSX.Element {
   }
 }
 
-// ------------------------------------------------------------ Overview (S10, S13, S16)
+// ------------------------------------------------------------ Overview
 
 function Overview($: EngineInterface, c: Ctx): JSX.Element {
   const { Box, Button, Text } = c.els
@@ -205,7 +205,7 @@ async function acceptSuggestion($: EngineInterface, c: Ctx): Promise<void> {
   else await flash($, 'warn', r.message ?? 'Not switched.')
 }
 
-// ------------------------------------------------------------ Accounts (S12, S14, S17, S53)
+// ------------------------------------------------------------ Accounts
 
 function Accounts($: EngineInterface, c: Ctx): JSX.Element {
   const { Box, Button, Text } = c.els
@@ -307,7 +307,7 @@ function RemoveAccount($: EngineInterface, c: Ctx, id: string): JSX.Element {
   )
 }
 
-// ------------------------------------------------------------ Groups (S18-S25)
+// ------------------------------------------------------------ Groups
 
 function Groups($: EngineInterface, c: Ctx): JSX.Element {
   const sub = c.view.sub
@@ -573,7 +573,7 @@ async function handoff($: EngineInterface, c: Ctx, how: 'open' | 'replace', lane
   await run($, how === 'replace' ? 'preparing the full-history replacement' : 'opening a full-history session', () => actHandoff($, how, lane), r => handoffOutcome(how, lane, r))
 }
 
-// ------------------------------------------------------------ Activity (S63, S64)
+// ------------------------------------------------------------ Activity
 
 function Activity($: EngineInterface, c: Ctx): JSX.Element {
   const { Box, Code } = c.els
@@ -601,7 +601,7 @@ async function buildReport($: EngineInterface, c: Ctx): Promise<void> {
   if (r) await setReport($, r)
 }
 
-// ------------------------------------------------------------ Settings (S53-S62, S65)
+// ------------------------------------------------------------ Settings
 
 function Settings($: EngineInterface, c: Ctx): JSX.Element {
   const { Box } = c.els

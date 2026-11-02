@@ -1,6 +1,6 @@
 // The engine operations the /quay command and the pane share, mapped to API v1
 // (tech-spec §6). Each refreshes the snapshot after a change. Result wording
-// follows design §7: a stored destination is not adoption, a saved account is
+// follows UI copy rules: a stored destination is not adoption, a saved account is
 // not an activation.
 import type { EngineInterface } from 'claude-code'
 

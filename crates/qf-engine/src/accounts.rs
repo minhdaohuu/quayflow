@@ -859,7 +859,7 @@ impl Engine {
         Ok("Notice acknowledged. Automatic switching and recovery stay paused while this login is live; they resume when a registered login is live again.".into())
     }
 
-    /// D-ORG (FR-06a, B5): record the setting with its confirmation. This build contains no
+    /// Managed-login override setting (FR-06a): record the setting with its confirmation. This build contains no
     /// code path that lets a switch through managed login enforcement.
     pub fn set_dorg(
         &self,
