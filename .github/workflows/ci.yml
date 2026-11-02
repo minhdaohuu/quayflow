@@ -132,6 +132,17 @@ jobs:
             & $ps -NoProfile -NonInteractive -EncodedCommand $encoded
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
+      # Owner-run scripts (real logins) never execute in CI; at least prove every script parses.
+      - name: Parse every PowerShell script
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem -Recurse -Include *.ps1, *.psm1 -Path installer, shell, tests | ForEach-Object {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors) | Out-Null
+            foreach ($e in $errors) { Write-Host "$($_.FullName):$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
+          }
+          if ($bad) { exit 1 }
       - name: PSScriptAnalyzer
         shell: pwsh
         run: |

@@ -81,7 +81,7 @@ try {
     $laneUuid = "$($laneCfg['oauthAccount']['accountUuid'])"
     $sha = [Security.Cryptography.SHA256]::Create()
     $laneHash = (-join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($laneUuid))[0..5] | ForEach-Object { $_.ToString('x2') }))
-    Check 'lane login is the target account' ($laneUuid -and $laneHash -eq $target.id) "#$laneHash
+    Check 'lane login is the target account' ($laneUuid -and $laneHash -eq $target.id) "#$laneHash"
     $def2 = (Api GET '/v1/state').envs | Where-Object id -eq 'default'
     Check 'default environment login unchanged' ($def2.live.account -eq $def.live.account)
     $lanesNow = (Api GET '/v1/lanes') | Where-Object name -eq 'qf-e2e'
