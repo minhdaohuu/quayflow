@@ -25,7 +25,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 ureq = { version = "2.10", default-features = false, features = ["native-tls", "json"] }
 native-tls = "0.2"
 tiny_http = "0.12"
-getrandom = "0.2"
+getrandom = "0.4"
 memchr = "2"
 junction = "1"
 winreg = "0.52"
