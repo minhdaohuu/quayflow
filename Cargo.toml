@@ -18,7 +18,7 @@ qf-provider = { path = "crates/qf-provider" }
 qf-engine = { path = "crates/qf-engine" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
