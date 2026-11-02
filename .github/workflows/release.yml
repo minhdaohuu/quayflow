@@ -148,7 +148,7 @@ jobs:
           Get-Content assets/SHA256SUMS
       - name: Attest build provenance
         id: attest
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         continue-on-error: ${{ github.event.repository.private }}
         with:
           subject-path: |
