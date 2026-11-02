@@ -35,7 +35,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       epoch: ${{ steps.meta.outputs.epoch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: meta
         name: Check versions and read the commit time
         shell: pwsh
@@ -71,7 +71,7 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.epoch }}
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: ${{ matrix.dir }}
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -114,7 +114,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: build-a
