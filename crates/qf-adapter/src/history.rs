@@ -78,19 +78,66 @@ fn is_prefix(older: &Path, newer: &Path) -> bool {
     }
 }
 
-fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+fn io(e: std::io::Error) -> HistoryError {
+    HistoryError::Io(e.to_string())
+}
+
+/// Copy a file or folder tree, verifying each copied file against the hash of the source
+/// bytes that were actually written (read once). Returns the number of files copied.
+fn copy_verified(src: &Path, dst: &Path, rel: &Path) -> Result<usize, HistoryError> {
     if src.is_dir() {
-        std::fs::create_dir_all(dst)?;
-        for e in std::fs::read_dir(src)?.flatten() {
-            copy_tree(&e.path(), &dst.join(e.file_name()))?;
+        std::fs::create_dir_all(dst).map_err(io)?;
+        let mut n = 0;
+        for e in std::fs::read_dir(src).map_err(io)?.flatten() {
+            n += copy_verified(&e.path(), &dst.join(e.file_name()), &rel.join(e.file_name()))?;
         }
-        Ok(())
+        Ok(n)
     } else {
         if let Some(p) = dst.parent() {
-            std::fs::create_dir_all(p)?;
+            std::fs::create_dir_all(p).map_err(io)?;
         }
-        std::fs::copy(src, dst).map(|_| ())
+        let bytes = std::fs::read(src).map_err(io)?;
+        let want = Sha256::digest(&bytes);
+        std::fs::write(dst, &bytes).map_err(io)?;
+        fail_point("copy")?;
+        let got = Sha256::digest(std::fs::read(dst).map_err(io)?);
+        if got != want {
+            return Err(HistoryError::Integrity(rel.display().to_string()));
+        }
+        Ok(1)
     }
+}
+
+fn remove_path(p: &Path) {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => {
+            let _ = std::fs::remove_dir_all(p);
+        }
+        Ok(_) => {
+            let _ = std::fs::remove_file(p);
+        }
+        Err(_) => {}
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_AT: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test hook: force a failure at a named step of the copy.
+#[cfg(test)]
+fn fail_point(step: &'static str) -> Result<(), HistoryError> {
+    if FAIL_AT.with(|f| f.get()) == Some(step) {
+        return Err(HistoryError::Io(format!("forced failure at {step}")));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn fail_point(_step: &'static str) -> Result<(), HistoryError> {
+    Ok(())
 }
 
 /// Copy a session's full retained history from one environment to another.
@@ -139,33 +186,58 @@ pub fn copy_session(from: &Env, to: &Env, session_id: &str, backups_dir: &Path) 
             already_current: true,
         });
     }
-    for name in existing {
-        let dst = dst_project.join(name);
-        let backup = backups_dir.join(format!("{}-{}", qf_model::time::now_ms(), name));
-        std::fs::create_dir_all(backups_dir).map_err(|e| HistoryError::Io(e.to_string()))?;
-        std::fs::rename(&dst, &backup).map_err(|e| HistoryError::Io(e.to_string()))?;
-        backups.push(backup);
+    // 1. Copy into staging names beside the destination and verify every file. The
+    //    destination is untouched until all of it is in place.
+    std::fs::create_dir_all(&dst_project).map_err(io)?;
+    let tag = format!("{}-{}", std::process::id(), qf_model::time::now_ms());
+    let mut staged: Vec<(PathBuf, PathBuf, &String)> = vec![];
+    let mut count = 0;
+    let mut stage = || -> Result<(), HistoryError> {
+        for name in &items {
+            let staging = dst_project.join(format!(".{name}.quayflow-staging-{tag}"));
+            staged.push((staging.clone(), dst_project.join(name), name));
+            count += copy_verified(&src_project.join(name), &staging, Path::new(name))?;
+        }
+        Ok(())
+    };
+    if let Err(e) = stage() {
+        for (staging, _, _) in &staged {
+            remove_path(staging);
+        }
+        return Err(e);
     }
 
-    std::fs::create_dir_all(&dst_project).map_err(|e| HistoryError::Io(e.to_string()))?;
-    let mut count = 0;
-    for name in &items {
-        let src = src_project.join(name);
-        let dst = dst_project.join(name);
-        copy_tree(&src, &dst).map_err(|e| HistoryError::Io(e.to_string()))?;
-        for file in list_files(&src) {
-            let rel = file.strip_prefix(&src).unwrap_or(&file).to_path_buf();
-            let copy = if rel.as_os_str().is_empty() {
-                dst.clone()
-            } else {
-                dst.join(&rel)
-            };
-            if sha(&file)? != sha(&copy)? {
-                return Err(HistoryError::Integrity(rel.display().to_string()));
+    // 2. Swap in: move each existing item to the backups, then the staged copy into place.
+    //    On any failure, undo what was swapped so the destination keeps its history.
+    let mut moved: Vec<(PathBuf, PathBuf)> = vec![];
+    let mut placed: Vec<PathBuf> = vec![];
+    let mut swap = || -> Result<(), HistoryError> {
+        for (staging, dst, name) in &staged {
+            if dst.exists() {
+                std::fs::create_dir_all(backups_dir).map_err(io)?;
+                let backup = backups_dir.join(format!("{}-{}", qf_model::time::now_ms(), name));
+                std::fs::rename(dst, &backup).map_err(io)?;
+                moved.push((dst.clone(), backup));
             }
-            count += 1;
+            std::fs::rename(staging, dst).map_err(io)?;
+            placed.push(dst.clone());
+            fail_point("swap")?;
         }
+        Ok(())
+    };
+    if let Err(e) = swap() {
+        for dst in placed.iter().rev() {
+            remove_path(dst);
+        }
+        for (dst, backup) in moved.iter().rev() {
+            let _ = std::fs::rename(backup, dst);
+        }
+        for (staging, _, _) in &staged {
+            remove_path(staging);
+        }
+        return Err(e);
     }
+    backups.extend(moved.into_iter().map(|(_, b)| b));
     Ok(CopyResult {
         project,
         file_count: count,
@@ -218,6 +290,46 @@ mod tests {
         let r = copy_session(&a, &b, SID, &d.path().join("bk")).unwrap();
         assert!(!r.backups.is_empty());
         assert_eq!(r.transcript_rows, 3);
+    }
+
+    /// Every file under `dir` with its content, for before/after comparison.
+    fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut v: Vec<_> = list_files(dir)
+            .into_iter()
+            .map(|f| (f.strip_prefix(dir).unwrap().to_path_buf(), std::fs::read(&f).unwrap()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn failed_copy_leaves_destination_unchanged() {
+        let (d, a, b) = envs();
+        let bk = d.path().join("bk");
+        copy_session(&a, &b, SID, &bk).unwrap();
+        let dst_project = b.projects_dir().join("C--proj");
+        let before = snapshot(&dst_project);
+        // The source moves on; then the copy fails at each step.
+        let p = a.projects_dir().join("C--proj");
+        std::fs::write(p.join(format!("{SID}.jsonl")), "{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n").unwrap();
+        std::fs::write(p.join(SID).join("tool-results").join("r2.txt"), "more").unwrap();
+        for step in ["copy", "swap"] {
+            FAIL_AT.with(|f| f.set(Some(step)));
+            let r = copy_session(&a, &b, SID, &bk);
+            FAIL_AT.with(|f| f.set(None));
+            assert!(matches!(r, Err(HistoryError::Io(_))), "{step}");
+            assert_eq!(
+                snapshot(&dst_project),
+                before,
+                "destination changed after a failure at {step}"
+            );
+            let backups_left = std::fs::read_dir(&bk).map(|r| r.count()).unwrap_or(0);
+            assert_eq!(backups_left, 0, "backups restored after a failure at {step}");
+        }
+        // Without a failure it advances.
+        let r = copy_session(&a, &b, SID, &bk).unwrap();
+        assert_eq!((r.file_count, r.transcript_rows, r.backups.len()), (3, 3, 2));
+        assert_eq!(snapshot(&dst_project), snapshot(&p));
     }
 
     #[test]

@@ -8,8 +8,8 @@
 use crate::env::Env;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Clone)]
@@ -68,8 +68,7 @@ impl std::error::Error for LockError {}
 /// touches them every 2 s so Claude never sees them as stale.
 pub struct HeldLocks {
     paths: Vec<PathBuf>,
-    stop: Arc<AtomicBool>,
-    toucher: Option<std::thread::JoinHandle<()>>,
+    toucher: Toucher,
 }
 
 impl HeldLocks {
@@ -80,13 +79,66 @@ impl HeldLocks {
 
 impl Drop for HeldLocks {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(t) = self.toucher.take() {
-            let _ = t.join();
-        }
+        // Stop touching before removing, so no touch races the release.
+        self.toucher.stop();
         for p in self.paths.iter().rev() {
             let _ = std::fs::remove_dir(p);
         }
+    }
+}
+
+const TOUCH_EVERY: Duration = Duration::from_secs(2);
+
+/// Background thread that touches every lock added to it every 2 s. It starts before the
+/// first lock is taken, so a lock already held stays fresh while the next one is awaited.
+struct Toucher {
+    paths: Arc<Mutex<Vec<PathBuf>>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Toucher {
+    fn start() -> Self {
+        let paths: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (list, flag) = (paths.clone(), stop.clone());
+        let thread = std::thread::spawn(move || {
+            let mut last = Instant::now();
+            while !flag.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(100));
+                if last.elapsed() >= TOUCH_EVERY {
+                    let held = list.lock().map(|g| g.clone()).unwrap_or_default();
+                    for p in &held {
+                        let _ = touch_dir(p);
+                    }
+                    last = Instant::now();
+                }
+            }
+        });
+        Toucher {
+            paths,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn add(&self, path: PathBuf) {
+        if let Ok(mut g) = self.paths.lock() {
+            g.push(path);
+        }
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for Toucher {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -108,78 +160,113 @@ pub fn touch_dir(path: &Path) -> std::io::Result<()> {
     f.set_modified(SystemTime::now())
 }
 
-/// Acquire one lock, waiting up to `wait`.
+/// Remove a lock directory whose holder is dead, without ever deleting a live lock.
+///
+/// The age is re-checked right before acting, and the directory is first renamed to a
+/// unique name: if another waiter removed the stale lock and a new holder created a fresh
+/// one in between, the renamed directory is that fresh lock, and it is put back instead of
+/// deleted. Returns whether the lock path was freed.
+fn remove_stale(spec: &LockSpec) -> bool {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let path = &spec.path;
+    // Only a directory is a lock we may remove; anything else at the path is left alone.
+    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()) {
+        return false;
+    }
+    if !age(path).is_some_and(|a| a > spec.stale) {
+        return false;
+    }
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".quayflow-stale-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let aside = path.with_file_name(name);
+    if std::fs::rename(path, &aside).is_err() {
+        return false;
+    }
+    // Renaming does not change the directory's own modification time.
+    if age(&aside).is_some_and(|a| a > spec.stale) && std::fs::remove_dir(&aside).is_ok() {
+        return true;
+    }
+    // A fresh lock was moved, or the stale one cannot be deleted: put it back.
+    let _ = std::fs::rename(&aside, path);
+    false
+}
+
+/// Acquire one lock, waiting up to `wait`. Every path through the loop honors the deadline
+/// and sleeps, so a lock that can be neither taken nor removed never spins.
 pub fn acquire_one(spec: &LockSpec, wait: Duration) -> Result<(), LockError> {
     let start = Instant::now();
-    let mut rng = (std::process::id() as u64).wrapping_mul(6364136223846793005);
+    let mut rng = (std::process::id() as u64).wrapping_mul(6364136223846793005) | 1;
+    let mut made_parent = false;
     loop {
+        // A short pause when the next attempt is likely to win; otherwise a jittered one.
+        let mut quick = false;
         match std::fs::create_dir(&spec.path) {
             Ok(()) => return Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Parent missing (fresh environment): create it, then retry.
+                // Parent missing (fresh environment): create it, then retry at once (once).
                 if let Some(p) = spec.path.parent() {
                     std::fs::create_dir_all(p).map_err(LockError::Io)?;
                 }
-                continue;
+                if !made_parent {
+                    made_parent = true;
+                    continue;
+                }
+                quick = true;
             }
             Err(e) if qf_vault::is_sharing_violation(&e) => {}
             Err(e) => return Err(LockError::Io(e)),
         }
-        match age(&spec.path) {
-            // Released between mkdir and stat.
-            None => continue,
-            // Only a holder silent past the stale age is dead.
-            Some(a) if a > spec.stale => {
-                let _ = std::fs::remove_dir(&spec.path);
-                continue;
+        if !quick {
+            match age(&spec.path) {
+                // Released between mkdir and stat: retry soon.
+                None => quick = true,
+                // Only a holder silent past the stale age is dead. If it cannot be removed,
+                // keep waiting like for a live holder.
+                Some(a) if a > spec.stale => quick = remove_stale(spec),
+                Some(_) => {}
             }
-            Some(_) => {}
         }
-        if start.elapsed() > wait {
+        let elapsed = start.elapsed();
+        if elapsed >= wait {
             return Err(LockError::Held {
                 name: spec.name,
-                waited_ms: start.elapsed().as_millis() as u64,
+                waited_ms: elapsed.as_millis() as u64,
             });
         }
-        rng ^= rng << 13;
-        rng ^= rng >> 7;
-        rng ^= rng << 17;
-        std::thread::sleep(Duration::from_millis(250 + rng % 250));
+        let pause = if quick {
+            Duration::from_millis(25)
+        } else {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            Duration::from_millis(250 + rng % 250)
+        };
+        std::thread::sleep(pause.min(wait - elapsed).max(Duration::from_millis(1)));
     }
 }
 
 /// Take the locks in Claude's order. On failure, release what was taken.
+/// Each lock is touched from the moment it is taken, also while the next one is awaited.
 pub fn acquire(specs: &[LockSpec], wait_each: Duration) -> Result<HeldLocks, LockError> {
+    let mut toucher = Toucher::start();
     let mut held: Vec<PathBuf> = vec![];
     for s in specs {
         if let Err(e) = acquire_one(s, wait_each) {
+            toucher.stop();
             for p in held.iter().rev() {
                 let _ = std::fs::remove_dir(p);
             }
             return Err(e);
         }
         held.push(s.path.clone());
+        toucher.add(s.path.clone());
     }
-    let stop = Arc::new(AtomicBool::new(false));
-    let (paths, flag) = (held.clone(), stop.clone());
-    let toucher = std::thread::spawn(move || {
-        let mut last = Instant::now();
-        while !flag.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(100));
-            if last.elapsed() >= Duration::from_secs(2) {
-                for p in &paths {
-                    let _ = touch_dir(p);
-                }
-                last = Instant::now();
-            }
-        }
-    });
-    Ok(HeldLocks {
-        paths: held,
-        stop,
-        toucher: Some(toucher),
-    })
+    Ok(HeldLocks { paths: held, toucher })
 }
 
 pub fn acquire_env(env: &Env, wait_each: Duration) -> Result<HeldLocks, LockError> {
@@ -241,6 +328,107 @@ mod tests {
         o.open(e.config_lock()).unwrap().set_modified(old).unwrap();
         let held = acquire_env(&e, Duration::from_millis(600)).unwrap();
         drop(held);
+    }
+
+    fn set_mtime(p: &Path, t: SystemTime) {
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            o.custom_flags(0x0200_0000);
+        }
+        o.open(p).unwrap().set_modified(t).unwrap();
+    }
+
+    fn leftovers(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("quayflow-stale"))
+            .collect()
+    }
+
+    #[test]
+    fn unremovable_stale_lock_waits_until_the_deadline() {
+        let d = tempfile::tempdir().unwrap();
+        let spec = LockSpec {
+            name: "config",
+            path: d.path().join("x.lock"),
+            stale: Duration::from_secs(10),
+        };
+        // A FILE at the lock path, far past the stale age: it cannot be removed as a lock.
+        std::fs::write(&spec.path, "not a lock").unwrap();
+        set_mtime(&spec.path, SystemTime::now() - Duration::from_secs(600));
+        let t = Instant::now();
+        let r = acquire_one(&spec, Duration::from_millis(700));
+        assert!(matches!(r, Err(LockError::Held { name: "config", .. })));
+        assert!(t.elapsed() < Duration::from_secs(3), "must give up at the deadline");
+        assert!(spec.path.is_file(), "the file must be left alone");
+    }
+
+    #[test]
+    fn stale_removal_never_deletes_a_fresh_or_unremovable_lock() {
+        let d = tempfile::tempdir().unwrap();
+        let spec = LockSpec {
+            name: "config",
+            path: d.path().join("x.lock"),
+            stale: Duration::from_secs(10),
+        };
+        // Fresh: kept.
+        std::fs::create_dir(&spec.path).unwrap();
+        assert!(!remove_stale(&spec));
+        assert!(spec.path.is_dir());
+        // Stale but not empty: cannot be deleted, so it is put back where it was.
+        std::fs::write(spec.path.join("f"), "x").unwrap();
+        set_mtime(&spec.path, SystemTime::now() - Duration::from_secs(600));
+        assert!(!remove_stale(&spec));
+        assert!(spec.path.join("f").is_file());
+        assert!(leftovers(d.path()).is_empty());
+        // Stale and empty: removed, nothing left aside.
+        std::fs::remove_file(spec.path.join("f")).unwrap();
+        set_mtime(&spec.path, SystemTime::now() - Duration::from_secs(600));
+        assert!(remove_stale(&spec));
+        assert!(!spec.path.exists());
+        assert!(leftovers(d.path()).is_empty());
+    }
+
+    #[test]
+    fn held_lock_is_touched_while_waiting_for_the_next() {
+        let d = tempfile::tempdir().unwrap();
+        let specs = vec![
+            LockSpec {
+                name: "refresh",
+                path: d.path().join("a.lock"),
+                stale: Duration::from_secs(60),
+            },
+            LockSpec {
+                name: "legacy",
+                path: d.path().join("b.lock"),
+                stale: Duration::from_secs(60),
+            },
+        ];
+        std::fs::create_dir(&specs[1].path).unwrap(); // a live holder of the second lock
+        let a = specs[0].path.clone();
+        let watcher = std::thread::spawn(move || {
+            // Once the first lock is taken, make it look old; the toucher must refresh it.
+            let t = Instant::now();
+            while !a.exists() && t.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            set_mtime(&a, SystemTime::now() - Duration::from_secs(3600));
+            std::thread::sleep(Duration::from_millis(2600));
+            age(&a)
+        });
+        let r = acquire(&specs, Duration::from_millis(3500));
+        assert!(matches!(r, Err(LockError::Held { name: "legacy", .. })));
+        let seen = watcher.join().unwrap().expect("first lock held during the wait");
+        assert!(
+            seen < Duration::from_secs(60),
+            "first lock not touched while waiting: {seen:?}"
+        );
+        assert!(!specs[0].path.exists(), "released on failure");
     }
 
     #[test]

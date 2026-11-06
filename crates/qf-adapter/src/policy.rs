@@ -10,6 +10,38 @@ use std::path::{Path, PathBuf};
 pub struct Source {
     pub name: String,
     pub settings: Value,
+    /// The source exists but could not be read or parsed. Its enforcement is unknown, so
+    /// [`evaluate`] fails closed: no account is permitted until it is fixed.
+    pub error: Option<String>,
+}
+
+/// `force_method` value recorded when a policy source exists but cannot be read; it
+/// matches no login method, so every account is held back (fail closed).
+pub const UNREADABLE_METHOD: &str = "unreadable-policy";
+
+/// Parse a settings document. A leading UTF-8 byte order mark is ignored (Windows
+/// editors add one); blank text is an empty document.
+pub fn parse_settings(text: &str) -> Result<Value, String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if text.trim().is_empty() {
+        return Ok(Value::Object(Default::default()));
+    }
+    serde_json::from_str(text).map_err(|e| e.to_string())
+}
+
+fn source(name: String, parsed: Result<Value, String>) -> Source {
+    match parsed {
+        Ok(settings) => Source {
+            name,
+            settings,
+            error: None,
+        },
+        Err(e) => Source {
+            name,
+            settings: Value::Null,
+            error: Some(e),
+        },
+    }
 }
 
 fn managed_dir() -> PathBuf {
@@ -29,13 +61,11 @@ fn registry_sources() -> Vec<Source> {
         (HKEY_CURRENT_USER, "registry:HKCU"),
     ] {
         if let Ok(key) = RegKey::predef(hive).open_subkey("SOFTWARE\\Policies\\ClaudeCode") {
-            if let Ok(text) = key.get_value::<String, _>("Settings") {
-                if let Ok(v) = serde_json::from_str::<Value>(&text) {
-                    out.push(Source {
-                        name: label.into(),
-                        settings: v,
-                    });
-                }
+            match key.get_value::<String, _>("Settings") {
+                Ok(text) => out.push(source(label.into(), parse_settings(&text))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                // Present but not a readable string: enforcement unknown.
+                Err(e) => out.push(source(label.into(), Err(e.to_string()))),
             }
         }
     }
@@ -50,11 +80,8 @@ fn registry_sources() -> Vec<Source> {
 fn file_sources(dir: &Path) -> Vec<Source> {
     let mut out = vec![];
     let main = dir.join("managed-settings.json");
-    if let Some(v) = read(&main) {
-        out.push(Source {
-            name: "file:managed-settings.json".into(),
-            settings: v,
-        });
+    if let Some(r) = read(&main) {
+        out.push(source("file:managed-settings.json".into(), r));
     }
     if let Ok(entries) = std::fs::read_dir(dir.join("managed-settings.d")) {
         let mut files: Vec<PathBuf> = entries
@@ -64,22 +91,31 @@ fn file_sources(dir: &Path) -> Vec<Source> {
             .collect();
         files.sort();
         for f in files {
-            if let Some(v) = read(&f) {
-                out.push(Source {
-                    name: format!(
+            if let Some(r) = read(&f) {
+                out.push(source(
+                    format!(
                         "file:managed-settings.d\\{}",
                         f.file_name().unwrap_or_default().to_string_lossy()
                     ),
-                    settings: v,
-                });
+                    r,
+                ));
             }
         }
     }
     out
 }
 
-fn read(p: &Path) -> Option<Value> {
-    serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
+/// `None` when the file does not exist; otherwise the parsed document or why it is unusable.
+fn read(p: &Path) -> Option<Result<Value, String>> {
+    match std::fs::read(p) {
+        Ok(bytes) => Some(
+            String::from_utf8(bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|t| parse_settings(&t)),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some(Err(e.to_string())),
+    }
 }
 
 /// All sources for an environment: registry, managed files, and the server-managed settings
@@ -87,11 +123,8 @@ fn read(p: &Path) -> Option<Value> {
 pub fn sources(env: &Env) -> Vec<Source> {
     let mut s = registry_sources();
     s.extend(file_sources(&managed_dir()));
-    if let Some(v) = read(&env.config_dir.join("remote-settings.json")) {
-        s.push(Source {
-            name: "server-managed".into(),
-            settings: v,
-        });
+    if let Some(r) = read(&env.config_dir.join("remote-settings.json")) {
+        s.push(source("server-managed".into(), r));
     }
     s
 }
@@ -109,7 +142,14 @@ fn find<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 
 pub fn evaluate(sources: &[Source]) -> ManagedLogin {
     let mut m = ManagedLogin::default();
+    let mut unreadable = false;
     for s in sources {
+        if s.error.is_some() {
+            // Exists but unusable: what it enforces is unknown (reported, never ignored).
+            unreadable = true;
+            m.sources.push(format!("{} (unreadable)", s.name));
+            continue;
+        }
         let mut hit = false;
         if let Some(v) = find(&s.settings, "forceLoginOrgUUID") {
             let orgs: Vec<String> = match v {
@@ -135,6 +175,10 @@ pub fn evaluate(sources: &[Source]) -> ManagedLogin {
         if hit {
             m.sources.push(s.name.clone());
         }
+    }
+    if unreadable {
+        // Fail closed: a method no login matches, so no account is offered or switched into.
+        m.force_method = Some(UNREADABLE_METHOD.into());
     }
     m
 }
@@ -164,27 +208,72 @@ mod tests {
     #[test]
     fn evaluates_sources() {
         let m = evaluate(&[
-            Source {
-                name: "registry:HKLM".into(),
-                settings: json!({"forceLoginMethod": "claudeai"}),
-            },
-            Source {
-                name: "server-managed".into(),
-                settings: json!({"settings": {"forceLoginOrgUUID": ["o1", "o2"]}}),
-            },
-            Source {
-                name: "file".into(),
-                settings: json!({"forceLoginMethod": "console"}),
-            },
-            Source {
-                name: "unrelated".into(),
-                settings: json!({"permissions": {}}),
-            },
+            source("registry:HKLM".into(), Ok(json!({"forceLoginMethod": "claudeai"}))),
+            source(
+                "server-managed".into(),
+                Ok(json!({"settings": {"forceLoginOrgUUID": ["o1", "o2"]}})),
+            ),
+            source("file".into(), Ok(json!({"forceLoginMethod": "console"}))),
+            source("unrelated".into(), Ok(json!({"permissions": {}}))),
         ]);
         assert_eq!(m.force_method.as_deref(), Some("claudeai"));
         assert_eq!(m.force_org, vec![identity_hash("o1"), identity_hash("o2")]);
         assert_eq!(m.sources, vec!["registry:HKLM", "server-managed", "file"]);
         assert!(m.is_enforced());
         assert!(!evaluate(&[]).is_enforced());
+    }
+
+    fn account(org: &str) -> qf_model::Account {
+        qf_model::Account {
+            id: qf_model::AccountId("a".into()),
+            label: "x".into(),
+            kind: qf_model::AccountKind::Organization,
+            org: identity_hash(org),
+            subscription: None,
+            rate_limit_tier: None,
+            registered_at: 0,
+            health: qf_model::Health::Ok,
+            unavailable_models: vec![],
+            org_name: None,
+        }
+    }
+
+    #[test]
+    fn bom_prefixed_managed_settings_are_enforced() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("managed-settings.json"),
+            "\u{feff}{\"forceLoginOrgUUID\": \"o1\"}",
+        )
+        .unwrap();
+        let m = evaluate(&file_sources(d.path()));
+        assert_eq!(m.force_org, vec![identity_hash("o1")]);
+        assert_eq!(m.sources, vec!["file:managed-settings.json"]);
+        assert!(m.permits(&account("o1")));
+        assert!(!m.permits(&account("o2")));
+    }
+
+    #[test]
+    fn unreadable_managed_settings_fail_closed() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("managed-settings.json"), "{ \"forceLoginOrgUUID\": ").unwrap();
+        let s = file_sources(d.path());
+        assert_eq!(s.len(), 1);
+        assert!(s[0].error.is_some());
+        let m = evaluate(&s);
+        assert!(m.is_enforced(), "an unparsable policy is never treated as no policy");
+        assert_eq!(m.sources, vec!["file:managed-settings.json (unreadable)"]);
+        assert!(!m.permits(&account("o1")));
+        // Even when another source permits a method, the unknown one still holds everything back.
+        let mut all = vec![source(
+            "registry:HKLM".into(),
+            Ok(json!({"forceLoginMethod": "claudeai"})),
+        )];
+        all.extend(s);
+        assert!(!evaluate(&all).permits(&account("o1")));
+        // A missing directory or blank file is no policy.
+        assert!(file_sources(&d.path().join("absent")).is_empty());
+        std::fs::write(d.path().join("managed-settings.json"), "\u{feff}  \n").unwrap();
+        assert!(!evaluate(&file_sources(d.path())).is_enforced());
     }
 }
