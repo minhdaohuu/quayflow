@@ -246,6 +246,99 @@ describe('interactive sessions', () => {
     expect(w.runs.length).toBe(starts)
   })
 
+  test('a first handshake that fails once is retried: the link comes on without starting the engine', async ($, on) => {
+    let hellos = 0
+    const w = world(on, {
+      routes: {
+        '/v1/hello': () => {
+          hellos += 1
+          return hellos === 1
+            ? { status: 503, body: { error: 'still starting', code: 'busy' } }
+            : { compatible: true, protocol: 1, acceptedProtocols: [1], engineVersion: '0.1.0' }
+        },
+      },
+    })
+    await start($, w, true)
+    await w.clock.advance(1_000)
+    await w.clock.settle()
+    expect(hellos).toBe(2)
+    expect(w.runs).toEqual([])
+    const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+    expect(status).toMatch(/^Quayflow · suggest/)
+  })
+
+  test('after a reconnect the status line is repainted "on"', async ($, on) => {
+    const w = world(on)
+    await start($, w, true)
+    const last = () => w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+    expect(last()).toMatch(/^Quayflow · suggest/)
+    w.down()
+    await w.clock.advance(10_000)
+    await w.clock.settle()
+    expect(last()).toMatch(/^Quayflow · off/)
+    w.up()
+    await w.clock.advance(60_000)
+    await w.clock.settle()
+    expect(last()).toMatch(/^Quayflow · suggest/)
+  })
+
+  for (const [what, events] of [
+    ['a missing route', { status: 404, body: { error: 'no such route', code: 'not_found' } }],
+    ['an answer without events', { ok: true }],
+  ] as const) {
+    test(`/v1/events failing at once (${what}) is retried with backoff, link kept`, async ($, on) => {
+      const w = world(on, { routes: { '/v1/events': events } })
+      await start($, w, true)
+      await w.clock.advance(120_000)
+      await w.clock.settle()
+      const polls = w.routes().filter(r => r === '/v1/events').length
+      // Backoff 5, 10, 20, 40, 60 s: a handful of tries in two minutes, not a hot loop.
+      expect(polls).toBeGreaterThanOrEqual(2)
+      expect(polls).toBeLessThanOrEqual(7)
+      // The engine answered: the link stays on, and no handshake was repeated.
+      expect(w.routes().filter(r => r === '/v1/hello')).toHaveLength(1)
+      const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+      expect(status).toMatch(/^Quayflow · suggest/)
+    })
+  }
+
+  test('a late failing start-up attempt does not overwrite a link /quay start brought on', async ($, on) => {
+    let helloOk = true
+    const w = world(on, {
+      down: true,
+      start: 'stopped_by_user',
+      startDelayMs: 20_000,
+      routes: {
+        '/v1/hello': () =>
+          helloOk ? { compatible: true, protocol: 1, acceptedProtocols: [1], engineVersion: '0.1.0' } : { status: 503, body: { error: 'busy', code: 'busy' } },
+      },
+    })
+    await start($, w, true)
+    // The start-up attempt's quick handshakes fail; it is now waiting on `quayflow start`.
+    await w.clock.advance(2_000)
+    expect(w.runs).toHaveLength(1)
+    // Meanwhile the person starts the engine with /quay start, which comes on.
+    w.up()
+    expect(await quay($, 'start')).toContain('engine is running')
+    // The engine is briefly busy when the start-up attempt finally hears back.
+    helloOk = false
+    await w.clock.advance(25_000)
+    await w.clock.settle()
+    helloOk = true
+    expect(await quay($, 'status')).not.toContain('Quayflow is off')
+    const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+    expect(status).toMatch(/^Quayflow · suggest/)
+  })
+
+  test('a failed start keeps the CLI\'s own words in the link message', async ($, on) => {
+    const w = world(on, { down: true, startLine: { state: 'failed', error: 'port 47123 in use' } })
+    await start($, w, true)
+    await w.clock.advance(2_000)
+    await w.clock.settle()
+    const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+    expect(status).toContain('engine did not start (port 47123 in use)')
+  })
+
   test('an incompatible engine says how to update', async ($, on) => {
     const w = world(on, { hello: { compatible: false, protocol: 1, acceptedProtocols: [2], engineVersion: '0.3.0' } })
     await start($, w, true)

@@ -3,8 +3,8 @@
 // open: the caller gets an error or `off`, Claude keeps working unchanged.
 import type { EngineInterface } from 'claude-code'
 
-import type { HelloResponse, QuayOffReason, StartState, StateView } from '../types'
-import { MOD_VERSION, PROTOCOL, Q, errorText, setLink } from './context'
+import type { HelloResponse, QuayLink, QuayOffReason, StartState, StateView } from '../types'
+import { MOD_VERSION, PROTOCOL, Q, errorText, pause, setLink } from './context'
 import type { Conn } from './context'
 
 export class EngineError extends Error {
@@ -125,21 +125,21 @@ export async function markUnreachable($: EngineInterface): Promise<void> {
   if (Q.link.on) await setLink($, { on: false, reason: 'unreachable' })
 }
 
-async function hello($: EngineInterface): Promise<HelloResponse> {
+async function hello($: EngineInterface, timeoutMs: number): Promise<HelloResponse> {
   return call<HelloResponse>(
     $,
     'POST',
     '/v1/hello',
     { protocol: PROTOCOL, modVersion: MOD_VERSION, sessionId: Q.sessionId, headless: Q.headless, claudeVersion: Q.claudeVersion || undefined },
-    { timeoutMs: 5_000 },
+    { timeoutMs },
   )
 }
 
 type HelloOutcome = { kind: 'on'; version: string } | { kind: 'incompatible'; message: string; version?: string } | { kind: 'unreachable'; message: string }
 
-async function tryHello($: EngineInterface): Promise<HelloOutcome> {
+async function tryHello($: EngineInterface, timeoutMs = 5_000): Promise<HelloOutcome> {
   try {
-    const h = await hello($)
+    const h = await hello($, timeoutMs)
     if (!h.compatible) {
       return {
         kind: 'incompatible',
@@ -163,10 +163,16 @@ export async function runStart($: EngineInterface, ifConsented: boolean): Promis
     const run = await $.process.run(argv, { timeoutMs: 30_000 })
     const lines = run.stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
     for (const line of lines.reverse()) {
+      let out: { state?: StartState; error?: unknown; log?: unknown }
       try {
-        const out = JSON.parse(line) as { state?: StartState }
-        if (out.state) return { state: out.state }
-      } catch {}
+        out = JSON.parse(line) as typeof out
+      } catch {
+        continue
+      }
+      if (!out || typeof out !== 'object' || !out.state) continue
+      // The CLI's own words on a failed start: `{"state":"failed","error":...,"log":...}`.
+      const why = [typeof out.error === 'string' ? out.error.trim() : '', typeof out.log === 'string' ? `log: ${out.log.trim()}` : ''].filter(Boolean).join('; ')
+      return why ? { state: out.state, detail: why.slice(0, 200) } : { state: out.state }
     }
     return { state: 'failed', detail: (run.stderr.trim() || `exit ${run.exitCode}`).slice(0, 200) }
   } catch (err) {
@@ -194,33 +200,75 @@ function offReason(state: StartState | 'not_installed'): QuayOffReason {
  * starts without `--if-consented` and retries after an earlier attempt.
  */
 export async function establish($: EngineInterface, options: { allowStart: boolean; explicit?: boolean } = { allowStart: true }): Promise<void> {
+  const ticket = ++Q.linkTicket
   Q.lastLinkTry = Date.now()
-  let outcome = await tryHello($)
+  // The session's first handshake runs while Claude Code (and maybe the engine) is still
+  // starting up: one slow or refused hello is not yet "the engine is not running".
+  const first = options.allowStart && !options.explicit && !Q.startAttempted
+  let outcome = first ? await firstHello($) : await tryHello($)
   if (outcome.kind === 'unreachable' && options.allowStart && (options.explicit || !Q.startAttempted)) {
+    // Another attempt brought the link up meanwhile: nothing to start.
+    if (cameOnSince(ticket)) return
     Q.startAttempted = true
-    if (!Q.headless && !Q.link.on) await setLink($, { on: false, reason: 'connecting', message: 'starting the engine' })
+    if (!Q.headless && !Q.link.on) await applyLink($, ticket, { on: false, reason: 'connecting', message: 'starting the engine' })
     const started = await runStart($, !options.explicit)
-    if (started.state === 'running' || started.state === 'started') {
-      Q.conn = undefined
-      outcome = await tryHello($)
-      if (outcome.kind === 'unreachable') {
-        await setLink($, { on: false, reason: 'start_failed', message: outcome.message })
-        return
-      }
-    } else {
-      await setLink($, { on: false, reason: offReason(started.state), message: started.detail })
+    // Whatever start reported, an engine that now runs (started meanwhile, or by the
+    // CLI despite its answer) is the truth; with no engine.json this fails at once.
+    Q.conn = undefined
+    outcome = await tryHello($)
+    if (outcome.kind === 'unreachable') {
+      const ran = started.state === 'running' || started.state === 'started'
+      await applyLink($, ticket, ran ? { on: false, reason: 'start_failed', message: outcome.message } : { on: false, reason: offReason(started.state), message: started.detail })
       return
     }
   }
   if (outcome.kind === 'on') {
-    await setLink($, { on: true, engineVersion: outcome.version })
+    await applyLink($, ticket, { on: true, engineVersion: outcome.version })
   } else if (outcome.kind === 'incompatible') {
-    await setLink($, { on: false, reason: 'incompatible', message: outcome.message, engineVersion: outcome.version })
+    await applyLink($, ticket, { on: false, reason: 'incompatible', message: outcome.message, engineVersion: outcome.version })
   } else {
-    // Keep a known start outcome (no consent, stopped by the person) over a bare "unreachable".
-    const keep = Q.link.reason === 'no_consent' || Q.link.reason === 'stopped_by_user' || Q.link.reason === 'not_installed'
-    if (!keep || Q.link.on) await setLink($, { on: false, reason: 'unreachable', message: outcome.message })
+    // Keep a known start outcome (no consent, stopped by the person, the start's own
+    // failure words) over a bare "unreachable".
+    const r = Q.link.reason
+    const keep = r === 'no_consent' || r === 'stopped_by_user' || r === 'not_installed' || r === 'start_failed'
+    if (!keep || Q.link.on) await applyLink($, ticket, { on: false, reason: 'unreachable', message: outcome.message })
   }
+}
+
+/** Per-attempt timeouts and the pause before each: at most ~8 s in all, well under 10 s. */
+const FIRST_HELLO: { timeoutMs: number; pauseMs: number }[] = [
+  { timeoutMs: 3_000, pauseMs: 0 },
+  { timeoutMs: 2_000, pauseMs: 400 },
+  { timeoutMs: 2_000, pauseMs: 800 },
+]
+
+/** The first handshake of a session: a few quick tries before the engine counts as not running. */
+async function firstHello($: EngineInterface): Promise<HelloOutcome> {
+  let outcome: HelloOutcome = { kind: 'unreachable', message: 'no handshake' }
+  for (const attempt of FIRST_HELLO) {
+    if (attempt.pauseMs) await pause($, attempt.pauseMs)
+    outcome = await tryHello($, attempt.timeoutMs)
+    if (outcome.kind !== 'unreachable') return outcome
+  }
+  return outcome
+}
+
+/** Whether the link turned on after attempt `ticket` began (so its failure is stale). */
+function cameOnSince(ticket: number): boolean {
+  return Q.link.on && Q.linkOnTicket >= ticket
+}
+
+/**
+ * Applies attempt `ticket`'s result. A completed handshake is the newest
+ * observation and always applies. An off result applies only while no newer
+ * attempt has started, and never over a link that came on after this attempt
+ * began: concurrent attempts (start-up, watcher, `/quay start`, a request's
+ * reconnect) cannot undo each other's success.
+ */
+async function applyLink($: EngineInterface, ticket: number, link: QuayLink): Promise<void> {
+  if (!link.on && (ticket !== Q.linkTicket || cameOnSince(ticket))) return
+  if (link.on) Q.linkOnTicket = Q.linkTicket
+  await setLink($, link)
 }
 
 /**

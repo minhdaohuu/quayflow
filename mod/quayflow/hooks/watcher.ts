@@ -4,8 +4,8 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { EventsResponse, StateView } from '../types'
-import { Q, pause, seedAnnounced, setSnapshot, takeUnannounced, uiLog, uiStatus, uiToast } from './context'
-import { call, establish, fetchState, markUnreachable } from './engine'
+import { Q, errorText, pause, seedAnnounced, setSnapshot, takeUnannounced, uiLog, uiStatus, uiToast } from './context'
+import { EngineError, call, establish, fetchState, hasCode, markUnreachable } from './engine'
 import { announcements, seedAnnouncements, statusLine } from './format'
 
 let generation = 0
@@ -25,8 +25,10 @@ export async function refresh($: EngineInterface): Promise<StateView | undefined
   let s: StateView
   try {
     s = await fetchState($)
-  } catch {
-    await markUnreachable($)
+  } catch (err) {
+    // Only a lost connection means the engine is down; a slow tick or an error answer
+    // from an engine that just shook hands keeps the link, and the next poll retries.
+    if (hasCode(err, 'unreachable')) await markUnreachable($)
     await paintStatus($)
     return undefined
   }
@@ -61,45 +63,81 @@ export function startWatcher($: EngineInterface): void {
   const mine = ++generation
   void (async () => {
     let backoff = 5_000
+    let failBackoff = 5_000
+    let logged = false
+    // Whether the snapshot and status line were drawn while the link was on; false after
+    // any time off, so a link that comes back (here or elsewhere) is repainted at once.
+    let drawnOn = Q.link.on && !!Q.state
     while (mine === generation) {
-      if (!Q.link.on) {
-        const reason = Q.link.reason
-        // Never start the engine for these reasons, but notice when the person has acted
-        // elsewhere since: installed, set up, started or updated it from the command line.
-        // Only a handshake with an engine that is already running; nothing is started here.
-        if (reason === 'no_consent' || reason === 'stopped_by_user' || reason === 'incompatible' || reason === 'not_installed') {
-          await pause($, 30_000)
-          if (mine !== generation) break
-          await establish($, { allowStart: false }).catch(() => {})
-          await paintStatus($)
-          continue
-        }
-        await establish($, { allowStart: false }).catch(() => {})
-        if (!Q.link.on) {
-          await paintStatus($)
-          await pause($, backoff)
-          backoff = Math.min(backoff * 2, 60_000)
-          continue
-        }
-      }
-      backoff = 5_000
-      if (!Q.state) await refresh($)
-      const startedAt = Date.now()
       try {
-        const ev = await call<EventsResponse>($, 'GET', `/v1/events?since=${Q.seq}&wait=25`, undefined, { timeoutMs: 35_000 })
-        if (ev.events.length) {
-          await refresh($)
-          Q.seq = Math.max(Q.seq, ev.seq)
-        } else {
-          Q.seq = Math.max(Q.seq, ev.seq)
+        if (!Q.link.on) {
+          drawnOn = false
+          const reason = Q.link.reason
+          // Never start the engine for these reasons, but notice when the person has acted
+          // elsewhere since: installed, set up, started or updated it from the command line.
+          // Only a handshake with an engine that is already running; nothing is started here.
+          if (reason === 'no_consent' || reason === 'stopped_by_user' || reason === 'incompatible' || reason === 'not_installed') {
+            await pause($, 30_000)
+            if (mine !== generation) break
+            await establish($, { allowStart: false }).catch(() => {})
+            if (!Q.link.on) await paintStatus($)
+            continue
+          }
+          await establish($, { allowStart: false }).catch(() => {})
+          if (!Q.link.on) {
+            await paintStatus($)
+            await pause($, backoff)
+            backoff = Math.min(backoff * 2, 60_000)
+            continue
+          }
         }
-      } catch {
-        await markUnreachable($)
-        await paintStatus($)
-        continue
+        backoff = 5_000
+        if (!drawnOn || !Q.state) {
+          await refresh($)
+          if (!Q.link.on) {
+            // Shook hands, then lost the connection at once: wait before reconnecting.
+            await pause($, failBackoff)
+            failBackoff = Math.min(failBackoff * 2, 60_000)
+            continue
+          }
+          drawnOn = !!Q.state
+        }
+        const startedAt = Date.now()
+        let ev: EventsResponse
+        try {
+          ev = await call<EventsResponse>($, 'GET', `/v1/events?since=${Q.seq}&wait=25`, undefined, { timeoutMs: 35_000 })
+          if (!isEvents(ev)) throw new EngineError('the engine answered /v1/events without events', 'bad_response')
+        } catch (err) {
+          // A lost connection turns the link off (the branch above reconnects); any other
+          // failure (an error status, a missing route after a version skew, a malformed
+          // answer) keeps it. Either way, wait before the next try: no tight loop.
+          if (hasCode(err, 'unreachable')) await markUnreachable($)
+          else drawnOn = false
+          await paintStatus($)
+          await pause($, failBackoff)
+          failBackoff = Math.min(failBackoff * 2, 60_000)
+          continue
+        }
+        failBackoff = 5_000
+        if (ev.events.length) await refresh($)
+        Q.seq = Math.max(Q.seq, ev.seq)
+        // An engine that answers at once with nothing (no long-poll support) is not hammered.
+        if (Date.now() - startedAt < 2_000) await pause($, 5_000)
+      } catch (err) {
+        // Nothing here may end the loop; say so once in the transcript (never headless).
+        if (!logged) {
+          logged = true
+          uiLog($, `Quayflow: status updates hit an error and will retry (${errorText(err)}).`)
+        }
+        await pause($, failBackoff)
+        failBackoff = Math.min(failBackoff * 2, 60_000)
       }
-      // An engine that answers at once with nothing (no long-poll support) is not hammered.
-      if (Date.now() - startedAt < 2_000) await pause($, 5_000)
     }
-  })()
+  })().catch(() => {})
+}
+
+function isEvents(v: unknown): v is EventsResponse {
+  if (!v || typeof v !== 'object') return false
+  const e = v as { seq?: unknown; events?: unknown }
+  return Array.isArray(e.events) && typeof e.seq === 'number'
 }
