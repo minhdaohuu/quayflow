@@ -87,12 +87,17 @@ pub fn serve(dd: DataDir, default_env: qf_adapter::Env, tick: Duration) -> Resul
         )
         .map_err(|e| e.to_string())?;
         let mut workers = vec![];
-        for _ in 0..8 {
+        for _ in 0..crate::http::HTTP_WORKERS {
             let (s, e) = (server.clone(), engine.clone());
             workers.push(std::thread::spawn(move || {
                 while !e.shutdown.load(Ordering::SeqCst) {
                     match s.recv_timeout(Duration::from_millis(500)) {
-                        Ok(Some(req)) => crate::http::handle(&e, req),
+                        // `handle` answers a panicking route with 500; this guard keeps the
+                        // worker alive should anything else in the request handling panic.
+                        Ok(Some(req)) => {
+                            let _ =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::http::handle(&e, req)));
+                        }
                         Ok(None) => {}
                         Err(_) => break,
                     }

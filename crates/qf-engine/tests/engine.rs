@@ -733,3 +733,351 @@ fn lanes_switch_independently() {
     e.lane_delete("work").unwrap();
     assert!(!lane_env.config_dir.exists());
 }
+
+/// Wait (bounded) until `f` holds.
+fn wait_until(what: &str, secs: u64, f: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    while !f() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Run `f` on a thread; the caller waits on the receiver with a timeout, so a deadlock fails
+/// the test instead of hanging it.
+fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> std::sync::mpsc::Receiver<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx
+}
+
+const BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[test]
+fn lane_delete_during_an_in_flight_switch_does_not_deadlock() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    e.lane_create("work").unwrap();
+    e.lock().config.tuning.lock_wait_s = 5;
+    // Claude holds its refresh lock: the switch waits in Applying, holding the credential lock.
+    std::fs::create_dir(w.env.refresh_lock()).unwrap();
+    let e2 = e.clone();
+    let switch = spawn(move || {
+        e2.start_switch(
+            &EnvId::default_env(),
+            &id("uuid-personal"),
+            SwitchHow::Manual,
+            "test",
+            false,
+            true,
+        )
+        .map(|t| t.state)
+    });
+    wait_until("switch never reached Applying", 5, || {
+        e.lock().envs[&EnvId::default_env()]
+            .transition
+            .as_ref()
+            .is_some_and(|t| t.state == TransitionState::Applying)
+    });
+    let e3 = e.clone();
+    let delete = spawn(move || e3.lane_delete("work").map_err(|x| x.message));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // The engine lock stays free while the lane delete waits for the credential lock (the old
+    // order held it here, and the switch then deadlocked taking it under the credential lock).
+    wait_until("lane delete holds the engine lock", 5, || e.inner.try_lock().is_ok());
+    std::fs::remove_dir(w.env.refresh_lock()).unwrap();
+    let state = switch.recv_timeout(BOUND).expect("switch deadlocked").unwrap();
+    assert_eq!(state, TransitionState::VerifyingAdoption);
+    delete.recv_timeout(BOUND).expect("lane delete deadlocked").unwrap();
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+    assert!(!e.lock().envs.contains_key(&EnvId("work".into())));
+}
+
+#[test]
+fn lane_delete_concurrent_with_the_watcher_finishes() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    e.lane_create("work").unwrap();
+    let (e2, env) = (e.clone(), w.env.clone());
+    let watcher = spawn(move || {
+        for i in 0..20 {
+            login_files(&env, "uuid-org", &format!("O-W{i}"), "team");
+            e2.watch();
+        }
+    });
+    let e3 = e.clone();
+    let delete = spawn(move || e3.lane_delete("work").map_err(|x| x.message));
+    watcher.recv_timeout(BOUND).expect("watcher deadlocked");
+    delete.recv_timeout(BOUND).expect("lane delete deadlocked").unwrap();
+}
+
+fn poc_login(dir: &Path, uuid: &str, token: &str, sub: &str) -> String {
+    let env = Env::default_at(&dir.join(format!("src-{uuid}")));
+    login_files(&env, uuid, token, sub);
+    serde_json::to_string(&qf_adapter::read_login(&env).unwrap().unwrap()).unwrap()
+}
+
+#[test]
+fn poc_migration_keeps_plaintext_until_the_import_is_saved() {
+    let w = world();
+    login_files(&w.env, "uuid-personal", "P1", "max");
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    e.onboarding(&json!({"credentialStorage": true, "terms": true}), true)
+        .unwrap();
+    e.register(None, "personal", "Default", false).unwrap();
+    let poc = w._dir.path().join("poc").join("vault");
+    std::fs::create_dir_all(poc.join("org")).unwrap();
+    let plain = poc.join("org").join("login.json");
+    std::fs::write(&plain, poc_login(w._dir.path(), "uuid-org", "O1", "team")).unwrap();
+    let vault_file = w.dd.vault().join(format!("{}.dpapi", id("uuid-org")));
+    // Mixing identities needs the disclosure: nothing is stored and the PoC login stays.
+    let err = e.migrate_poc_from(&poc, "Default", false).unwrap_err();
+    assert_eq!(err.code, "needs_disclosure");
+    assert!(plain.exists(), "plaintext PoC login kept on refusal");
+    assert!(!vault_file.exists(), "nothing sealed before the disclosure");
+    assert!(e.lock().config.account(&id("uuid-org")).is_none());
+    // An unknown group: refused, nothing touched.
+    assert_eq!(e.migrate_poc_from(&poc, "Nope", true).unwrap_err().code, "not_found");
+    assert!(plain.exists());
+    // Accepted: sealed, saved, then the plaintext goes.
+    let out = e.migrate_poc_from(&poc, "Default", true).unwrap();
+    assert!(out.iter().any(|l| l.contains("imported")), "{out:?}");
+    assert!(vault_file.exists());
+    assert!(!plain.exists(), "plaintext removed after the import was saved");
+    let saved = std::fs::read_to_string(w.dd.config()).unwrap();
+    assert!(saved.contains(id("uuid-org").as_str()));
+    assert!(e.lock().config.groups[0].accounts.contains(&id("uuid-org")));
+}
+
+#[test]
+fn concurrent_failure_waits_for_an_in_flight_recovery_switch_and_shares_it() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_mode(&e, "automatic");
+    set_obs(&e, "uuid-personal", 10.0, None);
+    e.lock().config.tuning.lock_wait_s = 5;
+    let req = |idx: u64, agent: &str| RecoverRequest {
+        session_id: SID.into(),
+        turn_id: Some("t".into()),
+        index: Some(idx),
+        agent_id: Some(agent.into()),
+        rate_limits: vec![SessionRateLimit {
+            kind: Some("five_hour".into()),
+            percent_used: Some(100.0),
+            resets_at: None,
+        }],
+        ..Default::default()
+    };
+    std::fs::create_dir(w.env.refresh_lock()).unwrap();
+    let (e1, r1) = (e.clone(), req(1, "main"));
+    let first = spawn(move || e1.recover(&r1));
+    wait_until("recovery switch never started", 5, || {
+        e.lock().envs[&EnvId::default_env()].blocking_transition()
+    });
+    let (e2, r2) = (e.clone(), req(2, "sub"));
+    let second = spawn(move || e2.recover(&r2));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    std::fs::remove_dir(w.env.refresh_lock()).unwrap();
+    let a = first.recv_timeout(BOUND).unwrap();
+    let b = second.recv_timeout(BOUND).unwrap();
+    assert!(a.retry && a.switched, "{}", a.why);
+    assert!(b.retry && !b.switched, "{}", b.why);
+    assert_eq!(b.to, Some(id("uuid-personal")));
+    assert_eq!(b.transition, a.transition, "one switch shared");
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+}
+
+#[test]
+fn concurrent_failure_without_limit_evidence_is_not_retried() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_mode(&e, "automatic");
+    set_obs(&e, "uuid-personal", 10.0, None);
+    let first = e.recover(&RecoverRequest {
+        session_id: SID.into(),
+        index: Some(1),
+        rate_limits: vec![SessionRateLimit {
+            kind: Some("five_hour".into()),
+            percent_used: Some(100.0),
+            resets_at: None,
+        }],
+        ..Default::default()
+    });
+    assert!(first.retry && first.switched, "{}", first.why);
+    // Another failure right after, with no usage-limit evidence (and none known for the account
+    // it ran on): Claude's own result stands.
+    let other = e.recover(&RecoverRequest {
+        session_id: SID.into(),
+        index: Some(2),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    });
+    assert!(!other.retry && !other.switched, "{}", other.why);
+    assert!(other.why.contains("not a confirmed"), "{}", other.why);
+    // A session view below the hard limit is no evidence either.
+    let low = e.recover(&RecoverRequest {
+        session_id: SID.into(),
+        index: Some(3),
+        agent_id: Some("sub2".into()),
+        rate_limits: vec![SessionRateLimit {
+            kind: Some("five_hour".into()),
+            percent_used: Some(40.0),
+            resets_at: None,
+        }],
+        ..Default::default()
+    });
+    assert!(!low.retry, "{}", low.why);
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+}
+
+const DEAD_SID: &str = "00000000-dead-4000-8000-000000000000";
+
+#[test]
+fn plan_check_uses_the_models_of_running_sessions_only() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    {
+        let mut inner = e.lock();
+        inner
+            .config
+            .account_mut(&id("uuid-personal"))
+            .unwrap()
+            .unavailable_models
+            .push("claude-opus-5-5".into());
+        // A session that ended (or ran in another environment) reported that model.
+        inner.session_model.insert(DEAD_SID.into(), "claude-opus-5-5".into());
+    }
+    e.tick();
+    assert!(
+        !e.lock().session_model.contains_key(DEAD_SID),
+        "ended sessions are pruned"
+    );
+    e.lock().session_model.insert(DEAD_SID.into(), "claude-opus-5-5".into());
+    let t = e
+        .start_switch(
+            &EnvId::default_env(),
+            &id("uuid-personal"),
+            SwitchHow::Manual,
+            "test",
+            false,
+            true,
+        )
+        .unwrap();
+    assert!(t.state.written(), "a session not running here does not decide");
+    // Back, then the running session reports a model the plan cannot serve: refused.
+    e.start_switch(
+        &EnvId::default_env(),
+        &id("uuid-org"),
+        SwitchHow::Manual,
+        "test",
+        false,
+        true,
+    )
+    .unwrap();
+    e.step(&StepReport {
+        session_id: SID.into(),
+        ok: true,
+        model: Some("claude-opus-5-5".into()),
+        ..Default::default()
+    });
+    let r = e
+        .start_switch(
+            &EnvId::default_env(),
+            &id("uuid-personal"),
+            SwitchHow::Manual,
+            "test",
+            false,
+            true,
+        )
+        .unwrap_err();
+    assert!(r.message.contains("claude-opus-5-5"), "{}", r.message);
+}
+
+#[test]
+fn vault_error_clears_when_the_copy_loads_again() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let personal = id("uuid-personal");
+    e.lock().config.account_mut(&personal).unwrap().health = Health::VaultError;
+    e.tick();
+    assert_eq!(e.lock().config.account(&personal).unwrap().health, Health::Ok);
+    // Capturing a refresh reads the stored copy: that clears it as well.
+    let org = id("uuid-org");
+    e.lock().config.account_mut(&org).unwrap().health = Health::VaultError;
+    login_files(&w.env, "uuid-org", "O-REFRESHED", "team");
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    e.watch();
+    assert_eq!(e.lock().config.account(&org).unwrap().health, Health::Ok);
+    // A copy that really cannot be read keeps the mark.
+    std::fs::write(w.dd.vault().join(format!("{personal}.dpapi")), "garbage").unwrap();
+    e.lock().config.account_mut(&personal).unwrap().health = Health::VaultError;
+    e.tick();
+    assert_eq!(e.lock().config.account(&personal).unwrap().health, Health::VaultError);
+}
+
+#[test]
+fn project_assign_to_a_missing_group_keeps_the_assignment() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    e.group_op("create", &json!({"name": "Work"})).unwrap();
+    e.project_op("assign", "C:\\proj", Some("Work")).unwrap();
+    let err = e.project_op("assign", "C:\\proj", Some("Nope")).unwrap_err();
+    assert_eq!(err.code, "not_found");
+    let inner = e.lock();
+    assert!(inner
+        .config
+        .projects
+        .iter()
+        .any(|p| p.path == "C:\\proj" && p.group == "Work"));
+}
+
+#[test]
+fn malformed_input_does_not_panic() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    // A percent escape followed by a multi-byte character.
+    qf_engine::http::route(
+        &e,
+        "GET",
+        "/v1/state",
+        "sessionId=%a\u{e9}&cwd=%\u{e9}\u{e9}",
+        &json!({}),
+    )
+    .unwrap();
+    assert_eq!(qf_engine::http::percent_decode("%41%zz+"), "A%zz ");
+    assert_eq!(qf_engine::http::percent_decode("%C3%A9"), "\u{e9}");
+    let accents = "\u{e9}".repeat(9);
+    assert_eq!(qf_engine::transition::short(&accents), "\u{e9}".repeat(8));
+    assert_eq!(qf_engine::transition::short("abc"), "abc");
+}
+
+#[test]
+fn long_polls_are_capped() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let seq = e.seq();
+    let query = format!("since={seq}&wait=25");
+    let slots: Vec<_> = (0..qf_engine::http::MAX_LONG_POLLS)
+        .map(|_| qf_engine::http::LongPollSlot::take(&e).expect("slot"))
+        .collect();
+    assert!(qf_engine::http::LongPollSlot::take(&e).is_none());
+    let t = std::time::Instant::now();
+    let v = qf_engine::http::route(&e, "GET", "/v1/events", &query, &json!({})).unwrap();
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(2),
+        "past the cap: answered at once"
+    );
+    assert!(v["events"].as_array().unwrap().is_empty());
+    drop(slots);
+    assert_eq!(e.long_polls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // With a free slot, a poll waits for the next event.
+    let (e2, q2) = (e.clone(), query.clone());
+    let poll = spawn(move || qf_engine::http::route(&e2, "GET", "/v1/events", &q2, &json!({})).unwrap());
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    e.unpin(&EnvId::default_env());
+    let v = poll.recv_timeout(BOUND).unwrap();
+    assert!(!v["events"].as_array().unwrap().is_empty());
+    assert_eq!(e.long_polls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}

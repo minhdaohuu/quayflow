@@ -10,7 +10,7 @@ use qf_provider::{ProviderError, Schedule};
 use qf_vault::{Login, Vault};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -173,6 +173,8 @@ pub struct Engine {
     pub cred_lock: Mutex<()>,
     pub events: Mutex<Events>,
     pub events_cv: Condvar,
+    /// Event long-polls waiting now (bounded, see `http::MAX_LONG_POLLS`).
+    pub long_polls: AtomicUsize,
     pub started_at: i64,
     pub token: String,
     pub shutdown: AtomicBool,
@@ -263,6 +265,7 @@ impl Engine {
                 list: VecDeque::new(),
             }),
             events_cv: Condvar::new(),
+            long_polls: AtomicUsize::new(0),
             started_at: now_ms(),
             token: random_hex(24),
             shutdown: AtomicBool::new(false),
@@ -670,7 +673,11 @@ impl Engine {
         if inner.config.account(id).is_none() {
             return false;
         }
-        match self.vault.load(id.as_str()) {
+        let loaded = self.vault.load(id.as_str());
+        if loaded.is_ok() {
+            clear_vault_error(inner, id);
+        }
+        match loaded {
             Ok(stored) if stored.same_tokens(login) => false,
             Ok(stored) if stored.expires_at().unwrap_or(0) > login.expires_at().unwrap_or(0) => false,
             Ok(_) | Err(qf_vault::VaultError::NotFound) => match self.vault.store(id.as_str(), login) {
@@ -696,6 +703,28 @@ impl Engine {
                     &[],
                 );
                 false
+            }
+        }
+    }
+
+    /// The account's protected copy loaded successfully: a vault error no longer applies.
+    pub fn vault_ok(&self, id: &AccountId) {
+        clear_vault_error(&mut self.lock(), id);
+    }
+
+    /// Accounts marked with a vault error: clear the mark when their copy loads again.
+    pub fn recheck_vault_errors(&self) {
+        let ids: Vec<AccountId> = self
+            .lock()
+            .config
+            .accounts
+            .iter()
+            .filter(|a| a.health == Health::VaultError)
+            .map(|a| a.id.clone())
+            .collect();
+        for id in ids {
+            if self.vault.load(id.as_str()).is_ok() {
+                self.vault_ok(&id);
             }
         }
     }
@@ -734,7 +763,13 @@ impl Engine {
                     .filter(|l| l.account_hash().as_deref() == Some(id.as_str())),
                 None => None,
             }
-            .or_else(|| self.vault.load(id.as_str()).ok());
+            .or_else(|| {
+                let l = self.vault.load(id.as_str()).ok();
+                if l.is_some() {
+                    self.vault_ok(&id);
+                }
+                l
+            });
             let Some(login) = login else {
                 let mut inner = self.lock();
                 if let Some(a) = inner.config.account_mut(&id) {
@@ -828,8 +863,10 @@ impl Engine {
                 self.refresh_env(&mut inner, id);
                 self.finish_adoption(&mut inner, id);
             }
+            prune_session_state(&mut inner);
             self.expire_signins(&mut inner);
         }
+        self.recheck_vault_errors();
         self.observe(false);
         for id in ids {
             self.decide(&id);
@@ -1012,6 +1049,24 @@ impl Engine {
         api::EventsResponse {
             seq: ev.seq,
             events: ev.list.iter().filter(|e| e.seq > since).cloned().collect(),
+        }
+    }
+}
+
+/// Forget per-session state of sessions no longer running in any environment.
+fn prune_session_state(inner: &mut Inner) {
+    let alive: std::collections::HashSet<String> = inner
+        .envs
+        .values()
+        .flat_map(|st| st.sessions.iter().map(|s| s.session_id.clone()))
+        .collect();
+    inner.session_model.retain(|sid, _| alive.contains(sid));
+}
+
+fn clear_vault_error(inner: &mut Inner, id: &AccountId) {
+    if let Some(a) = inner.config.account_mut(id) {
+        if a.health == Health::VaultError {
+            a.health = Health::Ok;
         }
     }
 }

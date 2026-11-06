@@ -13,6 +13,13 @@ use std::time::Duration;
 
 const MAX_BODY: usize = 64 * 1024;
 
+/// HTTP worker threads.
+pub const HTTP_WORKERS: usize = 12;
+/// Event long-polls that may wait at once; the remaining workers stay free for the
+/// per-request routes (/v1/step, /v1/adoption, /v1/recover). Extra pollers get an
+/// immediate answer.
+pub const MAX_LONG_POLLS: usize = HTTP_WORKERS - 3;
+
 fn q(query: &str, key: &str) -> Option<String> {
     query.split('&').find_map(|kv| {
         let (k, v) = kv.split_once('=')?;
@@ -20,15 +27,25 @@ fn q(query: &str, key: &str) -> Option<String> {
     })
 }
 
-fn percent_decode(s: &str) -> String {
+fn hex_val(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Decode `%XX` and `+` on bytes (never slices the string, so any input is safe).
+pub fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         match b[i] {
             b'%' if i + 2 < b.len() => {
-                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                    out.push(v);
+                if let (Some(h), Some(l)) = (hex_val(b[i + 1]), hex_val(b[i + 2])) {
+                    out.push(h * 16 + l);
                     i += 3;
                     continue;
                 }
@@ -40,6 +57,26 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+/// One of the [`MAX_LONG_POLLS`] long-poll slots, released on drop (also on a panic).
+pub struct LongPollSlot<'a>(&'a Engine);
+
+impl<'a> LongPollSlot<'a> {
+    pub fn take(e: &'a Engine) -> Option<Self> {
+        e.long_polls
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                (n < MAX_LONG_POLLS).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| LongPollSlot(e))
+    }
+}
+
+impl Drop for LongPollSlot<'_> {
+    fn drop(&mut self) {
+        self.0.long_polls.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn ok<T: serde::Serialize>(v: T) -> Result<Value, ApiErr> {
@@ -114,7 +151,12 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(0)
                 .min(25);
-            ok(e.wait_events(since, Duration::from_secs(wait)))
+            // Bounded long-polls: past the cap, answer at once (the Mod then pauses briefly).
+            let slot = (wait > 0).then(|| LongPollSlot::take(e)).flatten();
+            let wait = if slot.is_some() { wait } else { 0 };
+            let r = e.wait_events(since, Duration::from_secs(wait));
+            drop(slot);
+            ok(r)
         }
         ("POST", "/v1/onboarding") => {
             e.onboarding(
@@ -428,7 +470,17 @@ pub fn handle(e: &Shared, mut req: tiny_http::Request) {
             return respond(req, 200, v.clone());
         }
     }
-    match route(e, &method, &path, &query, &body) {
+    // A panic while handling one request answers 500; the worker thread survives.
+    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| route(e, &method, &path, &query, &body)))
+        .unwrap_or_else(|p| {
+            let what = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".into());
+            Err(ApiErr::new(500, "internal", format!("internal error: {what}")))
+        });
+    match routed {
         Ok(v) => {
             if let Some(rid) = request_id {
                 let mut inner = e.lock();

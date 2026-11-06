@@ -327,6 +327,13 @@ impl Engine {
     /// are sealed into the product vault and their plaintext file is deleted.
     pub fn migrate_poc(&self, group: &str, accept: bool) -> Result<Vec<String>, ApiErr> {
         let poc = qf_adapter::env::home_dir().join(".quayflow-poc").join("vault");
+        self.migrate_poc_from(&poc, group, accept)
+    }
+
+    /// [`Engine::migrate_poc`] from a given PoC vault folder. Nothing is stored before the
+    /// group disclosure is settled, and plaintext PoC files are deleted only after the config
+    /// naming the imported accounts was saved: a refusal or failure leaves the PoC as it was.
+    pub fn migrate_poc_from(&self, poc: &std::path::Path, group: &str, accept: bool) -> Result<Vec<String>, ApiErr> {
         let mut out = vec![];
         let mut inner = self.lock();
         if inner.config.consents.credential_storage.is_none() {
@@ -339,7 +346,10 @@ impl Engine {
             .name
             .clone();
         let mut new_ids = vec![];
-        let entries = qf_vault::read_poc_vault(&self.vault, &poc);
+        // (account, login, plaintext file to delete once the import is saved)
+        let mut new_logins: Vec<(AccountId, qf_vault::Login, Option<std::path::PathBuf>)> = vec![];
+        let before = inner.config.clone();
+        let entries = qf_vault::read_poc_vault(&self.vault, poc);
         if entries.is_empty() {
             return Ok(vec![format!(
                 "No PoC logins found at {}; nothing was imported.",
@@ -372,11 +382,9 @@ impl Engine {
                     {
                         label = format!("{label}-{}", &id.0[..4]);
                     }
-                    self.vault
-                        .store(id.as_str(), &p.login)
-                        .map_err(|e| ApiErr::new(500, "vault", e.to_string()))?;
-                    if p.was_plaintext {
-                        let _ = std::fs::remove_file(poc.join(&p.name).join("login.json"));
+                    if new_ids.contains(&id) {
+                        out.push(format!("{}: skipped (same account as another PoC entry)", p.name));
+                        continue;
                     }
                     inner.config.accounts.push(Account {
                         id: id.clone(),
@@ -390,23 +398,63 @@ impl Engine {
                         unavailable_models: vec![],
                         org_name: p.login.org_name(),
                     });
-                    new_ids.push(id);
+                    let plain = p.was_plaintext.then(|| poc.join(&p.name).join("login.json"));
+                    new_ids.push(id.clone());
+                    new_logins.push((id, p.login, plain));
                     out.push(format!("{}: imported as \"{label}\"", p.name));
                 }
             }
         }
         if !new_ids.is_empty() {
-            match self.apply_members(&mut inner, &gname, &new_ids, &[], accept)? {
-                r if r.ok => {}
-                r => {
-                    for id in &new_ids {
-                        inner.config.accounts.retain(|a| &a.id != id);
-                        let _ = self.vault.remove(id.as_str());
-                    }
+            // 1. The group and its disclosure, before anything is stored.
+            match self.apply_members(&mut inner, &gname, &new_ids, &[], accept) {
+                Ok(r) if r.ok => {}
+                Ok(r) => {
+                    inner.config = before;
                     return Err(ApiErr::new(409, "needs_disclosure", r.disclosure.unwrap_or_default()));
                 }
+                Err(e) => {
+                    inner.config = before;
+                    return Err(e);
+                }
             }
-            self.save_config(&inner).map_err(ApiErr::invalid)?;
+            // 2. Seal every login; a failure undoes the import (the PoC files are untouched).
+            let mut stored: Vec<&AccountId> = vec![];
+            let mut failure = None;
+            for (id, login, _) in &new_logins {
+                match self.vault.store(id.as_str(), login) {
+                    Ok(()) => stored.push(id),
+                    Err(e) => {
+                        failure = Some(ApiErr::new(
+                            500,
+                            "vault",
+                            format!("{e}; nothing was imported and the PoC logins are unchanged"),
+                        ));
+                        break;
+                    }
+                }
+            }
+            // 3. Save the config naming them.
+            if failure.is_none() {
+                if let Err(e) = self.save_config(&inner) {
+                    failure = Some(ApiErr::invalid(format!(
+                        "{e}; nothing was imported and the PoC logins are unchanged"
+                    )));
+                }
+            }
+            if let Some(e) = failure {
+                for id in stored {
+                    let _ = self.vault.remove(id.as_str());
+                }
+                inner.config = before;
+                return Err(e);
+            }
+            // 4. Only now is the plaintext PoC copy redundant.
+            for (_, _, plain) in &new_logins {
+                if let Some(path) = plain {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
             for st in inner.envs.values_mut() {
                 if st.unknown.as_ref().is_some_and(|u| new_ids.iter().any(|i| &i.0 == u)) {
                     st.unknown = None;
@@ -829,15 +877,23 @@ impl Engine {
             return Err(ApiErr::invalid("an absolute project folder is required"));
         }
         let norm = normalize_path(&p);
-        inner.config.projects.retain(|x| normalize_path(&x.path) != norm);
-        let msg = if op == "assign" {
+        // Validate before changing anything: a refused assign keeps the existing assignment.
+        let assign_to = if op == "assign" {
             let g = group.ok_or_else(|| ApiErr::invalid("group required"))?;
-            let name = inner
-                .config
-                .group(g)
-                .ok_or_else(|| ApiErr::not_found("no such group"))?
-                .name
-                .clone();
+            Some(
+                inner
+                    .config
+                    .group(g)
+                    .ok_or_else(|| ApiErr::not_found("no such group"))?
+                    .name
+                    .clone(),
+            )
+        } else {
+            None
+        };
+        let before = inner.config.projects.clone();
+        inner.config.projects.retain(|x| normalize_path(&x.path) != norm);
+        let msg = if let Some(name) = assign_to {
             inner.config.projects.push(ProjectAssignment {
                 path: p.clone(),
                 group: name.clone(),
@@ -846,7 +902,10 @@ impl Engine {
         } else {
             format!("{p} uses the default group")
         };
-        self.save_config(&inner).map_err(ApiErr::invalid)?;
+        if let Err(e) = self.save_config(&inner) {
+            inner.config.projects = before;
+            return Err(ApiErr::invalid(e));
+        }
         self.record(&inner, "project.change", json!({"op": op}), false);
         self.emit(&mut inner, "state", None, &msg);
         Ok(msg)
