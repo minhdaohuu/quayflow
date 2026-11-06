@@ -121,7 +121,8 @@ pub struct Logger {
     dir: PathBuf,
     retention_days: u64,
     max_bytes: u64,
-    lock: Mutex<()>,
+    /// Serializes writes; holds the day the logs were last pruned for (pruned on rollover).
+    lock: Mutex<String>,
 }
 
 impl Logger {
@@ -130,7 +131,7 @@ impl Logger {
             dir,
             retention_days,
             max_bytes: max_mb * 1024 * 1024,
-            lock: Mutex::new(()),
+            lock: Mutex::new(day_stamp(now_ms())),
         };
         l.prune();
         l
@@ -161,7 +162,13 @@ impl Logger {
     pub fn log(&self, level: &str, event: &str, mut data: Value, labels: &[(String, String)]) {
         scrub_value(&mut data, labels);
         let rec = json!({"ts": now_ms(), "level": level, "event": event, "pid": std::process::id(), "data": data});
-        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pruned_day = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        // A long-running engine prunes again at each day rollover, not only at start.
+        let today = day_stamp(now_ms());
+        if *pruned_day != today {
+            self.prune();
+            *pruned_day = today;
+        }
         let path = self.file();
         if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > self.max_bytes {
             return;
@@ -229,5 +236,28 @@ mod tests {
         l.log("info", "a", json!({}), &[]);
         l.log("info", "b", json!({}), &[]);
         assert_eq!(l.tail(10).len(), 1, "stops writing past the cap");
+    }
+
+    #[test]
+    fn logger_prunes_on_day_rollover() {
+        let d = tempfile::tempdir().unwrap();
+        let l = Logger::new(d.path().to_path_buf(), 7, 10);
+        let old = d.path().join("quayflow-2000-01-01.jsonl");
+        std::fs::write(
+            &old, "{}
+",
+        )
+        .unwrap();
+        let f = std::fs::File::options().write(true).open(&old).unwrap();
+        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400))
+            .unwrap();
+        drop(f);
+        l.log("info", "same-day", json!({}), &[]);
+        assert!(old.exists(), "no prune within the same day");
+        // The engine kept running into the next day.
+        *l.lock.lock().unwrap() = "yesterday".into();
+        l.log("info", "next-day", json!({}), &[]);
+        assert!(!old.exists(), "pruned on the day rollover");
+        assert_eq!(l.tail(10).len(), 2);
     }
 }

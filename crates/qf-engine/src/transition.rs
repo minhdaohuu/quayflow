@@ -80,22 +80,29 @@ impl Engine {
                     format!("{}: protected copy missing; sign in again (/quay add)", account.label),
                 ));
             }
-            // Permissions: every running session's group, managed login, health, plan.
-            let model = inner.session_model.values().next().cloned();
-            let ctx = Engine::ctx(&inner, env, model.as_deref()).expect("env");
-            if let Err(ex) = ctx.permitted(to) {
-                let blocker = ctx.blocker(to).cloned();
-                let mut r = Refusal::new("refused", format!("{}: {}", account.label, ex.explain()));
-                if blocker.is_some() {
-                    r.code = "conflict";
-                    r.message.push_str(
-                        ". Move the blocking session into a lane (Replace Session) so the others can switch.",
-                    );
+            // Permissions: every running session's group, managed login, health, plan. The plan
+            // must serve the model of every session running in this environment.
+            let models = running_models(&inner, env);
+            let checks: Vec<Option<&str>> = if models.is_empty() {
+                vec![None]
+            } else {
+                models.iter().map(|m| Some(m.as_str())).collect()
+            };
+            for model in checks {
+                let ctx = Engine::ctx(&inner, env, model).expect("env");
+                if let Err(ex) = ctx.permitted(to) {
+                    let blocker = ctx.blocker(to).cloned();
+                    let mut r = Refusal::new("refused", format!("{}: {}", account.label, ex.explain()));
+                    if blocker.is_some() {
+                        r.code = "conflict";
+                        r.message.push_str(
+                            ". Move the blocking session into a lane (Replace Session) so the others can switch.",
+                        );
+                    }
+                    r.blocked_by = blocker.map(Box::new);
+                    return Err(r);
                 }
-                r.blocked_by = blocker.map(Box::new);
-                return Err(r);
             }
-            drop(ctx);
             let st = inner.envs.get(env).expect("env");
             // The canary is how a disabled version is checked again, so it is not refused here.
             if !st.in_place.allowed && how != SwitchHow::Canary {
@@ -235,7 +242,10 @@ impl Engine {
             )
         };
         let target = match self.vault.load(to.as_str()) {
-            Ok(l) => l,
+            Ok(l) => {
+                self.vault_ok(&to);
+                l
+            }
             Err(e) => {
                 let mut inner = self.lock();
                 if let Some(a) = inner.config.account_mut(&to) {
@@ -618,8 +628,29 @@ impl Engine {
     }
 }
 
+/// Models last reported by the sessions currently running in `env` (sorted, distinct).
+pub fn running_models(inner: &Inner, env: &EnvId) -> Vec<String> {
+    let mut models: Vec<String> = inner
+        .envs
+        .get(env)
+        .map(|st| {
+            st.sessions
+                .iter()
+                .filter_map(|s| inner.session_model.get(&s.session_id).cloned())
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort();
+    models.dedup();
+    models
+}
+
+/// The first 8 characters of `s` (char-safe).
 pub fn short(s: &str) -> &str {
-    &s[..s.len().min(8)]
+    match s.char_indices().nth(8) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
 }
 
 pub fn how_text(h: SwitchHow) -> &'static str {

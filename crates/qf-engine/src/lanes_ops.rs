@@ -94,20 +94,39 @@ impl Engine {
 
     pub fn lane_delete(&self, name: &str) -> Result<String, ApiErr> {
         let id = EnvId(name.into());
-        let mut inner = self.lock();
-        self.refresh_env(&mut inner, &id);
-        let st = inner.envs.get(&id).ok_or_else(|| ApiErr::not_found("no such lane"))?;
-        if !st.sessions.is_empty() {
-            return Err(ApiErr::refused("sessions are running in this lane; end them first"));
+        if id.is_default() {
+            return Err(ApiErr::refused("the default environment is not a lane"));
         }
-        let env = st.env.clone();
-        // Keep the newest token of the lane's account before its copy goes away.
-        if let Ok(Some(login)) = qf_adapter::read_login(&env) {
-            let h = AccountId(login.account_hash().unwrap_or_default());
-            self.capture(&mut inner, &h, &login);
-        }
+        // Lock order everywhere: cred_lock, then inner (switch apply, watcher). The engine
+        // lock is not held across the bounded wait in `retire`.
         let _cred = self.cred_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let env = {
+            let mut inner = self.lock();
+            self.refresh_env(&mut inner, &id);
+            let st = inner.envs.get(&id).ok_or_else(|| ApiErr::not_found("no such lane"))?;
+            if !st.sessions.is_empty() {
+                return Err(ApiErr::refused("sessions are running in this lane; end them first"));
+            }
+            if st.blocking_transition() {
+                return Err(ApiErr::refused(
+                    "a switch is in progress in this lane; try again when it ends",
+                ));
+            }
+            let env = st.env.clone();
+            // Keep the newest token of the lane's account before its copy goes away.
+            if let Ok(Some(login)) = qf_adapter::read_login(&env) {
+                let h = AccountId(login.account_hash().unwrap_or_default());
+                self.capture(&mut inner, &h, &login);
+            }
+            env
+        };
         qf_adapter::login::retire(&env, Duration::from_secs(9)).map_err(|e| ApiErr::refused(e.to_string()))?;
+        let mut inner = self.lock();
+        // A session may have started in the lane meanwhile.
+        self.refresh_env(&mut inner, &id);
+        if inner.envs.get(&id).is_some_and(|st| !st.sessions.is_empty()) {
+            return Err(ApiErr::refused("a session started in this lane; end it first"));
+        }
         qf_adapter::lanes::delete(&env).map_err(|e| ApiErr::invalid(e.to_string()))?;
         inner.envs.remove(&id);
         self.record(&inner, "lane.deleted", json!({"lane": name}), true);

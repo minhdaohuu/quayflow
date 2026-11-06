@@ -3,13 +3,15 @@
 //! One switch and at most one retry per failed request; concurrent failures share one
 //! switch; a new incident needs genuine task progress; Suggest mode only records.
 
-use crate::core::{random_hex, Engine};
+use crate::core::{random_hex, Engine, Inner};
 use qf_model::api::{FailureShape, RecoverRequest, RecoverResponse};
 use qf_model::time::now_ms;
 use qf_model::*;
 use qf_policy::RecoveryTarget;
 use serde_json::json;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 fn no(why: impl Into<String>) -> RecoverResponse {
     RecoverResponse {
@@ -128,32 +130,53 @@ impl Engine {
             }
         }
 
-        let governing = Engine::governing(&inner, &env);
-        let mode = qf_policy::effective_mode(&governing);
         let st = inner.envs.get(&env).expect("env");
         if let Some(why) = st.pause_reason(&inner.config) {
             return no(format!("automation paused: {why}"));
         }
+        // Concurrent failure while a shareable switch is still in flight: wait (bounded, without
+        // the engine lock) for it to be written, then share it instead of starting another.
+        let in_flight = st
+            .transition
+            .as_ref()
+            .filter(|t| st.blocking_transition() && shareable(t.how))
+            .map(|t| t.id.clone());
+        let (live, last) = match in_flight {
+            None => (live, last),
+            Some(tid) => {
+                drop(inner);
+                let ended = self.wait_transition(&env, &tid, concurrent_wait(&tuning));
+                inner = self.lock();
+                let Some(t) = ended else {
+                    return no("a switch for a concurrent failure is still in progress; Claude's own result stands");
+                };
+                if !t.state.written() {
+                    return no(format!(
+                        "the switch for a concurrent failure was not made: {}",
+                        t.detail.unwrap_or_default()
+                    ));
+                }
+                let live = inner.envs.get(&env).and_then(|s| s.live.clone());
+                (live, Some(t))
+            }
+        };
+        let pcts: Vec<(String, f64)> = r
+            .rate_limits
+            .iter()
+            .filter_map(|l| Some((l.kind.clone().unwrap_or_else(|| "window".into()), l.percent_used?)))
+            .collect();
         // Concurrent failure: retry on the account already switched to, while it is live.
         if let Some(t) = last.as_ref() {
-            let shared = matches!(
-                t.how,
-                SwitchHow::Recovery | SwitchHow::Automatic | SwitchHow::ReturnHome | SwitchHow::ModelFallback
-            ) && t
-                .written_at
-                .is_some_and(|w| now - w < tuning.concurrent_window_s as i64 * 1000)
+            let shared = shareable(t.how)
+                && t.written_at
+                    .is_some_and(|w| now_ms() - w < tuning.concurrent_window_s as i64 * 1000)
                 && live.as_ref() == Some(&t.to);
             if shared {
-                return RecoverResponse {
-                    retry: true,
-                    switched: false,
-                    to: Some(t.to.clone()),
-                    to_label: Some(inner.config.label(&t.to)),
-                    why: "already switched for a concurrent failure; retrying on the new account".into(),
-                    transition: Some(t.id.clone()),
-                };
+                return self.share(&inner, r, &env, t, &pcts);
             }
         }
+        let governing = Engine::governing(&inner, &env);
+        let mode = qf_policy::effective_mode(&governing);
         // A new incident requires genuine task progress since the previous recovery.
         if inner.progressed.get(&r.session_id) == Some(&false) {
             return no("no task progress since the previous recovery; Claude's own result stands");
@@ -162,11 +185,6 @@ impl Engine {
         let Some(ctx) = Engine::ctx(&inner, &env, model.as_deref()) else {
             return no("unknown environment");
         };
-        let pcts: Vec<(String, f64)> = r
-            .rate_limits
-            .iter()
-            .filter_map(|l| Some((l.kind.clone().unwrap_or_else(|| "window".into()), l.percent_used?)))
-            .collect();
         let evidence = qf_policy::confirm_limit(&ctx, &pcts, r.simulated);
         if !evidence.confirmed {
             return no(format!(
@@ -229,19 +247,124 @@ impl Engine {
             }
             Mode::Manual => return no("Manual mode: no automatic switch"),
         }
-        inner.progressed.insert(r.session_id.clone(), false);
         drop(inner);
         match self.start_switch(&env, &to, SwitchHow::Recovery, &reason, false, true) {
-            Ok(t) if t.state.written() => RecoverResponse {
-                retry,
-                switched: true,
-                to: Some(to.clone()),
-                to_label: Some(self.lock().config.label(&to)),
-                why: reason,
-                transition: Some(t.id),
-            },
+            Ok(t) if t.state.written() => {
+                let mut inner = self.lock();
+                // This session's next recovery is a new incident and needs genuine progress first.
+                inner.progressed.insert(r.session_id.clone(), false);
+                RecoverResponse {
+                    retry,
+                    switched: true,
+                    to: Some(to.clone()),
+                    to_label: Some(inner.config.label(&to)),
+                    why: reason,
+                    transition: Some(t.id),
+                }
+            }
             Ok(t) => no(format!("switch not made: {}", t.detail.unwrap_or_default())),
+            Err(e) if e.code == "conflict" => {
+                // Another failure's switch started between our check and our request: share it.
+                let tid = {
+                    let inner = self.lock();
+                    inner
+                        .envs
+                        .get(&env)
+                        .and_then(|st| st.transition.as_ref().filter(|t| shareable(t.how)))
+                        .map(|t| t.id.clone())
+                };
+                let Some(tid) = tid else {
+                    return no(format!("switch not made: {}", e.message));
+                };
+                match self.wait_transition(&env, &tid, concurrent_wait(&tuning)) {
+                    Some(t) if t.state.written() => {
+                        let inner = self.lock();
+                        let live = inner.envs.get(&env).and_then(|s| s.live.clone());
+                        if live.as_ref() != Some(&t.to) {
+                            return no("the concurrent switch's account is no longer live");
+                        }
+                        self.share(&inner, r, &env, &t, &pcts)
+                    }
+                    Some(t) => no(format!(
+                        "the switch for a concurrent failure was not made: {}",
+                        t.detail.unwrap_or_default()
+                    )),
+                    None => no("a switch for a concurrent failure is still in progress; Claude's own result stands"),
+                }
+            }
             Err(e) => no(format!("switch not made: {}", e.message)),
         }
     }
+
+    /// Answer a concurrent failure with the switch already made for another one: retry on its
+    /// destination, but only on a confirmed usage limit of the account the failed request used.
+    fn share(
+        &self,
+        inner: &Inner,
+        r: &RecoverRequest,
+        env: &EnvId,
+        t: &Transition,
+        pcts: &[(String, f64)],
+    ) -> RecoverResponse {
+        let Some(mut ctx) = Engine::ctx(inner, env, r.model.as_deref()) else {
+            return no("unknown environment");
+        };
+        // The failed request ran on the switch's source account, not on the new live one.
+        ctx.live = t.from.as_ref();
+        let evidence = qf_policy::confirm_limit(&ctx, pcts, r.simulated);
+        if !evidence.confirmed {
+            return no(format!(
+                "not a confirmed usage limit ({}); Claude's own result stands",
+                evidence.detail
+            ));
+        }
+        RecoverResponse {
+            retry: true,
+            switched: false,
+            to: Some(t.to.clone()),
+            to_label: Some(inner.config.label(&t.to)),
+            why: format!(
+                "already switched for a concurrent failure ({}); retrying on the new account",
+                evidence.detail
+            ),
+            transition: Some(t.id.clone()),
+        }
+    }
+
+    /// Wait up to `bound` for transition `tid` in `env` to leave its pre-write states, without
+    /// holding the engine lock. Returns the transition once it is no longer blocking.
+    fn wait_transition(&self, env: &EnvId, tid: &str, bound: Duration) -> Option<Transition> {
+        let deadline = Instant::now() + bound;
+        loop {
+            {
+                let inner = self.lock();
+                let st = inner.envs.get(env)?;
+                let current = st.transition.as_ref().filter(|t| t.id == tid);
+                match current {
+                    Some(_) if st.blocking_transition() => {}
+                    Some(t) => return Some(t.clone()),
+                    // Replaced by a later transition: the outcome is in the last switch, if written.
+                    None => return st.last_switch.clone().filter(|t| t.id == tid),
+                }
+            }
+            if Instant::now() >= deadline || self.shutdown.load(Ordering::SeqCst) {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// Switches made by automation that a concurrent failure may share (FR-15).
+fn shareable(how: SwitchHow) -> bool {
+    matches!(
+        how,
+        SwitchHow::Recovery | SwitchHow::Automatic | SwitchHow::ReturnHome | SwitchHow::ModelFallback
+    )
+}
+
+/// How long a concurrent failure waits for an in-flight switch: the lock wait plus a margin,
+/// within the client's request timeout.
+fn concurrent_wait(t: &Tuning) -> Duration {
+    Duration::from_secs((t.lock_wait_s + 5).min(50))
 }
