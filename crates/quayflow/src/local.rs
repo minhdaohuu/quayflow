@@ -223,62 +223,230 @@ pub fn profile_paths() -> Vec<PathBuf> {
     ]
 }
 
-/// Remove the managed block (inclusive); keeps everything else byte for byte.
-pub fn strip_block(text: &str) -> String {
-    let mut out = vec![];
-    let mut inside = false;
-    for line in text.split_inclusive('\n') {
-        let t = line.trim_end_matches(['\r', '\n']);
-        if t == BLOCK_START {
-            inside = true;
-            continue;
-        }
-        if inside {
-            if t == BLOCK_END {
-                inside = false;
-            }
-            continue;
-        }
-        out.push(line);
-    }
-    out.concat()
+/// Whether a profile holds the managed block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockState {
+    Absent,
+    Complete,
+    /// A start marker with no end marker after it: never edited automatically.
+    Incomplete,
 }
 
-pub fn add_block(text: &str) -> String {
-    let mut base = strip_block(text);
+fn marker_line(line: &str) -> &str {
+    line.trim_end_matches(['\r', '\n'])
+}
+
+/// Remove every complete managed block (inclusive) and report what was found. A start
+/// marker with no end marker after it leaves the rest of the text exactly as it is.
+pub fn strip_block_checked(text: &str) -> (String, BlockState) {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(text.len());
+    let mut state = BlockState::Absent;
+    let mut i = 0;
+    while i < lines.len() {
+        if marker_line(lines[i]) == BLOCK_START {
+            match (i + 1..lines.len()).find(|&j| marker_line(lines[j]) == BLOCK_END) {
+                Some(j) => {
+                    state = BlockState::Complete;
+                    i = j + 1;
+                    continue;
+                }
+                None => {
+                    lines[i..].iter().for_each(|l| out.push_str(l));
+                    return (out, BlockState::Incomplete);
+                }
+            }
+        }
+        out.push_str(lines[i]);
+        i += 1;
+    }
+    (out, state)
+}
+
+/// Remove the managed block (inclusive); keeps everything else byte for byte.
+#[cfg(test)]
+pub fn strip_block(text: &str) -> String {
+    strip_block_checked(text).0
+}
+
+fn incomplete_block_message() -> String {
+    format!(
+        "has a Quayflow block start line ({BLOCK_START}) without its end line ({BLOCK_END}); left untouched. Remove the incomplete block by hand, then run this again"
+    )
+}
+
+pub fn add_block(text: &str) -> Result<String, String> {
+    let (mut base, state) = strip_block_checked(text);
+    if state == BlockState::Incomplete {
+        return Err(incomplete_block_message());
+    }
     if !base.is_empty() && !base.ends_with('\n') {
         base.push_str("\r\n");
     }
-    format!("{base}{}\r\n", profile_block())
+    Ok(format!("{base}{}\r\n", profile_block()))
 }
 
-pub fn shell_install(dd: &DataDir, profiles: &[PathBuf]) -> Result<Vec<String>, String> {
+/// How a profile file is encoded on disk (kept when it is written back).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEncoding {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+    Utf16Be,
+}
+
+fn decode_utf16(bytes: &[u8], le: bool) -> Result<String, String> {
+    if !bytes.len().is_multiple_of(2) {
+        return Err("starts with a UTF-16 byte order mark but has an odd number of bytes".into());
+    }
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&c| {
+            if le {
+                u16::from_le_bytes(c)
+            } else {
+                u16::from_be_bytes(c)
+            }
+        })
+        .collect();
+    String::from_utf16(&units).map_err(|_| "starts with a UTF-16 byte order mark but is not valid UTF-16".into())
+}
+
+/// Decode a text file by its byte order mark (UTF-8 with or without BOM, UTF-16 LE/BE with BOM).
+/// Anything else (a legacy ANSI code page, UTF-16 without BOM) is refused, never guessed.
+pub fn decode_text(bytes: &[u8]) -> Result<(String, TextEncoding), String> {
+    let (text, enc) = if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        let s = std::str::from_utf8(rest).map_err(|_| "starts with a UTF-8 byte order mark but is not valid UTF-8")?;
+        (s.to_string(), TextEncoding::Utf8Bom)
+    } else if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        (decode_utf16(rest, true)?, TextEncoding::Utf16Le)
+    } else if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        (decode_utf16(rest, false)?, TextEncoding::Utf16Be)
+    } else {
+        let s = std::str::from_utf8(bytes)
+            .map_err(|_| "is neither UTF-8 nor UTF-16 with a byte order mark (probably a legacy ANSI code page)")?;
+        (s.to_string(), TextEncoding::Utf8)
+    };
+    if text.contains('\0') {
+        return Err("contains NUL characters (an encoding Quayflow does not recognize)".into());
+    }
+    Ok((text, enc))
+}
+
+pub fn encode_text(text: &str, enc: TextEncoding) -> Vec<u8> {
+    match enc {
+        TextEncoding::Utf8 => text.as_bytes().to_vec(),
+        TextEncoding::Utf8Bom => [&[0xEF, 0xBB, 0xBF][..], text.as_bytes()].concat(),
+        TextEncoding::Utf16Le => [0xFF, 0xFE]
+            .into_iter()
+            .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect(),
+        TextEncoding::Utf16Be => [0xFE, 0xFF]
+            .into_iter()
+            .chain(text.encode_utf16().flat_map(u16::to_be_bytes))
+            .collect(),
+    }
+}
+
+/// Read a profile. Only a missing file counts as empty; any other read or decode problem is
+/// an error, so the file is never overwritten from a misread.
+fn read_profile(p: &Path) -> Result<Option<(String, TextEncoding)>, String> {
+    match std::fs::read(p) {
+        Ok(b) => decode_text(&b).map(Some).map_err(|e| {
+            format!(
+                "{}: the file {e}; left untouched. Save it as UTF-8 and run this again",
+                p.display()
+            )
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: cannot read it ({e}); left untouched", p.display())),
+    }
+}
+
+/// The file to write for `p`: the final target when `p` is a symbolic link, so the link stays.
+fn write_target(p: &Path) -> PathBuf {
+    let mut cur = p.to_path_buf();
+    for _ in 0..32 {
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() => match std::fs::read_link(&cur) {
+                Ok(t) if t.is_absolute() => cur = t,
+                Ok(t) => cur = cur.parent().map(|d| d.join(&t)).unwrap_or(t),
+                Err(_) => break,
+            },
+            _ => break,
+        }
+    }
+    cur
+}
+
+fn write_profile(p: &Path, text: &str, enc: TextEncoding) -> Result<(), String> {
+    qf_vault::atomic_write(&write_target(p), &encode_text(text, enc)).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// What a profile operation did: profiles handled, and profiles left untouched with the reason.
+#[derive(Debug, Default)]
+pub struct ProfileReport {
+    pub done: Vec<String>,
+    pub problems: Vec<String>,
+}
+
+fn install_profile(p: &Path) -> Result<(), String> {
+    let existing = read_profile(p)?;
+    let (text, enc) = existing.clone().unwrap_or((String::new(), TextEncoding::Utf8));
+    let new = add_block(&text).map_err(|e| format!("{}: {e}", p.display()))?;
+    if existing.is_some() && new == text {
+        return Ok(());
+    }
+    write_profile(p, &new, enc)
+}
+
+pub fn shell_install(dd: &DataDir, profiles: &[PathBuf]) -> Result<ProfileReport, String> {
     std::fs::create_dir_all(dd.shell()).map_err(|e| e.to_string())?;
     qf_vault::atomic_write(&dd.shell().join("Quayflow.psm1"), PSM1.as_bytes()).map_err(|e| e.to_string())?;
-    let mut done = vec![];
+    let mut r = ProfileReport::default();
     for p in profiles {
-        let text = std::fs::read_to_string(p).unwrap_or_default();
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        match install_profile(p) {
+            Ok(()) => r.done.push(p.display().to_string()),
+            Err(e) => r.problems.push(e),
         }
-        qf_vault::atomic_write(p, add_block(&text).as_bytes()).map_err(|e| format!("{}: {e}", p.display()))?;
-        done.push(p.display().to_string());
     }
-    Ok(done)
+    Ok(r)
 }
 
-pub fn shell_uninstall(dd: &DataDir, profiles: &[PathBuf]) -> Result<Vec<String>, String> {
-    let mut done = vec![];
+/// Returns whether the block was removed.
+fn uninstall_profile(p: &Path) -> Result<bool, String> {
+    let (text, enc) = match read_profile(p) {
+        Ok(Some(x)) => x,
+        Ok(None) => return Ok(false),
+        // A file Quayflow cannot decode that does not even hold the marker has nothing to remove.
+        Err(e) => match std::fs::read(p) {
+            Ok(b) if !b.windows(BLOCK_START.len()).any(|w| w == BLOCK_START.as_bytes()) => return Ok(false),
+            _ => return Err(e),
+        },
+    };
+    match strip_block_checked(&text) {
+        (_, BlockState::Absent) => Ok(false),
+        (_, BlockState::Incomplete) => Err(format!("{}: {}", p.display(), incomplete_block_message())),
+        (stripped, BlockState::Complete) => write_profile(p, &stripped, enc).map(|()| true),
+    }
+}
+
+pub fn shell_uninstall(dd: &DataDir, profiles: &[PathBuf]) -> ProfileReport {
+    let mut r = ProfileReport::default();
     for p in profiles {
-        if let Ok(text) = std::fs::read_to_string(p) {
-            if text.contains(BLOCK_START) {
-                qf_vault::atomic_write(p, strip_block(&text).as_bytes()).map_err(|e| e.to_string())?;
-                done.push(p.display().to_string());
-            }
+        match uninstall_profile(p) {
+            Ok(true) => r.done.push(p.display().to_string()),
+            Ok(false) => {}
+            Err(e) => r.problems.push(e),
         }
     }
-    let _ = std::fs::remove_file(dd.shell().join("Quayflow.psm1"));
-    Ok(done)
+    // Keep the module while a profile still references it.
+    if r.problems.is_empty() {
+        let _ = std::fs::remove_file(dd.shell().join("Quayflow.psm1"));
+    }
+    r
 }
 
 /// `shell claim --pid N`: print and consume this terminal's pending replacement.
@@ -380,18 +548,60 @@ fn have(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn download(assets: &[&str], dest: &Path, version: Option<&str>) -> Result<(), String> {
-    if std::env::var_os("QUAYFLOW_OFFLINE").is_some() {
-        return Err("network access is disabled (QUAYFLOW_OFFLINE is set)".into());
-    }
-    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    if have("gh") {
-        let mut c = qf_adapter::process::hidden("gh");
-        c.args(["release", "download"]);
-        if let Some(v) = version {
-            c.arg(v);
+fn gh_signed_in() -> bool {
+    qf_adapter::process::hidden("gh")
+        .args(["auth", "status", "--hostname", "github.com"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn http_agent() -> Result<ureq::Agent, String> {
+    Ok(ureq::AgentBuilder::new()
+        .tls_connector(std::sync::Arc::new(
+            native_tls::TlsConnector::new().map_err(|e| e.to_string())?,
+        ))
+        .timeout(Duration::from_secs(300))
+        .build())
+}
+
+/// The tag of the latest release (the Mod is pinned to the same tag as the engine).
+fn latest_tag(gh_ready: bool) -> Result<String, String> {
+    if gh_ready {
+        if let Ok(o) = qf_adapter::process::hidden("gh")
+            .args([
+                "release", "view", "--repo", REPO, "--json", "tagName", "--jq", ".tagName",
+            ])
+            .output()
+        {
+            let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if o.status.success() && !t.is_empty() {
+                return Ok(t);
+            }
         }
-        c.args(["--repo", REPO, "--clobber", "-D"]).arg(dest);
+    }
+    let fail = |e: String| {
+        format!("could not find the latest release of {REPO} ({e}). If the repository is private, sign in with `gh auth login` and run this again")
+    };
+    let v: Value = http_agent()?
+        .get(&format!("https://api.github.com/repos/{REPO}/releases/latest"))
+        .set("User-Agent", "quayflow-cli")
+        .call()
+        .map_err(|e| fail(e.to_string()))?
+        .into_json()
+        .map_err(|e| fail(e.to_string()))?;
+    v["tag_name"]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| fail("no tag_name in the answer".into()))
+}
+
+fn download(assets: &[&str], dest: &Path, tag: &str, gh_ready: bool) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    if gh_ready {
+        let mut c = qf_adapter::process::hidden("gh");
+        c.args(["release", "download", tag, "--repo", REPO, "--clobber", "-D"])
+            .arg(dest);
         for a in assets {
             c.args(["-p", a]);
         }
@@ -400,21 +610,12 @@ fn download(assets: &[&str], dest: &Path, version: Option<&str>) -> Result<(), S
             return Ok(());
         }
     }
-    let agent = ureq::AgentBuilder::new()
-        .tls_connector(std::sync::Arc::new(
-            native_tls::TlsConnector::new().map_err(|e| e.to_string())?,
-        ))
-        .timeout(Duration::from_secs(300))
-        .build();
+    let agent = http_agent()?;
     for a in assets {
-        let url = match version {
-            Some(v) => format!("https://github.com/{REPO}/releases/download/{v}/{a}"),
-            None => format!("https://github.com/{REPO}/releases/latest/download/{a}"),
-        };
+        let url = format!("https://github.com/{REPO}/releases/download/{tag}/{a}");
         let resp = agent.get(&url).call().map_err(|e| match e {
             ureq::Error::Status(404, _) => format!(
-                "no published release found at https://github.com/{REPO}/releases{} (no release yet, or the repository is private and the GitHub CLI is not signed in)",
-                version.map(|v| format!("/tag/{v}")).unwrap_or_default()
+                "no published release found at https://github.com/{REPO}/releases/tag/{tag} (no such release, or the repository is private and the GitHub CLI is not signed in)"
             ),
             e => format!("{a}: {e}"),
         })?;
@@ -425,42 +626,210 @@ fn download(assets: &[&str], dest: &Path, version: Option<&str>) -> Result<(), S
     Ok(())
 }
 
-pub fn update(dd: &DataDir, check_only: bool, version: Option<&str>) -> Result<String, String> {
+pub const PROGRAM_FILES: [&str; 2] = ["quayflow.exe", "quayflow-bg.exe"];
+
+/// Install verified files from `from` into `bin`: stage every file next to its target first,
+/// then swap them in. On any failure every file already swapped is put back and the staged
+/// copies are removed, so `bin` holds either the complete old set or the complete new set.
+/// A replaced file is kept as `<name>.old-<n>` (a running executable can be renamed, not deleted).
+pub fn swap_in(bin: &Path, from: &Path, names: &[&str]) -> Result<(), String> {
+    std::fs::create_dir_all(bin).map_err(|e| e.to_string())?;
+    // Leftovers of earlier updates (still locked ones stay).
+    if let Ok(rd) = std::fs::read_dir(bin) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if names
+                .iter()
+                .any(|a| n.starts_with(&format!("{a}.old")) || n == format!("{a}.new"))
+            {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let staged = |a: &str| bin.join(format!("{a}.new"));
+    let unstage = || {
+        for a in names {
+            let _ = std::fs::remove_file(staged(a));
+        }
+    };
+    for a in names {
+        let r = std::fs::copy(from.join(a), staged(a))
+            .map_err(|e| format!("{a}: {e}"))
+            .and_then(|_| match (sha256_file(&from.join(a)), sha256_file(&staged(a))) {
+                (Ok(x), Ok(y)) if x == y => Ok(()),
+                _ => Err(format!("{a}: the staged copy does not match the verified file")),
+            });
+        if let Err(e) = r {
+            unstage();
+            return Err(e);
+        }
+    }
+    let stamp = qf_model::time::now_ms();
+    let old = |a: &str| bin.join(format!("{a}.old-{stamp}"));
+    // (name, had an old file)
+    let mut swapped: Vec<(&str, bool)> = vec![];
+    for a in names {
+        let target = bin.join(a);
+        let had = target.exists();
+        let r = (|| -> std::io::Result<()> {
+            if had {
+                std::fs::rename(&target, old(a))?;
+            }
+            std::fs::rename(staged(a), &target)
+        })();
+        if let Err(e) = r {
+            // This file: put the old one back if it was moved away.
+            if had && !target.exists() {
+                let _ = std::fs::rename(old(a), &target);
+            }
+            for (b, had_b) in swapped.iter().rev() {
+                let t = bin.join(b);
+                let _ = std::fs::remove_file(&t);
+                if *had_b {
+                    let _ = std::fs::rename(old(b), &t);
+                }
+            }
+            unstage();
+            return Err(format!("{a}: {e}"));
+        }
+        swapped.push((a, had));
+    }
+    // Remove what can be removed now (a running executable's old copy stays until next time).
+    for a in names {
+        let _ = std::fs::remove_file(old(a));
+    }
+    Ok(())
+}
+
+/// Run `quayflow.exe start` (clears the "stopped by user" marker) and return its state.
+fn restart_engine(dd: &DataDir, exe: &Path) -> String {
+    let _ = std::fs::remove_file(dd.stopped_marker());
+    match qf_adapter::process::hidden(exe).arg("start").output() {
+        Ok(o) => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let state = text
+                .lines()
+                .rev()
+                .find_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+                .and_then(|v| v["state"].as_str().map(String::from));
+            state.unwrap_or_else(|| format!("unknown (exit {})", o.status.code().unwrap_or(-1)))
+        }
+        Err(e) => format!("failed ({e})"),
+    }
+}
+
+/// Move the Mod to the release tag, as the installer does (matched pair).
+fn update_mod(tag: &str) -> Vec<String> {
+    let Some(claude) = qf_adapter::process::find_claude() else {
+        return vec!["Claude Code (claude) not found: the Mod was not updated; run the installer again once Claude Code is installed".into()];
+    };
+    let run = |args: &[&str]| -> (bool, String) {
+        match qf_adapter::process::hidden(&claude).args(args).output() {
+            Ok(o) => (
+                o.status.success(),
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                )
+                .trim()
+                .to_string(),
+            ),
+            Err(e) => (false, e.to_string()),
+        }
+    };
+    let market = format!("{REPO}#{tag}");
+    let (ok, out) = run(&["plugin", "marketplace", "list", "--json"]);
+    let listed = ok
+        && serde_json::from_str::<Value>(&out)
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .any(|m| m["name"] == "quayflow");
+    if listed {
+        let (ok, out) = run(&["plugin", "marketplace", "remove", "quayflow"]);
+        if !ok {
+            return vec![format!(
+                "the Mod was not updated: claude plugin marketplace remove quayflow failed: {out}"
+            )];
+        }
+    }
+    let (ok, out) = run(&["plugin", "marketplace", "add", &market]);
+    if !ok {
+        return vec![format!(
+            "the Mod was not updated: claude plugin marketplace add {market} failed: {out}. For a private repository run `gh auth login` and `gh auth setup-git` first, then `claude plugin marketplace add {market}` and `claude plugin install quayflow@quayflow --scope user`"
+        )];
+    }
+    let (ok, out) = run(&["plugin", "install", "quayflow@quayflow", "--scope", "user"]);
+    if !ok {
+        return vec![format!(
+            "the Mod was not updated: claude plugin install quayflow@quayflow failed: {out}; run `claude plugin install quayflow@quayflow --scope user` yourself"
+        )];
+    }
+    vec![format!(
+        "Mod moved to {tag}; restart running Claude sessions to load it"
+    )]
+}
+
+pub fn update(dd: &DataDir, check_only: bool, version: Option<&str>, skip_attestation: bool) -> Result<String, String> {
+    if std::env::var_os("QUAYFLOW_OFFLINE").is_some() {
+        return Err("network access is disabled (QUAYFLOW_OFFLINE is set)".into());
+    }
+    let gh_installed = have("gh");
+    let gh_ready = gh_installed && gh_signed_in();
+    let tag = match version {
+        Some(v) => v.to_string(),
+        None => latest_tag(gh_ready)?,
+    };
     let tmp = dd.root.join("update");
     let _ = std::fs::remove_dir_all(&tmp);
-    let assets = ["quayflow.exe", "quayflow-bg.exe", "SHA256SUMS"];
-    download(&assets, &tmp, version)?;
+    let mut assets = PROGRAM_FILES.to_vec();
+    assets.push("SHA256SUMS");
+    download(&assets, &tmp, &tag, gh_ready)?;
     let sums = parse_sums(&std::fs::read_to_string(tmp.join("SHA256SUMS")).map_err(|e| e.to_string())?);
-    for a in &assets[..2] {
+    for a in PROGRAM_FILES {
         verify_against(&sums, &tmp.join(a))?;
     }
-    let attest = if have("gh") {
-        let o = qf_adapter::process::hidden("gh")
-            .args(["attestation", "verify"])
-            .arg(tmp.join("quayflow.exe"))
-            .args(["--repo", REPO])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !o.status.success() {
-            return Err("GitHub attestation verification failed; refusing to install".into());
+    let attest = if skip_attestation {
+        "attestation skipped (--skip-attestation)"
+    } else if !gh_installed {
+        "attestation not checked (GitHub CLI not installed)"
+    } else if !gh_ready {
+        "attestation skipped (GitHub CLI not signed in; run `gh auth login` to enable)"
+    } else {
+        for a in PROGRAM_FILES {
+            let o = qf_adapter::process::hidden("gh")
+                .args(["attestation", "verify"])
+                .arg(tmp.join(a))
+                .args(["--repo", REPO])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !o.status.success() {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(format!(
+                    "GitHub attestation verification failed for {a}; refusing to install (--skip-attestation is only for builds you made yourself)"
+                ));
+            }
         }
         "attestation verified"
-    } else {
-        "attestation not checked (GitHub CLI not installed)"
     };
     let bin = dd.bin();
-    let current = sha256_file(&bin.join("quayflow.exe")).unwrap_or_default();
-    let new = sha256_file(&tmp.join("quayflow.exe"))?;
-    if current == new {
+    let same = PROGRAM_FILES
+        .iter()
+        .all(|a| matches!((sha256_file(&bin.join(a)), sha256_file(&tmp.join(a))), (Ok(x), Ok(y)) if x == y));
+    if same {
         let _ = std::fs::remove_dir_all(&tmp);
-        return Ok("Quayflow is up to date.".into());
+        return Ok(format!("Quayflow is up to date ({tag})."));
     }
     if check_only {
+        let _ = std::fs::remove_dir_all(&tmp);
         return Ok(format!(
-            "An update is available (hash verified, {attest}). Run `quayflow update` to install it."
+            "Quayflow {tag} is available (hash verified, {attest}). Run `quayflow update` to install it."
         ));
     }
     // Never replace components mid-transition.
+    let mut was_running = false;
     if let Some(c) = engine_alive(dd) {
         let st = c.get("/v1/state").map_err(|e| e.to_string())?;
         let busy = st["envs"].as_array().into_iter().flatten().any(|e| {
@@ -472,63 +841,163 @@ pub fn update(dd: &DataDir, check_only: bool, version: Option<&str>) -> Result<S
         if busy {
             return Err("a switch is in progress; try again in a minute".into());
         }
+        was_running = true;
         let _ = c.post("/v1/engine", json!({"action": "stop"}));
         let deadline = Instant::now() + Duration::from_secs(15);
         while qf_adapter::process::is_alive(c.pid()) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(200));
         }
     }
-    std::fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
-    for a in &assets[..2] {
-        let target = bin.join(a);
-        let old = bin.join(format!("{a}.old"));
-        let _ = std::fs::remove_file(&old);
-        if target.exists() {
-            std::fs::rename(&target, &old).map_err(|e| format!("{a}: {e}"))?;
-        }
-        std::fs::copy(tmp.join(a), &target).map_err(|e| format!("{a}: {e}"))?;
-    }
+    let swapped = swap_in(&bin, &tmp, &PROGRAM_FILES);
     let _ = std::fs::remove_dir_all(&tmp);
-    // The Mod, as the matched pair, through Claude's plugin manager.
-    let mut notes = vec![format!("engine updated (hash verified, {attest})")];
-    for args in [
-        vec!["plugin", "marketplace", "update", "quayflow"],
-        vec!["plugin", "update", "quayflow@quayflow"],
-    ] {
-        match qf_adapter::process::find_claude().map(|c| qf_adapter::process::hidden(c).args(&args).output()) {
-            Some(Ok(o)) if o.status.success() => {}
-            _ => notes.push(format!("run `claude {}` yourself", args.join(" "))),
+    if let Err(e) = swapped {
+        let mut msg = format!("update failed ({e}); the previous version was kept");
+        if was_running {
+            msg.push_str(&format!(
+                "; engine restarted: {}",
+                restart_engine(dd, &bin.join("quayflow.exe"))
+            ));
         }
+        return Err(msg);
     }
-    let _ = std::fs::remove_file(dd.stopped_marker());
-    let _ = qf_adapter::process::spawn_detached(&bin.join("quayflow.exe"), &["start"]);
-    notes.push("restart running Claude sessions to load the updated Mod".into());
+    let mut notes = vec![format!("engine updated to {tag} (hash verified, {attest})")];
+    notes.extend(update_mod(&tag));
+    if was_running {
+        notes.push(format!(
+            "engine restarted: {}",
+            restart_engine(dd, &bin.join("quayflow.exe"))
+        ));
+    }
     Ok(notes.join("; "))
 }
 
 // ---------------- uninstall ----------------
 
+/// `raw` (the user PATH as stored) without the entries naming `dir`, or None when no entry does.
+/// Compares case-insensitively, ignoring trailing slashes, in both raw (`%VAR%`) and expanded form.
+pub fn path_without_entry(raw: &str, dir: &Path, expand: impl Fn(&str) -> String) -> Option<String> {
+    let norm = |s: &str| s.trim().replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let d = dir.to_string_lossy();
+    let targets = [norm(&d), norm(&expand(&d))];
+    let parts: Vec<&str> = raw.split(';').collect();
+    let kept: Vec<&str> = parts
+        .iter()
+        .copied()
+        .filter(|e| {
+            e.trim().is_empty() || {
+                let (r, x) = (norm(e), norm(&expand(e)));
+                !targets.iter().any(|t| *t == r || *t == x)
+            }
+        })
+        .collect();
+    (kept.len() != parts.len()).then(|| kept.join(";"))
+}
+
+/// Tell running programs (Explorer, new terminals) that the user environment changed.
 #[cfg(windows)]
-fn remove_from_user_path(dir: &Path) {
-    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
-    if let Ok(k) =
-        winreg::RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Environment", KEY_READ | KEY_SET_VALUE)
-    {
-        if let Ok(p) = k.get_value::<String, _>("Path") {
-            let d = qf_model::normalize_path(&dir.to_string_lossy());
-            let kept: Vec<&str> = p
-                .split(';')
-                .filter(|x| !x.is_empty() && qf_model::normalize_path(x) != d)
-                .collect();
-            let _ = k.set_value("Path", &kept.join(";"));
-        }
+fn broadcast_environment_change() {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SendMessageTimeoutW(
+            hwnd: isize,
+            msg: u32,
+            wparam: usize,
+            lparam: isize,
+            flags: u32,
+            timeout: u32,
+            result: *mut usize,
+        ) -> isize;
+    }
+    const HWND_BROADCAST: isize = 0xffff;
+    const WM_SETTINGCHANGE: u32 = 0x001A;
+    const SMTO_ABORTIFHUNG: u32 = 0x0002;
+    let name: Vec<u16> = "Environment".encode_utf16().chain([0]).collect();
+    let mut result = 0usize;
+    // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the call.
+    unsafe {
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            name.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            5000,
+            &mut result,
+        );
     }
 }
 
-#[cfg(not(windows))]
-fn remove_from_user_path(_dir: &Path) {}
+/// Remove the Quayflow folder from the user PATH, keeping the value's registry type
+/// (REG_EXPAND_SZ stays REG_EXPAND_SZ). Returns whether PATH changed.
+#[cfg(windows)]
+fn remove_from_user_path(dir: &Path) -> Result<bool, String> {
+    use winreg::enums::{RegType, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
+    let k = winreg::RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags("Environment", KEY_READ | KEY_SET_VALUE)
+        .map_err(|e| e.to_string())?;
+    let v = match k.get_raw_value("Path") {
+        Ok(v) => v,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.to_string()),
+    };
+    if !matches!(v.vtype, RegType::REG_SZ | RegType::REG_EXPAND_SZ) || !v.bytes.len().is_multiple_of(2) {
+        return Err("the user PATH has an unexpected registry type; left untouched".into());
+    }
+    let units: Vec<u16> = v
+        .bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&c| u16::from_le_bytes(c))
+        .collect();
+    let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
+    let raw = String::from_utf16(&units[..end]).map_err(|_| "the user PATH is not valid text; left untouched")?;
+    let Some(new) = path_without_entry(&raw, dir, expand_env) else {
+        return Ok(false);
+    };
+    let bytes = new.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect();
+    k.set_raw_value("Path", &winreg::RegValue { bytes, vtype: v.vtype })
+        .map_err(|e| e.to_string())?;
+    broadcast_environment_change();
+    Ok(true)
+}
 
-pub fn uninstall(dd: &DataDir, delete_data: bool) -> Vec<String> {
+#[cfg(not(windows))]
+fn remove_from_user_path(_dir: &Path) -> Result<bool, String> {
+    Ok(false)
+}
+
+/// Lane names (folders under `lanes\`).
+pub fn lane_names(dd: &DataDir) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dd.lanes())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Lanes with a running Claude session.
+pub fn busy_lanes(dd: &DataDir) -> Vec<String> {
+    lane_names(dd)
+        .into_iter()
+        .filter(|n| !qf_adapter::sessions::read_sessions(&qf_adapter::lanes::lane_env(&dd.lanes(), n)).is_empty())
+        .collect()
+}
+
+pub fn uninstall(dd: &DataDir, delete_data: bool) -> Result<Vec<String>, String> {
+    if delete_data {
+        let busy = busy_lanes(dd);
+        if !busy.is_empty() {
+            return Err(format!(
+                "Claude sessions are running in lane(s) {}; end them first. Nothing was changed",
+                busy.join(", ")
+            ));
+        }
+    }
     let mut notes = vec![];
     if let Some(c) = engine_alive(dd) {
         let _ = c.post("/v1/engine", json!({"action": "stop"}));
@@ -559,11 +1028,21 @@ pub fn uninstall(dd: &DataDir, delete_data: bool) -> Vec<String> {
         Ok(()) => notes.push("startup entry removed".into()),
         Err(e) => notes.push(format!("startup entry: {e}")),
     }
-    match shell_uninstall(dd, &profile_paths()) {
-        Ok(p) if !p.is_empty() => notes.push(format!("prompt hook removed from {}", p.join(", "))),
-        _ => {}
+    let r = shell_uninstall(dd, &profile_paths());
+    if !r.done.is_empty() {
+        notes.push(format!("prompt hook removed from {}", r.done.join(", ")));
     }
-    remove_from_user_path(&dd.bin());
+    for p in r.problems {
+        notes.push(format!("prompt hook NOT removed: {p}"));
+    }
+    match remove_from_user_path(&dd.bin()) {
+        Ok(true) => notes.push(format!(
+            "{} removed from your user PATH (new terminals)",
+            dd.bin().display()
+        )),
+        Ok(false) => {}
+        Err(e) => notes.push(format!("user PATH: {e}")),
+    }
     notes.push("Claude's current login is left as it is: your active account keeps working".into());
     if delete_data {
         let journal = qf_engine::journal::Journal::new(dd.journal());
@@ -599,7 +1078,7 @@ pub fn uninstall(dd: &DataDir, delete_data: bool) -> Vec<String> {
             let _ = std::fs::remove_file(dd.journal());
         }
         notes.push(format!(
-            "vault, logs and settings deleted; protected backups of unknown logins are kept in {} (delete them yourself when no longer needed)",
+            "vault, logs, settings and lanes (with their logins and conversation history) deleted; protected backups of unknown logins are kept in {} (delete them yourself when no longer needed)",
             dd.backups().display()
         ));
     } else {
@@ -611,11 +1090,39 @@ pub fn uninstall(dd: &DataDir, delete_data: bool) -> Vec<String> {
     // The running executable cannot delete itself: remove the program folder after exit.
     let bin = dd.bin();
     if bin.exists() {
-        let script = format!("ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"", bin.display());
-        let _ = qf_adapter::process::hidden("cmd.exe").args(["/c", &script]).spawn();
-        notes.push("program files removed".into());
+        match spawn_cleanup(&bin) {
+            Ok(()) => notes.push(format!(
+                "program files in {} are removed in a few seconds",
+                bin.display()
+            )),
+            Err(e) => notes.push(format!("could not remove {} ({e}); delete it yourself", bin.display())),
+        }
     }
-    notes
+    Ok(notes)
+}
+
+/// The `cmd.exe` command line that deletes `bin` after this process has exited. Passed verbatim
+/// (Rust's argument quoting would turn the inner quotes into \" which cmd.exe does not understand).
+pub fn cleanup_command_line(bin: &Path) -> String {
+    format!("/d /c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"", bin.display())
+}
+
+#[cfg(windows)]
+fn spawn_cleanup(bin: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
+    qf_adapter::process::hidden("cmd.exe")
+        .raw_arg(cleanup_command_line(bin))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(windows))]
+fn spawn_cleanup(bin: &Path) -> std::io::Result<()> {
+    std::fs::remove_dir_all(bin)
 }
 
 #[cfg(test)]
@@ -625,10 +1132,10 @@ mod tests {
     #[test]
     fn profile_block_round_trip_preserves_user_content() {
         let user = "Set-Alias ll Get-ChildItem\r\nfunction prompt { 'x> ' }\r\n";
-        let with = add_block(user);
+        let with = add_block(user).unwrap();
         assert!(with.starts_with(user));
         assert!(with.contains("Enable-QuayflowPromptHook"));
-        assert_eq!(add_block(&with), with, "idempotent");
+        assert_eq!(add_block(&with).unwrap(), with, "idempotent");
         assert_eq!(strip_block(&with), user);
         assert_eq!(strip_block(user), user);
         // The psm1 documents the same block.
@@ -644,11 +1151,218 @@ mod tests {
         let profiles = vec![d.path().join("a").join("p.ps1"), d.path().join("b").join("p.ps1")];
         std::fs::create_dir_all(d.path().join("a")).unwrap();
         std::fs::write(&profiles[0], "# mine\r\n").unwrap();
-        shell_install(&dd, &profiles).unwrap();
+        let r = shell_install(&dd, &profiles).unwrap();
+        assert_eq!(r.done.len(), 2);
+        assert!(r.problems.is_empty());
         assert!(dd.shell().join("Quayflow.psm1").is_file());
-        shell_uninstall(&dd, &profiles).unwrap();
+        let r = shell_uninstall(&dd, &profiles);
+        assert_eq!(r.done.len(), 2);
+        assert!(r.problems.is_empty());
         assert_eq!(std::fs::read_to_string(&profiles[0]).unwrap(), "# mine\r\n");
         assert_eq!(std::fs::read_to_string(&profiles[1]).unwrap(), "");
+    }
+
+    #[test]
+    fn strip_block_keeps_text_when_end_marker_is_missing() {
+        let user = "a\r\n";
+        let tail = format!("{BLOCK_START}\r\n$x = 1\r\nfunction mine {{ 'keep me' }}\r\n");
+        let broken = format!("{user}{tail}");
+        assert_eq!(strip_block_checked(&broken), (broken.clone(), BlockState::Incomplete));
+        assert_eq!(strip_block(&broken), broken);
+        assert!(add_block(&broken).unwrap_err().contains("without its end line"));
+        // A complete block followed by a broken one: the complete one goes, the rest stays.
+        let both = format!("{user}{}\r\nb\r\n{tail}", profile_block());
+        assert_eq!(
+            strip_block_checked(&both),
+            (format!("{user}b\r\n{tail}"), BlockState::Incomplete)
+        );
+        assert_eq!(strip_block_checked("x\n").1, BlockState::Absent);
+        assert_eq!(strip_block_checked(&add_block("x\n").unwrap()).1, BlockState::Complete);
+    }
+
+    #[test]
+    fn shell_install_and_uninstall_refuse_an_incomplete_block() {
+        let d = tempfile::tempdir().unwrap();
+        let dd = DataDir::at(&d.path().join("qf"));
+        let p = d.path().join("p.ps1");
+        let broken = format!("# mine\r\n{BLOCK_START}\r\nfunction mine {{}}\r\n");
+        std::fs::write(&p, &broken).unwrap();
+        let r = shell_install(&dd, std::slice::from_ref(&p)).unwrap();
+        assert!(r.done.is_empty());
+        assert_eq!(r.problems.len(), 1, "{:?}", r.problems);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), broken);
+        let r = shell_uninstall(&dd, std::slice::from_ref(&p));
+        assert_eq!(r.problems.len(), 1);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), broken);
+    }
+
+    #[test]
+    fn decode_and_encode_by_bom() {
+        let text = "# héllo\r\nWrite-Host 'ü'\r\n";
+        for enc in [
+            TextEncoding::Utf8,
+            TextEncoding::Utf8Bom,
+            TextEncoding::Utf16Le,
+            TextEncoding::Utf16Be,
+        ] {
+            let bytes = encode_text(text, enc);
+            assert_eq!(decode_text(&bytes).unwrap(), (text.to_string(), enc), "{enc:?}");
+        }
+        assert_eq!(&encode_text("a", TextEncoding::Utf16Le), &[0xFF, 0xFE, b'a', 0]);
+        assert_eq!(&encode_text("a", TextEncoding::Utf8Bom), &[0xEF, 0xBB, 0xBF, b'a']);
+        // ANSI (Windows-1252 "é"), UTF-16 without BOM, broken UTF-16: refused.
+        assert!(decode_text(b"# caf\xe9\r\n").is_err());
+        assert!(decode_text(&[b'a', 0, b'b', 0]).is_err());
+        assert!(decode_text(&[0xFF, 0xFE, b'a']).is_err());
+    }
+
+    #[test]
+    fn shell_install_keeps_profile_encoding_and_refuses_undecodable_files() {
+        let d = tempfile::tempdir().unwrap();
+        let dd = DataDir::at(&d.path().join("qf"));
+        let user = "# mine ü\r\nSet-Alias ll Get-ChildItem\r\n";
+        for enc in [TextEncoding::Utf8Bom, TextEncoding::Utf16Le, TextEncoding::Utf16Be] {
+            let p = d.path().join(format!("{enc:?}.ps1"));
+            std::fs::write(&p, encode_text(user, enc)).unwrap();
+            let r = shell_install(&dd, std::slice::from_ref(&p)).unwrap();
+            assert!(r.problems.is_empty(), "{:?}", r.problems);
+            let (text, got) = decode_text(&std::fs::read(&p).unwrap()).unwrap();
+            assert_eq!(got, enc);
+            assert!(text.starts_with(user) && text.contains(BLOCK_START) && text.contains(BLOCK_END));
+            let r = shell_uninstall(&dd, std::slice::from_ref(&p));
+            assert_eq!(r.done.len(), 1);
+            assert_eq!(std::fs::read(&p).unwrap(), encode_text(user, enc), "{enc:?} round trip");
+        }
+        // ANSI profile: install refuses and leaves it byte for byte; uninstall has nothing to do.
+        let p = d.path().join("ansi.ps1");
+        let ansi = b"# caf\xe9\r\nSet-Alias ll Get-ChildItem\r\n".to_vec();
+        std::fs::write(&p, &ansi).unwrap();
+        let r = shell_install(&dd, std::slice::from_ref(&p)).unwrap();
+        assert!(r.done.is_empty());
+        assert!(r.problems[0].contains("left untouched"), "{:?}", r.problems);
+        assert_eq!(std::fs::read(&p).unwrap(), ansi);
+        let r = shell_uninstall(&dd, std::slice::from_ref(&p));
+        assert!(r.done.is_empty() && r.problems.is_empty());
+        assert_eq!(std::fs::read(&p).unwrap(), ansi);
+        // Unreadable (a folder where the profile should be): an error, not "empty".
+        let p = d.path().join("dir.ps1");
+        std::fs::create_dir_all(&p).unwrap();
+        let r = shell_install(&dd, std::slice::from_ref(&p)).unwrap();
+        assert_eq!(r.problems.len(), 1);
+        assert!(p.is_dir());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_install_writes_through_a_symlinked_profile() {
+        let d = tempfile::tempdir().unwrap();
+        let dd = DataDir::at(&d.path().join("qf"));
+        let target = d.path().join("dotfiles").join("profile.ps1");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "# mine\r\n").unwrap();
+        let link = d.path().join("Microsoft.PowerShell_profile.ps1");
+        if std::os::windows::fs::symlink_file(&target, &link).is_err() {
+            eprintln!("symbolic links need Developer Mode or elevation here; skipped");
+            return;
+        }
+        shell_install(&dd, std::slice::from_ref(&link)).unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(&target).unwrap().contains(BLOCK_START));
+        shell_uninstall(&dd, std::slice::from_ref(&link));
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "# mine\r\n");
+    }
+
+    #[test]
+    fn path_edit_removes_only_the_quayflow_entry() {
+        let expand = |s: &str| s.replace("%LOCALAPPDATA%", r"C:\Users\u\AppData\Local");
+        let bin = Path::new(r"C:\Users\u\AppData\Local\Quayflow\bin");
+        let raw = r"%USERPROFILE%\bin;C:\Users\u\AppData\Local\Quayflow\bin;C:\tools";
+        assert_eq!(
+            path_without_entry(raw, bin, expand).as_deref(),
+            Some(r"%USERPROFILE%\bin;C:\tools")
+        );
+        // Case, trailing slash and the unexpanded form all match.
+        let raw = r"C:\a;c:\users\U\appdata\local\quayflow\BIN\;%LOCALAPPDATA%\Quayflow\bin;C:\b";
+        assert_eq!(path_without_entry(raw, bin, expand).as_deref(), Some(r"C:\a;C:\b"));
+        // No entry: no rewrite at all.
+        assert_eq!(path_without_entry(r"%USERPROFILE%\bin;C:\tools", bin, expand), None);
+        assert_eq!(path_without_entry("", bin, expand), None);
+        // Similar-looking entries stay.
+        assert_eq!(
+            path_without_entry(r"C:\Users\u\AppData\Local\Quayflow\bin2", bin, expand),
+            None
+        );
+    }
+
+    #[test]
+    fn cleanup_command_keeps_quotes_for_cmd() {
+        let s = cleanup_command_line(Path::new(r"C:\Users\A B\AppData\Local\Quayflow\bin"));
+        assert!(
+            s.ends_with(r#"rmdir /s /q "C:\Users\A B\AppData\Local\Quayflow\bin""#),
+            "{s}"
+        );
+        assert!(!s.contains("\\\""), "{s}");
+    }
+
+    #[test]
+    fn swap_in_installs_all_or_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let (bin, new) = (d.path().join("bin"), d.path().join("new"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        for a in PROGRAM_FILES {
+            std::fs::write(bin.join(a), format!("old {a}")).unwrap();
+            std::fs::write(new.join(a), format!("new {a}")).unwrap();
+        }
+        // A missing source file: nothing changes and nothing is left staged.
+        std::fs::remove_file(new.join("quayflow-bg.exe")).unwrap();
+        assert!(swap_in(&bin, &new, &PROGRAM_FILES).is_err());
+        let names = |dir: &Path| {
+            let mut v: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(names(&bin), vec!["quayflow-bg.exe", "quayflow.exe"]);
+        for a in PROGRAM_FILES {
+            assert_eq!(std::fs::read_to_string(bin.join(a)).unwrap(), format!("old {a}"));
+        }
+        // Success: both replaced, old copies cleaned up.
+        std::fs::write(new.join("quayflow-bg.exe"), "new quayflow-bg.exe").unwrap();
+        swap_in(&bin, &new, &PROGRAM_FILES).unwrap();
+        for a in PROGRAM_FILES {
+            assert_eq!(std::fs::read_to_string(bin.join(a)).unwrap(), format!("new {a}"));
+        }
+        assert_eq!(names(&bin), vec!["quayflow-bg.exe", "quayflow.exe"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn swap_in_rolls_back_when_a_swap_fails() {
+        let d = tempfile::tempdir().unwrap();
+        let (bin, new) = (d.path().join("bin"), d.path().join("new"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        for a in PROGRAM_FILES {
+            std::fs::write(bin.join(a), format!("old {a}")).unwrap();
+            std::fs::write(new.join(a), format!("new {a}")).unwrap();
+        }
+        // Hold the second target open without delete sharing: it cannot be renamed away.
+        use std::os::windows::fs::OpenOptionsExt;
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1) // FILE_SHARE_READ only
+            .open(bin.join("quayflow-bg.exe"))
+            .unwrap();
+        assert!(swap_in(&bin, &new, &PROGRAM_FILES).is_err());
+        drop(held);
+        for a in PROGRAM_FILES {
+            assert_eq!(std::fs::read_to_string(bin.join(a)).unwrap(), format!("old {a}"), "{a}");
+        }
+        assert!(!bin.join("quayflow.exe.new").exists() && !bin.join("quayflow-bg.exe.new").exists());
     }
 
     #[test]
