@@ -11,6 +11,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const ENTROPY: &[u8] = b"quayflow-vault-v1";
 
@@ -200,18 +201,27 @@ impl Protector for Dpapi {
 }
 
 /// Write a file by temp + rename, retrying sharing violations.
+///
+/// The temp name is unique per call (process id + counter), so concurrent writers of the
+/// same target never share a temp file, and the temp file (which may hold tokens) is
+/// removed on every error path.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let dir = path.parent().ok_or_else(|| std::io::Error::other("no parent folder"))?;
     fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(
-        ".{}.quayflow-{}.tmp",
+        ".{}.quayflow-{}-{}.tmp",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
-        std::process::id()
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    {
-        let mut f = fs::File::create(&tmp)?;
+    let written = fs::File::create(&tmp).and_then(|mut f| {
         f.write_all(bytes)?;
-        f.sync_all()?;
+        f.sync_all()
+    });
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
     }
     let mut attempt = 0;
     loop {
@@ -417,6 +427,48 @@ mod tests {
         let v = Vault::with_protector(dir.path().to_path_buf(), Box::new(Broken));
         assert!(matches!(v.store("abc", &login()), Err(VaultError::Protect(_))));
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn concurrent_writers_of_one_target_do_not_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("t.json");
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let target = target.clone();
+                std::thread::spawn(move || {
+                    let body = format!("{i}").repeat(4096);
+                    for _ in 0..20 {
+                        atomic_write(&target, body.as_bytes()).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let text = fs::read_to_string(&target).unwrap();
+        assert_eq!(text.len(), 4096);
+        assert!(
+            text.chars().all(|c| c == text.chars().next().unwrap()),
+            "one writer's whole content"
+        );
+        let names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["t.json".to_string()], "no temp file left behind");
+    }
+
+    #[test]
+    fn failed_write_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // The target's folder is a file: nothing can be created, and nothing is left behind.
+        let blocker = dir.path().join("blocker");
+        fs::write(&blocker, "x").unwrap();
+        assert!(atomic_write(&blocker.join("t.json"), b"secret").is_err());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

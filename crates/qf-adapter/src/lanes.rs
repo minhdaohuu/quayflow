@@ -151,6 +151,16 @@ pub fn create(shared: &Env, lanes_dir: &Path, name: &str) -> Result<Env, String>
     Ok(lane)
 }
 
+/// Overwrite an existing file's content in place (open, truncate, write), keeping its file
+/// identity, so every other hard link to it (other lanes) still shares the new content.
+/// A temp-and-rename write would give the shared file a new identity and break those links.
+fn write_in_place(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().write(true).truncate(true).open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
 /// Check (and repair) the lane's links.
 pub fn check(shared: &Env, lane: &Env, repair: bool) -> Vec<LinkStatus> {
     let mut out = vec![];
@@ -195,6 +205,26 @@ pub fn check(shared: &Env, lane: &Env, repair: bool) -> Vec<LinkStatus> {
             });
             continue;
         }
+        if !target.exists() {
+            // Deleted from the shared setup: the lane's leftover copy must not bring it back.
+            let mut detail = "deleted from the shared setup; the lane still has its own copy".to_string();
+            let mut ok = false;
+            if repair {
+                match std::fs::remove_file(&link) {
+                    Ok(()) => {
+                        ok = true;
+                        detail = "lane copy removed (deleted from the shared setup)".into();
+                    }
+                    Err(e) => detail = format!("repair failed: {e}"),
+                }
+            }
+            out.push(LinkStatus {
+                item: f.to_string(),
+                ok,
+                detail,
+            });
+            continue;
+        }
         // Broken link: the newer content wins, then link again.
         let mut detail = "link broken (file replaced)".to_string();
         let mut ok = false;
@@ -202,13 +232,12 @@ pub fn check(shared: &Env, lane: &Env, repair: bool) -> Vec<LinkStatus> {
             let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
             let lane_newer = match (mtime(&link), mtime(&target)) {
                 (Some(l), Some(t)) => l > t,
-                (Some(_), None) => true,
                 _ => false,
             };
             let r = (|| -> std::io::Result<()> {
                 if lane_newer {
                     let text = std::fs::read(&link)?;
-                    qf_vault::atomic_write(&target, &text)?;
+                    write_in_place(&target, &text)?;
                 }
                 if link.exists() {
                     std::fs::remove_file(&link)?;
@@ -313,6 +342,52 @@ mod tests {
         );
         assert!(shared.projects_dir().join("C--p").join("memory").is_dir());
         assert!(shared.config_dir.join("settings.json").is_file());
+    }
+
+    fn shared_with_settings(d: &Path) -> Env {
+        let shared = Env::default_at(d);
+        std::fs::create_dir_all(&shared.config_dir).unwrap();
+        std::fs::write(shared.config_dir.join("settings.json"), "{\"a\":1}").unwrap();
+        std::fs::write(&shared.claude_json, "{}").unwrap();
+        shared
+    }
+
+    #[test]
+    fn repair_keeps_other_lanes_hard_links() {
+        let d = tempfile::tempdir().unwrap();
+        let shared = shared_with_settings(d.path());
+        let lanes = d.path().join("lanes");
+        let a = create(&shared, &lanes, "a").unwrap();
+        let b = create(&shared, &lanes, "b").unwrap();
+        let shared_file = shared.config_dir.join("settings.json");
+        let (fa, fb) = (a.config_dir.join("settings.json"), b.config_dir.join("settings.json"));
+        assert!(same_file(&fa, &shared_file) && same_file(&fb, &shared_file));
+        // Claude in lane a replaces its copy by rename: a's link breaks, a's copy is newer.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        qf_vault::atomic_write(&fa, b"{\"a\":2}").unwrap();
+        assert!(check(&shared, &a, true).iter().all(|s| s.ok));
+        assert_eq!(std::fs::read_to_string(&shared_file).unwrap(), "{\"a\":2}");
+        // Lane b's hard link survived the repair and shares the new content.
+        assert!(same_file(&fb, &shared_file), "b's hard link must survive a's repair");
+        assert_eq!(std::fs::read_to_string(&fb).unwrap(), "{\"a\":2}");
+        assert!(check(&shared, &b, false).iter().all(|s| s.ok));
+        std::fs::write(&fb, "{\"a\":3}").unwrap();
+        assert_eq!(std::fs::read_to_string(&fa).unwrap(), "{\"a\":3}");
+    }
+
+    #[test]
+    fn file_deleted_from_shared_setup_is_not_recreated() {
+        let d = tempfile::tempdir().unwrap();
+        let shared = shared_with_settings(d.path());
+        let lane = create(&shared, &d.path().join("lanes"), "a").unwrap();
+        let shared_file = shared.config_dir.join("settings.json");
+        std::fs::remove_file(&shared_file).unwrap();
+        let st = |r: Vec<LinkStatus>| r.into_iter().find(|s| s.item == "settings.json").unwrap();
+        assert!(!st(check(&shared, &lane, false)).ok);
+        assert!(st(check(&shared, &lane, true)).ok);
+        assert!(!shared_file.exists(), "the deleted shared file must not come back");
+        assert!(!lane.config_dir.join("settings.json").exists());
+        assert!(st(check(&shared, &lane, false)).ok);
     }
 
     #[test]

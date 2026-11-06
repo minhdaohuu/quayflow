@@ -44,8 +44,9 @@ impl std::error::Error for SwapError {}
 
 fn read_json(path: &Path) -> Result<Map<String, Value>, String> {
     match std::fs::read_to_string(path) {
-        Ok(t) if t.trim().is_empty() => Ok(Map::new()),
-        Ok(t) => match serde_json::from_str::<Value>(&t) {
+        Ok(t) if t.trim_start_matches('\u{feff}').trim().is_empty() => Ok(Map::new()),
+        // A leading UTF-8 byte order mark (added by some Windows editors) is not JSON.
+        Ok(t) => match serde_json::from_str::<Value>(t.strip_prefix('\u{feff}').unwrap_or(&t)) {
             Ok(Value::Object(m)) => Ok(m),
             Ok(_) => Err(format!("{} is not a JSON object", file_name(path))),
             Err(e) => Err(format!("{} is not valid JSON: {e}", file_name(path))),
@@ -256,6 +257,18 @@ mod tests {
         assert_eq!(keys, ["numStartups", "oauthAccount", "projects"]);
         assert!(!e.refresh_lock().exists() && !e.config_lock().exists());
         assert_eq!(read_identity(&e).as_deref(), Some("u-b"));
+    }
+
+    #[test]
+    fn bom_prefixed_files_are_read() {
+        let (_d, e) = setup();
+        for p in [e.credentials(), e.claude_json.clone()] {
+            let t = std::fs::read_to_string(&p).unwrap();
+            std::fs::write(&p, format!("\u{feff}{t}")).unwrap();
+        }
+        let l = read_login(&e).unwrap().unwrap();
+        assert_eq!(l.account_uuid(), Some("u-a"));
+        assert_eq!(read_identity(&e).as_deref(), Some("u-a"));
     }
 
     #[test]
