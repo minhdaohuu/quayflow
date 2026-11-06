@@ -30,8 +30,11 @@ impl Engine {
             "journalTail": self.journal.tail(200),
             "logTail": self.log.tail(200),
         });
+        // Field by field, so fixed-vocabulary fields ("kind": "personal") are never mistaken for
+        // an account label of the same text.
+        let mut report = report;
+        crate::journal::scrub_value(&mut report, &labels);
         let text = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
-        let text = crate::journal::scrub(&text, &labels);
         let path = self.dd.reports().join(format!("quayflow-report-{}.json", now_ms()));
         qf_vault::atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())?;
         let preview: String = text.lines().take(60).collect::<Vec<_>>().join("\n");

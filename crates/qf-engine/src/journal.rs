@@ -13,13 +13,60 @@ use std::sync::Mutex;
 
 /// Remove anything that looks like a credential, and replace known labels by ids.
 pub fn scrub(text: &str, labels: &[(String, String)]) -> String {
+    scrub_secrets(&replace_labels(text, labels))
+}
+
+/// Replace whole-word occurrences of account labels by `#id`. A label inside a longer word
+/// ("work" in "network") is left alone.
+fn replace_labels(text: &str, labels: &[(String, String)]) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
     let mut out = text.to_string();
     for (label, id) in labels {
-        if label.len() >= 2 {
-            out = out.replace(label.as_str(), &format!("#{id}"));
+        if label.chars().count() < 2 {
+            continue;
         }
+        let mut res = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(i) = rest.find(label.as_str()) {
+            let before = rest[..i].chars().next_back();
+            let after = rest[i + label.len()..].chars().next();
+            res.push_str(&rest[..i]);
+            if before.is_some_and(word) || after.is_some_and(word) {
+                res.push_str(label);
+            } else {
+                res.push('#');
+                res.push_str(id);
+            }
+            rest = &rest[i + label.len()..];
+        }
+        res.push_str(rest);
+        out = res;
     }
-    // Token-like strings: sk-ant-..., long base64/hex runs, bearer values, emails.
+    out
+}
+
+/// Fields with a fixed vocabulary (enums, states): never label-replaced, so a label that equals
+/// one of their values ("personal") cannot corrupt them. They still get the secret check.
+const STRUCTURED_KEYS: &[&str] = &[
+    "kind",
+    "how",
+    "state",
+    "mode",
+    "health",
+    "subscription",
+    "event",
+    "level",
+    "rank",
+    "source",
+    "stopReason",
+    "errorKind",
+    "code",
+    "version",
+    "protocol",
+];
+
+/// Token-like strings: sk-ant-..., long base64/hex runs, bearer values, emails.
+fn scrub_secrets(out: &str) -> String {
     let mut cleaned = String::with_capacity(out.len());
     for word in out.split_inclusive(|c: char| c.is_whitespace() || c == '"' || c == ',') {
         let core = word.trim_end_matches(|c: char| c.is_whitespace() || c == '"' || c == ',');
@@ -43,7 +90,7 @@ pub fn scrub(text: &str, labels: &[(String, String)]) -> String {
     cleaned
 }
 
-fn scrub_value(v: &mut Value, labels: &[(String, String)]) {
+pub fn scrub_value(v: &mut Value, labels: &[(String, String)]) {
     match v {
         Value::String(s) => *s = scrub(s, labels),
         Value::Array(a) => a.iter_mut().for_each(|x| scrub_value(x, labels)),
@@ -52,7 +99,12 @@ fn scrub_value(v: &mut Value, labels: &[(String, String)]) {
                 let k = k.to_ascii_lowercase();
                 !(k.contains("token") || k.contains("secret") || k.contains("email") || k == "prompt" || k == "answer")
             });
-            o.values_mut().for_each(|x| scrub_value(x, labels));
+            for (k, x) in o.iter_mut() {
+                match x {
+                    Value::String(s) if STRUCTURED_KEYS.contains(&k.as_str()) => *s = scrub_secrets(s),
+                    _ => scrub_value(x, labels),
+                }
+            }
         }
         _ => {}
     }
@@ -195,6 +247,24 @@ impl Logger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labels_are_replaced_as_whole_words_only_and_never_in_structured_fields() {
+        let labels = vec![
+            ("work".to_string(), "aaa".to_string()),
+            ("personal".to_string(), "bbb".to_string()),
+        ];
+        assert_eq!(
+            scrub("switched to work; network ok", &labels),
+            "switched to #aaa; network ok"
+        );
+        assert_eq!(scrub("personal-ish personal", &labels), "personal-ish #bbb");
+        let mut v = serde_json::json!({"kind": "personal", "label": "personal", "decision": "work at 90%"});
+        scrub_value(&mut v, &labels);
+        assert_eq!(v["kind"], "personal");
+        assert_eq!(v["label"], "#bbb");
+        assert_eq!(v["decision"], "#aaa at 90%");
+    }
 
     #[test]
     fn scrub_removes_secrets_and_labels() {

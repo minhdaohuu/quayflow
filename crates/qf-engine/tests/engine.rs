@@ -696,11 +696,41 @@ fn journal_and_report_hold_no_secrets() {
     )
     .unwrap();
     let (path, _) = e.build_report().unwrap();
-    for p in [w.dd.journal(), Path::new(&path).to_path_buf()] {
-        let t = std::fs::read_to_string(p).unwrap();
-        assert!(!t.contains("sk-ant"), "secret leaked");
-        assert!(!t.contains("\"personal\""), "label leaked into a record");
+    // The label "personal" must not appear as a value anywhere, except in the fixed-vocabulary
+    // `kind` field whose value happens to be the same word.
+    fn label_leaks(v: &serde_json::Value, key: &str) -> bool {
+        match v {
+            serde_json::Value::String(s) => {
+                key != "kind" && s.split(|c: char| !c.is_alphanumeric()).any(|w| w == "personal")
+            }
+            serde_json::Value::Array(a) => a.iter().any(|x| label_leaks(x, key)),
+            serde_json::Value::Object(o) => o.iter().any(|(k, x)| label_leaks(x, k)),
+            _ => false,
+        }
     }
+    for p in [w.dd.journal(), Path::new(&path).to_path_buf()] {
+        let t = std::fs::read_to_string(&p).unwrap();
+        assert!(!t.contains("sk-ant"), "secret leaked");
+        let docs: Vec<serde_json::Value> = if p.extension().is_some_and(|x| x == "jsonl") {
+            t.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+        } else {
+            vec![serde_json::from_str(&t).unwrap()]
+        };
+        assert!(
+            !docs.iter().any(|d| label_leaks(d, "")),
+            "label leaked into a record: {}",
+            p.display()
+        );
+    }
+    let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(
+        report["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["kind"] == "personal"),
+        "the account kind is kept, not replaced by an id"
+    );
     let logs: String = std::fs::read_dir(w.dd.logs())
         .unwrap()
         .flatten()
