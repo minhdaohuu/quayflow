@@ -16,6 +16,7 @@ Fixes from a full project review. Upgrading is recommended.
 - Managed policy: registry and `managed-settings.d` changes are noticed; a malformed `forceLoginOrgUUID` fails closed.
 - Sessions whose PID was reused are no longer counted as live; stale lock directories are not stranded; a failed lane creation is cleaned up; BOM-prefixed `.claude.json` handled for lanes; lane delete keeps the login if a session started meanwhile; `remove_account` keeps memory and disk in step.
 - CLI: `mode` and `migrate-poc` use the configured default group. Unsafe Claude version strings never name a file.
+- Mod status line and pane refresh when new usage figures arrive (they kept showing the figures from the last switch or notice, marked stale).
 - Mod: Welcome keeps consents given earlier; event batches are not lost when a state refresh fails; project assignment matching respects path boundaries; the simulated-limit hook only runs with `QUAYFLOW_SIM_LIMIT=1`.
 - Shell hook: same-terminal Replace works with non-ASCII paths.
 - Installer: attestation is required (signed-in GitHub CLI, release workflow, tag and commit) unless `-SkipAttestation` is passed; the Mod is checked against the release's `SOURCE_COMMIT`; a failed Mod upgrade restores the previous Mod; native command output parsed from stdout only; a hung old engine is stopped and reported truthfully.

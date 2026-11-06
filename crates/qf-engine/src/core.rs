@@ -391,6 +391,25 @@ impl Engine {
         self.events_cv.notify_all();
     }
 
+    /// Wake event watchers without a message or an activity entry: the state changed in a way
+    /// clients should redraw (new usage figures), but there is nothing to tell the user.
+    pub fn signal(&self, kind: &str) {
+        let mut ev = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        ev.seq += 1;
+        let seq = ev.seq;
+        ev.list.push_back(EngineEvent {
+            seq,
+            ts: now_ms(),
+            kind: kind.into(),
+            env: None,
+            text: None,
+        });
+        while ev.list.len() > 500 {
+            ev.list.pop_front();
+        }
+        self.events_cv.notify_all();
+    }
+
     pub fn seq(&self) -> u64 {
         self.events.lock().unwrap_or_else(|e| e.into_inner()).seq
     }
@@ -934,6 +953,7 @@ impl Engine {
                 })
                 .collect()
         };
+        let mut observed = false;
         for (id, live_env) in jobs {
             // The live account's freshest token is in the environment, not the vault.
             let login = match &live_env {
@@ -968,6 +988,7 @@ impl Engine {
                         .schedule
                         .on_success(&id, now_ms(), live, t.live_poll_s, t.idle_poll_s);
                     merge_observation(&mut inner.observations, o, false);
+                    observed = true;
                     if let Some(a) = inner.config.account_mut(&id) {
                         if a.health == Health::StaleAccess {
                             a.health = Health::Ok;
@@ -994,6 +1015,10 @@ impl Engine {
                 }
             }
             self.save_observations(&inner);
+        }
+        // Status lines and panes redraw from the state only when an event arrives.
+        if observed {
+            self.signal("usage");
         }
     }
 

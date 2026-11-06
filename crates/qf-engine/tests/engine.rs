@@ -1345,3 +1345,17 @@ fn unsafe_claude_versions_never_name_a_file() {
         assert!(!ok(bad), "{bad}");
     }
 }
+
+#[test]
+fn usage_signal_wakes_watchers_without_an_activity_entry() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let (seq, activity) = (e.seq(), e.lock().activity.len());
+    e.signal("usage");
+    assert_eq!(e.seq(), seq + 1, "watchers see a new event and redraw");
+    assert_eq!(
+        e.lock().activity.len(),
+        activity,
+        "nothing is added to the activity feed"
+    );
+}
