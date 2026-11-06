@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-06
+
+Fixes from a full project review. Upgrading is recommended.
+
+### Fixed
+- Switching: a failed `.claude.json` write rolls the credentials back. Mixed login files (one account's credentials under another's account record) are detected from the credentials themselves, held with automation paused, never stored under the wrong account, and repaired by the next switch. A failed capture of the outgoing login stops the switch. Switching to an account already live keeps Claude's fresher tokens instead of writing the older vault copy.
+- One login can no longer be switched into two environments at once (in-flight switches count). Cancel either wins or is refused before the write.
+- Engine: exclusive single-instance lock held for the engine's lifetime; torn journal lines repaired; reconcile really pauses automation when the login matches neither side; constant-time API token check; random-source failures stop start-up; duplicate-request cache keyed by method and path, with concurrent duplicates refused; session state pruned.
+- Recovery treats the account whose limit was just confirmed as limited, and ignores other models' windows when choosing the soonest account.
+- Managed policy: registry and `managed-settings.d` changes are noticed; a malformed `forceLoginOrgUUID` fails closed.
+- Sessions whose PID was reused are no longer counted as live; stale lock directories are not stranded; a failed lane creation is cleaned up; BOM-prefixed `.claude.json` handled for lanes; lane delete keeps the login if a session started meanwhile; `remove_account` keeps memory and disk in step.
+- CLI: `mode` and `migrate-poc` use the configured default group. Unsafe Claude version strings never name a file.
+- Mod: Welcome keeps consents given earlier; event batches are not lost when a state refresh fails; project assignment matching respects path boundaries; the simulated-limit hook only runs with `QUAYFLOW_SIM_LIMIT=1`.
+- Shell hook: same-terminal Replace works with non-ASCII paths.
+- Installer: attestation is required (signed-in GitHub CLI, release workflow, tag and commit) unless `-SkipAttestation` is passed; the Mod is checked against the release's `SOURCE_COMMIT`; a failed Mod upgrade restores the previous Mod; native command output parsed from stdout only; a hung old engine is stopped and reported truthfully.
+- CI and release: actions pinned to commit SHAs, no persisted credentials, tag name passed through the environment, tool versions pinned.
+
 ## [0.1.0] - 2026-11-06
 
 First release: a private pilot for Windows 10/11 x64 (Quayflow targets every platform Claude Code runs on; Windows is the first release).
@@ -25,5 +42,6 @@ First release: a private pilot for Windows 10/11 x64 (Quayflow targets every pla
 - Release assets are not attested while the repository is private; install with `-SkipAttestation`.
 - An idle account's access token expires, so it is not observed until it is used again (see `docs/known-limits.md`).
 
-[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/minhdaohuu/quayflow/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/minhdaohuu/quayflow/releases/tag/v0.1.0

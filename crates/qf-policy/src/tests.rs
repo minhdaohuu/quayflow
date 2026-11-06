@@ -351,3 +351,56 @@ fn per_model_window_counts_for_that_model_only() {
     ctx.model = Some("claude-sonnet-5-5");
     assert_eq!(switch_to(&proactive(&ctx)), Some("b"));
 }
+
+#[test]
+fn recovery_treats_the_confirmed_live_account_as_limited() {
+    let mut w = World::new();
+    // The live observation predates the limit (no window at the hard limit), but the limit
+    // was just confirmed: an account with a known reset is the soonest.
+    w.obs = vec![
+        obs("a", 3, &[("5h", 40.0, Some(NOW + 300 * MIN))]),
+        obs("b", 5, &[("5h", 100.0, Some(NOW + 60 * MIN))]),
+    ];
+    match recovery_target(&w.ctx()) {
+        RecoveryTarget::Soonest { id, available_at } => {
+            assert_eq!(id.as_str(), "b");
+            assert_eq!(available_at, NOW + 60 * MIN);
+        }
+        r => panic!("{r:?}"),
+    }
+    // A live reset already in the past says nothing about the limit just hit.
+    w.obs[0] = obs("a", 30, &[("5h", 100.0, Some(NOW - MIN))]);
+    assert!(matches!(recovery_target(&w.ctx()), RecoveryTarget::Soonest { .. }));
+    // A known future reset of the live account that comes first still wins.
+    w.obs[0] = obs("a", 0, &[("5h", 100.0, Some(NOW + 5 * MIN))]);
+    assert!(matches!(recovery_target(&w.ctx()), RecoveryTarget::None(_)));
+}
+
+#[test]
+fn recovery_soonest_ignores_other_models_windows() {
+    let mut w = World::new();
+    w.obs = vec![
+        obs("a", 0, &[("5h", 100.0, Some(NOW + 300 * MIN))]),
+        obs(
+            "b",
+            5,
+            &[
+                ("5h", 100.0, Some(NOW + 60 * MIN)),
+                ("7d:Opus", 100.0, Some(NOW + 600 * MIN)),
+            ],
+        ),
+        obs("c", 5, &[("5h", 100.0, Some(NOW + 90 * MIN))]),
+    ];
+    let soonest = |ctx: &Ctx| match recovery_target(ctx) {
+        RecoveryTarget::Soonest { id, available_at } => (id.0, available_at),
+        r => panic!("{r:?}"),
+    };
+    let mut ctx = w.ctx();
+    ctx.model = Some("claude-sonnet-5-5");
+    assert_eq!(soonest(&ctx), ("b".into(), NOW + 60 * MIN));
+    ctx.model = Some("claude-opus-5-5");
+    assert_eq!(soonest(&ctx), ("c".into(), NOW + 90 * MIN));
+    // Model unknown: every window counts.
+    ctx.model = None;
+    assert_eq!(soonest(&ctx), ("c".into(), NOW + 90 * MIN));
+}

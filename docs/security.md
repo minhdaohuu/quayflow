@@ -84,6 +84,10 @@ The PowerShell hook acts only on a claim file named for its own shell's process 
 
 Releases are reproducible, hashed and provenance-attested, but **not Authenticode-signed** in v0.1 . See [Verifying a release](verify-release.md).
 
+The installer always checks the SHA-256 hashes. It also requires a build-provenance attestation made by this repository's release workflow (`.github/workflows/release.yml`) for the release tag and commit, verified with a signed-in GitHub CLI; if it cannot verify one, it refuses to install, unless you pass `-SkipAttestation`, which leaves the hash check as the only protection. Private pilot releases are not attested and need that switch. The Mod is added from the release tag and refused if the checkout is not at the commit the release records in `SOURCE_COMMIT`; the gaps that remain are in [Known limits](known-limits.md#distribution).
+
+The release workflow pins every third-party GitHub Action to a full commit SHA and checks out without keeping the job token in the git configuration.
+
 ## Reporting a vulnerability
 
 Do not open a public issue for a security problem. Follow [SECURITY.md](../SECURITY.md): use GitHub's private vulnerability reporting, and redact tokens and account details.

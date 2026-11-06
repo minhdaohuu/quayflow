@@ -7,7 +7,7 @@
 use qf_model::time::{day_stamp, now_ms};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -144,8 +144,21 @@ impl Journal {
         if let Some(p) = self.path.parent() {
             std::fs::create_dir_all(p)?;
         }
-        let mut f = OpenOptions::new().create(true).append(true).open(&self.path)?;
-        f.write_all(format!("{rec}\n").as_bytes())?;
+        let mut f = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&self.path)?;
+        // A crash mid-append can leave a torn last line without its newline: start on a new
+        // line so this record is not glued onto it (the torn line alone is then dropped).
+        let torn = f.metadata()?.len() > 0 && {
+            let mut last = [0u8; 1];
+            f.seek(SeekFrom::End(-1))?;
+            f.read_exact(&mut last)?;
+            last[0] != b'\n'
+        };
+        let line = if torn { format!("\n{rec}\n") } else { format!("{rec}\n") };
+        f.write_all(line.as_bytes())?;
         if durable {
             f.sync_all()?;
         }
@@ -297,6 +310,18 @@ mod tests {
             "{text}"
         );
         assert_eq!(j.read_all()[0]["nested"]["ok"], 1);
+    }
+
+    #[test]
+    fn append_after_a_torn_line_keeps_the_new_record() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("j.jsonl");
+        std::fs::write(&p, "{\"ts\":1,\"event\":\"a\"}\n{\"ts\":2,\"event\":\"tor").unwrap();
+        let j = Journal::new(p);
+        j.append("b", json!({"id": "x"}), &[], true).unwrap();
+        let all = j.read_all();
+        let events: Vec<&str> = all.iter().filter_map(|r| r["event"].as_str()).collect();
+        assert_eq!(events, ["a", "b"]);
     }
 
     #[test]

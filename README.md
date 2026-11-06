@@ -128,7 +128,7 @@ Windows 10/11 x64 with Claude Code installed. No administrator rights. In PowerS
 irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1 | iex
 ```
 
-The installer shows what it will do and asks for consent. It verifies `quayflow.exe` against the release's `SHA256SUMS`, and its GitHub build-provenance attestation when the GitHub CLI is available, and refuses on a mismatch. It then installs to `%LOCALAPPDATA%\Quayflow\bin` and adds the Mod to Claude Code from the same release. Running it again upgrades.
+The installer shows what it will do and asks for consent. It verifies `quayflow.exe` against the release's `SHA256SUMS`, and its GitHub build-provenance attestation from the release workflow, and refuses on a mismatch. Verifying the attestation needs the GitHub CLI, signed in; without it the installer refuses unless you pass `-SkipAttestation`. It then installs to `%LOCALAPPDATA%\Quayflow\bin` and adds the Mod to Claude Code from the same release. Running it again upgrades.
 
 <details>
 <summary><b>Safer: download, verify, read, then run</b></summary>

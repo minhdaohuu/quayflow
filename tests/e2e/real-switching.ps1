@@ -139,7 +139,10 @@ try {
         Api POST '/v1/poll' @{} | Out-Null
         '{"atStep":1}' | Set-Content (Join-Path $qfHome 'simulate-limit.json')
         $since = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        $job = Start-Job2 $rc 'Run the Bash command: echo r1 . Then run the Bash command: echo r2 . Then reply with exactly RECOVERED.' 'Bash'
+        # The Mod's simulated-limit hook is off unless the Claude process has QUAYFLOW_SIM_LIMIT=1.
+        $env:QUAYFLOW_SIM_LIMIT = '1'
+        try { $job = Start-Job2 $rc 'Run the Bash command: echo r1 . Then run the Bash command: echo r2 . Then reply with exactly RECOVERED.' 'Bash' }
+        finally { Remove-Item Env:QUAYFLOW_SIM_LIMIT -ErrorAction SilentlyContinue }
         $job.Process.WaitForExit(); Start-Sleep 2
         $j = Get-Content (Join-Path $qfHome 'journal.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.ts -ge $since }
         $dec = @($j | Where-Object event -eq 'recovery.decision')

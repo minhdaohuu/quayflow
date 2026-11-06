@@ -12,8 +12,8 @@ export type Sent = { method: string; route: string; body: Record<string, unknown
 /** An engine answer with a status other than 200. */
 export type Reply = { status: number; body: unknown }
 
-/** An answer for one route: a body, a `Reply`, or a function of the request body. */
-export type RouteAnswer = unknown | ((body: Record<string, unknown>) => unknown | Promise<unknown>)
+/** An answer for one route: a body, a `Reply`, or a function of the request body (and query). */
+export type RouteAnswer = unknown | ((body: Record<string, unknown>, query: URLSearchParams) => unknown | Promise<unknown>)
 
 export type Answers = {
   hello?: Record<string, unknown>
@@ -30,6 +30,10 @@ export type Answers = {
   startLine?: Record<string, unknown>
   /** Answers for any other route, by path. Unlisted routes answer `{ ok: true }`. */
   routes?: Record<string, RouteAnswer>
+  /** Extra environment variables of the Claude process. */
+  env?: Record<string, string>
+  /** The content of `simulate-limit.json`; a `cmd /c move` of it takes it (once). */
+  simLimit?: string
 }
 
 /** The engine's refusal: HTTP 409 with its machine code (`needs_disclosure`, `needs_approval`). */
@@ -52,8 +56,10 @@ export function world(on: On, a: Answers = {}) {
   const ui: { kind: string; text?: string }[] = []
   const runs: string[][] = []
   let down = !!a.down
+  let simLimit = a.simLimit
+  const SIM_FILE = `${LOCALAPPDATA}\\Quayflow\\simulate-limit.json`
 
-  mock.env(on, { LOCALAPPDATA })
+  mock.env(on, { LOCALAPPDATA, ...a.env })
   const clock = mock.clock(on, { now: 1_800_000_000_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'S1' }))
@@ -68,12 +74,22 @@ export function world(on: On, a: Answers = {}) {
     if (!down && e.path === `${LOCALAPPDATA}\\Quayflow\\engine.json`) {
       return { value: JSON.stringify({ port: 47123, token: 'tok', pid: 9, protocol: 1 }) }
     }
+    if (simLimit !== undefined && e.path === SIM_FILE) return { value: simLimit }
     return { deny: 'ENOENT: no such file' }
   })
   on('fs.exists', () => ({ value: true }))
   on('fs.write', () => ({ value: undefined }))
   on('process.run', async (_$, e) => {
     runs.push([...e.argv])
+    if (/cmd(\.exe)?$/i.test(e.argv[0] ?? '')) {
+      // `cmd /d /c move /y <file> <taken>` renames the file: only the first taker succeeds.
+      if (e.argv.includes('move')) {
+        const ok = simLimit !== undefined && e.argv.includes(SIM_FILE)
+        if (ok) simLimit = undefined
+        return { value: { exitCode: ok ? 0 : 1, stdout: '', stderr: ok ? '' : 'The system cannot find the file specified.' } as never }
+      }
+      return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
+    }
     if (a.startDelayMs) await clock.sleep(a.startDelayMs)
     if (a.start === 'started' || a.start === 'running') down = false
     return { value: { exitCode: 0, stdout: `${JSON.stringify(a.startLine ?? { state: a.start ?? 'no_consent' })}\n`, stderr: '' } as never }
@@ -122,7 +138,7 @@ export function world(on: On, a: Answers = {}) {
       '/v1/events': { seq: state.seq, events: [] },
     }
     const route = a.routes?.[url.pathname]
-    const answer = typeof route === 'function' ? await (route as (b: Record<string, unknown>) => unknown)(body ?? {}) : (route ?? fixed[url.pathname] ?? { ok: true })
+    const answer = typeof route === 'function' ? await (route as (b: Record<string, unknown>, q: URLSearchParams) => unknown)(body ?? {}, url.searchParams) : (route ?? fixed[url.pathname] ?? { ok: true })
     return isReply(answer) ? reply(answer.status, answer.body) : reply(200, answer)
   })
 

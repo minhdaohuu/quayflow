@@ -455,11 +455,42 @@ pub enum RecoveryTarget {
 /// When an account becomes available: the latest reset among its exhausted windows.
 /// `None` when an exhausted window has no known reset time.
 pub fn available_at(o: &Observation, hard: f64, now: i64) -> Option<i64> {
+    available_at_for(o, hard, now, None)
+}
+
+/// Whether a window limits requests for `model`: 5h, 7d and the model's own weekly window
+/// (every per-model window when the model is unknown), as in `Observation::binding_for`.
+fn window_applies(w: &Window, model: Option<&str>) -> bool {
+    match (w.key.strip_prefix("7d:"), model) {
+        (Some(m), Some(model)) => qf_model::model_matches(m, model),
+        _ => true,
+    }
+}
+
+/// [`available_at`] counting only the windows that apply to the session's model: an
+/// exhausted weekly window of another model does not delay this session.
+pub fn available_at_for(o: &Observation, hard: f64, now: i64, model: Option<&str>) -> Option<i64> {
     let mut latest = now;
-    for w in o.windows.iter().filter(|w| w.pct >= hard) {
+    for w in o.windows.iter().filter(|w| w.pct >= hard && window_applies(w, model)) {
         latest = latest.max(w.resets_at?);
     }
     Some(latest)
+}
+
+/// When the live account, whose usage limit was just confirmed, becomes available again:
+/// the latest future reset among its exhausted windows. `None` (unknown, possibly far) when
+/// its observation shows no exhausted window with a future reset (it predates the limit, or
+/// the reset has passed and the limit was hit again) or an exhausted window has no reset time.
+fn live_limited_until(o: &Observation, hard: f64, now: i64, model: Option<&str>) -> Option<i64> {
+    let mut latest = None;
+    for w in o.windows.iter().filter(|w| w.pct >= hard && window_applies(w, model)) {
+        match w.resets_at {
+            Some(r) if r > now => latest = Some(latest.map_or(r, |l: i64| l.max(r))),
+            Some(_) => {}
+            None => return None,
+        }
+    }
+    latest
 }
 
 pub fn recovery_target(ctx: &Ctx) -> RecoveryTarget {
@@ -477,17 +508,19 @@ pub fn recovery_target(ctx: &Ctx) -> RecoveryTarget {
             continue;
         }
         let Some(o) = ctx.observation(id) else { continue };
-        if let Some(at) = available_at(o, hard, ctx.now) {
+        if let Some(at) = available_at_for(o, hard, ctx.now, ctx.model) {
             if best.as_ref().is_none_or(|(_, b)| at < *b) {
                 best = Some((id.clone(), at));
             }
         }
     }
     // The live account's own availability: switching only helps if another opens sooner.
+    // Its limit is confirmed, so it is never "available now"; without a known future reset
+    // its availability is unknown, and an account with a known reset is preferred.
     let live_at = ctx
         .live
         .and_then(|l| ctx.observation(l))
-        .and_then(|o| available_at(o, hard, ctx.now));
+        .and_then(|o| live_limited_until(o, hard, ctx.now, ctx.model));
     match best {
         Some((id, at)) if live_at.is_none_or(|l| at < l) => RecoveryTarget::Soonest { id, available_at: at },
         Some(_) => {

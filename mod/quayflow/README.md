@@ -41,7 +41,7 @@ What it does:
 
 | Path | Content |
 |---|---|
-| `.claude-plugin/plugin.json` | Manifest (`quayflow` 0.1.0), names the type contract |
+| `.claude-plugin/plugin.json` | Manifest (`quayflow` 0.1.1), names the type contract |
 | `hooks/hooks.json` | Names the hooks module `./register.tsx` |
 | `hooks/register.tsx` | Entry: `session.start`, `turn.step`, `command.run` (`/quay`), `ui.render` (pane `quay`) |
 | `hooks/context.ts` | Session context, `$.state` atoms (all reads and writes), headless UI gates |
@@ -104,7 +104,7 @@ Once `.claude-plugin/types/` exists, `tsc -p mod/quayflow` also works with the `
 
 ## Testing a usage limit by hand
 
-Write `%LOCALAPPDATA%\Quayflow\simulate-limit.json` as `{"atStep": 0}`. The next main-agent request with index >= `atStep` is answered as failed without being sent, once, and the file is emptied; the failure is reported with `simulated: true` and the engine decides as for a real one.
+Start Claude with `QUAYFLOW_SIM_LIMIT=1` in its environment (without it the hook is off), then write `%LOCALAPPDATA%\Quayflow\simulate-limit.json` as `{"atStep": 0}`. The next main-agent request with index >= `atStep` is answered as failed without being sent, once: the session that fires takes the file by renaming it, so only one session fires even when several run. The failure is reported with `simulated: true` and the engine decides as for a real one.
 
 ## Privacy
 

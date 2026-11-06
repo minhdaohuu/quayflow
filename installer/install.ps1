@@ -4,10 +4,12 @@ Install, upgrade or remove Quayflow for the current Windows user (no administrat
 
 .DESCRIPTION
 Downloads quayflow.exe and quayflow-bg.exe from a GitHub Release of
-minhdaohuu/quayflow, verifies them against the release's SHA256SUMS (and the
-GitHub build-provenance attestation when the GitHub CLI is available), installs
+minhdaohuu/quayflow, verifies them against the release's SHA256SUMS and the
+GitHub build-provenance attestation of the release workflow (this needs the
+GitHub CLI, signed in; -SkipAttestation skips that check explicitly), installs
 them to %LOCALAPPDATA%\Quayflow\bin, installs the Quayflow Mod into Claude Code
-from the same release tag, and records your consent for on-demand engine start.
+from the same release tag (refused if the tag no longer points at the commit
+the release was built from), and records your consent for on-demand engine start.
 
 Re-running it upgrades. It never reads, prints or changes a Claude login.
 
@@ -32,7 +34,9 @@ Also start the engine when you sign in to Windows (separate consent).
 .PARAMETER NoPlugin
 Install the engine only; do not touch Claude Code plugins.
 .PARAMETER SkipAttestation
-Do not run `gh attestation verify` (for builds you made yourself). Hash verification still applies.
+Do not run `gh attestation verify` (builds you made yourself, releases of a private
+repository, or no GitHub CLI). Without it the installer refuses files whose
+attestation it cannot verify. Hash verification still applies.
 .PARAMETER Yes
 Accept the consent text without asking (it is still shown).
 .PARAMETER Uninstall
@@ -86,11 +90,21 @@ function Install-Quayflow {
     function Write-Warn([string]$Text) { Write-Host "    $Text" -ForegroundColor Yellow }
 
     function Invoke-Native {
-        # Runs a native command; returns @{ Code; Out } without throwing on stderr (5.1).
+        # Runs a native command without throwing on stderr. Returns @{ Code; Out; Err; All }:
+        # Out is stdout only (what callers parse), All is both streams (for messages).
+        # PowerShell 5.1 and 7 both turn redirected stderr lines into ErrorRecords,
+        # which is how the two streams are told apart here.
         param([string]$File, [string[]]$Arguments)
         $ErrorActionPreference = 'Continue'
-        $out = & $File @Arguments 2>&1 | ForEach-Object { "$_" }
-        return @{ Code = $LASTEXITCODE; Out = (@($out) -join "`n").Trim() }
+        $out = New-Object System.Collections.Generic.List[string]
+        $err = New-Object System.Collections.Generic.List[string]
+        $all = New-Object System.Collections.Generic.List[string]
+        & $File @Arguments 2>&1 | ForEach-Object {
+            $line = "$_"
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $err.Add($line) } else { $out.Add($line) }
+            $all.Add($line)
+        }
+        return @{ Code = $LASTEXITCODE; Out = ($out -join "`n").Trim(); Err = ($err -join "`n").Trim(); All = ($all -join "`n").Trim() }
     }
 
     function Get-Sha256([string]$Path) {
@@ -173,33 +187,103 @@ function Install-Quayflow {
             }
         }
         if ($state) { return $state }
-        return "unknown, exit $($r.Code): $($r.Out)"
+        return "unknown, exit $($r.Code): $($r.All)"
     }
 
     function Get-ClaudeJson([string]$Claude, [string[]]$Arguments) {
         $r = Invoke-Native $Claude $Arguments
         if ($r.Code -ne 0) { return @() }
-        try { return @($r.Out | ConvertFrom-Json) } catch { return @() }
+        # Piped through ForEach-Object: Windows PowerShell 5.1's ConvertFrom-Json emits a JSON
+        # array as ONE object (an empty array would otherwise become a single bogus item).
+        try { return @($r.Out | ConvertFrom-Json | ForEach-Object { $_ }) } catch { return @() }
     }
 
     function Remove-PocPlugin([string]$Claude) {
         $plugins = Get-ClaudeJson $Claude @('plugin', 'list', '--json')
         if (@($plugins | Where-Object { $_.id -eq $PocPlugin }).Count -gt 0) {
             $r = Invoke-Native $Claude @('plugin', 'uninstall', $PocPlugin, '--scope', 'user')
-            if ($r.Code -eq 0) { Write-Info "Removed the PoC plugin $PocPlugin." } else { Write-Warn "Could not remove $PocPlugin`: $($r.Out)" }
+            if ($r.Code -eq 0) { Write-Info "Removed the PoC plugin $PocPlugin." } else { Write-Warn "Could not remove $PocPlugin`: $($r.All)" }
         }
         $markets = Get-ClaudeJson $Claude @('plugin', 'marketplace', 'list', '--json')
         if (@($markets | Where-Object { $_.name -eq $PocMarketplace }).Count -gt 0) {
             $r = Invoke-Native $Claude @('plugin', 'marketplace', 'remove', $PocMarketplace)
-            if ($r.Code -eq 0) { Write-Info "Removed the PoC marketplace $PocMarketplace." } else { Write-Warn "Could not remove marketplace $PocMarketplace`: $($r.Out)" }
+            if ($r.Code -eq 0) { Write-Info "Removed the PoC marketplace $PocMarketplace." } else { Write-Warn "Could not remove marketplace $PocMarketplace`: $($r.All)" }
         }
+    }
+
+    function Get-MarketplaceSource($Entry) {
+        # The source `claude plugin marketplace add` accepts, rebuilt from a `list --json` entry.
+        $names = @($Entry.PSObject.Properties.Name)
+        $ref = $null
+        if ($names -contains 'ref' -and $Entry.ref) { $ref = [string]$Entry.ref }
+        foreach ($field in 'repo', 'url') {
+            if ($names -contains $field -and $Entry.$field) {
+                if ($ref) { return "$($Entry.$field)#$ref" }
+                return [string]$Entry.$field
+            }
+        }
+        if ($names -contains 'path' -and $Entry.path) { return [string]$Entry.path }
+        return $null
+    }
+
+    function Install-Mod([string]$Claude, [string]$Market, [string]$ExpectedCommit) {
+        # Replaces the "quayflow" marketplace with $Market and installs the plugin from it.
+        # A marketplace name cannot be re-added from another source while it exists, so the
+        # old one is removed first; if the new one cannot be added (or is refused), the old
+        # one is put back, with the plugin when it was installed. Throws on failure.
+        $markets = Get-ClaudeJson $Claude @('plugin', 'marketplace', 'list', '--json')
+        $old = @($markets | Where-Object { $_.name -eq 'quayflow' }) | Select-Object -First 1
+        $oldSource = $null
+        if ($old) { $oldSource = Get-MarketplaceSource $old }
+        $hadPlugin = @(Get-ClaudeJson $Claude @('plugin', 'list', '--json') | Where-Object { $_.id -eq 'quayflow@quayflow' }).Count -gt 0
+
+        $restore = {
+            param([string]$Why)
+            if (-not $oldSource) { return $Why }
+            $rr = Invoke-Native $Claude @('plugin', 'marketplace', 'add', $oldSource)
+            if ($rr.Code -ne 0) { return "$Why`nThe previous Mod source ($oldSource) could not be restored: $($rr.All)" }
+            if ($hadPlugin) {
+                $rr = Invoke-Native $Claude @('plugin', 'install', 'quayflow@quayflow', '--scope', 'user')
+                if ($rr.Code -ne 0) { return "$Why`nThe previous marketplace was restored, but the plugin was not: $($rr.All)" }
+            }
+            return "$Why`nThe previous Mod ($oldSource) was restored."
+        }
+
+        if ($old) {
+            $r = Invoke-Native $Claude @('plugin', 'marketplace', 'remove', 'quayflow')
+            if ($r.Code -ne 0) { throw "Could not replace the quayflow marketplace: $($r.All)" }
+        }
+        $r = Invoke-Native $Claude @('plugin', 'marketplace', 'add', $Market)
+        if ($r.Code -ne 0) {
+            throw (& $restore "claude plugin marketplace add $Market failed: $($r.All)`nFor a private repository, run 'gh auth login' and 'gh auth setup-git' first (or set CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1 without an SSH key).")
+        }
+
+        if ($ExpectedCommit -and -not (Test-Path -LiteralPath $Market -PathType Container)) {
+            # Tags can be moved: the Mod must come from the commit the release was built from.
+            $entry = @(Get-ClaudeJson $Claude @('plugin', 'marketplace', 'list', '--json') | Where-Object { $_.name -eq 'quayflow' }) | Select-Object -First 1
+            $head = $null
+            $git = Get-App 'git'
+            if ($entry -and $git -and (@($entry.PSObject.Properties.Name) -contains 'installLocation') -and $entry.installLocation) {
+                $g = Invoke-Native $git @('-C', [string]$entry.installLocation, 'rev-parse', 'HEAD')
+                if ($g.Code -eq 0) { $head = $g.Out.Trim().ToLowerInvariant() }
+            }
+            if ($head -ne $ExpectedCommit) {
+                $null = Invoke-Native $Claude @('plugin', 'marketplace', 'remove', 'quayflow')
+                $seen = $head; if (-not $seen) { $seen = 'unknown (could not read the checkout)' }
+                throw (& $restore "REFUSED: the Mod source $Market is at commit $seen, but this release was built from $ExpectedCommit (the tag was moved, or the checkout could not be read). The Mod was not installed.")
+            }
+            Write-Info "Mod source verified: commit $ExpectedCommit"
+        }
+
+        $r = Invoke-Native $Claude @('plugin', 'install', 'quayflow@quayflow', '--scope', 'user')
+        if ($r.Code -ne 0) { throw "claude plugin install quayflow@quayflow failed: $($r.All)" }
     }
 
     # ------------------------------------------------------------------ checks
     if ($PSVersionTable.PSVersion.Major -lt 5 -or ($PSVersionTable.PSVersion.Major -eq 5 -and $PSVersionTable.PSVersion.Minor -lt 1)) {
         throw 'Quayflow needs Windows PowerShell 5.1 or PowerShell 7.'
     }
-    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Quayflow v0.1 runs on Windows only.' }
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'This installer is for Windows; Quayflow does not support this platform yet.' }
     if (-not [Environment]::Is64BitOperatingSystem) { throw 'Quayflow needs 64-bit Windows.' }
     if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA is not set; cannot choose an install folder.' }
 
@@ -286,6 +370,14 @@ Your responsibility:
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $ghReady = $false
     if ($gh) { $ghReady = ((Invoke-Native $gh @('auth', 'status', '--hostname', 'github.com')).Code -eq 0) }
+    # Build provenance is required unless skipped explicitly: refuse before downloading anything.
+    if (-not $SkipAttestation -and -not $ghReady) {
+        $why = 'the GitHub CLI (gh) is not installed'
+        if ($gh) { $why = "the GitHub CLI is not signed in (run 'gh auth login')" }
+        throw ("REFUSED: the build-provenance attestation cannot be verified because $why. Nothing was installed.`n" +
+            "Install and sign in to the GitHub CLI and run this again, or accept the SHA-256 check alone by adding -SkipAttestation:`n" +
+            "    & ([scriptblock]::Create((irm https://github.com/$Repo/releases/latest/download/install.ps1))) -SkipAttestation")
+    }
 
     $tag = $null
     if ($Version) {
@@ -308,11 +400,13 @@ Your responsibility:
                 if (-not (Test-Path -LiteralPath $p)) { throw "Missing $name in $srcFull." }
                 Copy-Item -LiteralPath $p -Destination (Join-Path $work $name)
             }
+            $p = Join-Path $srcFull 'SOURCE_COMMIT'
+            if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination (Join-Path $work 'SOURCE_COMMIT') }
         } else {
             if (-not $tag) {
                 if ($ghReady) {
                     $r = Invoke-Native $gh @('release', 'view', '--repo', $Repo, '--json', 'tagName', '--jq', '.tagName')
-                    if ($r.Code -ne 0) { throw "Could not find the latest release of $Repo with gh: $($r.Out)" }
+                    if ($r.Code -ne 0) { throw "Could not find the latest release of $Repo with gh: $($r.All)" }
                     $tag = $r.Out.Trim()
                 } else {
                     try {
@@ -327,13 +421,17 @@ Your responsibility:
                 $ghArgs = @('release', 'download', $tag, '--repo', $Repo, '--dir', $work, '--clobber')
                 foreach ($name in $needed) { $ghArgs += @('--pattern', $name) }
                 $r = Invoke-Native $gh $ghArgs
-                if ($r.Code -ne 0) { throw "gh release download failed: $($r.Out)" }
+                if ($r.Code -ne 0) { throw "gh release download failed: $($r.All)" }
+                # Older releases have no SOURCE_COMMIT; its absence is handled below.
+                $null = Invoke-Native $gh @('release', 'download', $tag, '--repo', $Repo, '--dir', $work, '--clobber', '--pattern', 'SOURCE_COMMIT')
             } else {
                 foreach ($name in $needed) {
                     $url = "https://github.com/$Repo/releases/download/$tag/$name"
                     try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile (Join-Path $work $name) }
                     catch { throw "Download failed: $url ($($_.Exception.Message))" }
                 }
+                try { Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/releases/download/$tag/SOURCE_COMMIT" -OutFile (Join-Path $work 'SOURCE_COMMIT') }
+                catch { Remove-Item -LiteralPath (Join-Path $work 'SOURCE_COMMIT') -Force -ErrorAction SilentlyContinue }
             }
         }
 
@@ -354,15 +452,32 @@ Your responsibility:
             Write-Info "$name  $actual  OK"
         }
 
+        # The commit the release was built from (absent from older releases).
+        $sourceCommit = $null
+        $commitFile = Join-Path $work 'SOURCE_COMMIT'
+        if (Test-Path -LiteralPath $commitFile) {
+            if (-not $sums.ContainsKey('SOURCE_COMMIT')) { throw 'REFUSED: SHA256SUMS has no entry for SOURCE_COMMIT. Nothing was installed.' }
+            $actual = Get-Sha256 $commitFile
+            if ($actual -ne $sums['SOURCE_COMMIT']) { throw "REFUSED: hash mismatch for SOURCE_COMMIT (expected $($sums['SOURCE_COMMIT']), got $actual). Nothing was installed." }
+            $sourceCommit = ([IO.File]::ReadAllText($commitFile)).Trim().ToLowerInvariant()
+            if ($sourceCommit -notmatch '^([0-9a-f]{40}|[0-9a-f]{64})$') { throw "REFUSED: SOURCE_COMMIT is not a commit id. Nothing was installed." }
+            Write-Info "SOURCE_COMMIT  $sourceCommit  OK"
+        }
+
         Write-Step 'Verifying build provenance (GitHub artifact attestation)'
         $attestation = 'verified'
         if ($SkipAttestation) { $attestation = 'skipped (-SkipAttestation)' }
-        elseif (-not $gh) { $attestation = 'skipped (GitHub CLI not installed)' }
-        elseif (-not $ghReady) { $attestation = "skipped (GitHub CLI not signed in; run 'gh auth login' to enable)" }
         else {
-            foreach ($name in $Assets) {
-                $r = Invoke-Native $gh @('attestation', 'verify', (Join-Path $work $name), '--repo', $Repo)
-                if ($r.Code -ne 0) { throw "REFUSED: attestation verification failed for $name. Nothing was installed.`n$($r.Out)" }
+            # Only an attestation made by this repository's release workflow counts, for this
+            # tag and commit when they are known.
+            $verifyArgs = @('--repo', $Repo, '--signer-workflow', "$Repo/.github/workflows/release.yml")
+            if ($tag) { $verifyArgs += @('--source-ref', "refs/tags/$tag") }
+            if ($sourceCommit) { $verifyArgs += @('--source-digest', $sourceCommit) }
+            $attested = @($Assets)
+            if ($sourceCommit) { $attested += 'SOURCE_COMMIT' }
+            foreach ($name in $attested) {
+                $r = Invoke-Native $gh (@('attestation', 'verify', (Join-Path $work $name)) + $verifyArgs)
+                if ($r.Code -ne 0) { throw "REFUSED: attestation verification failed for $name. Nothing was installed.`n$($r.All)" }
                 Write-Info "$name  attestation OK"
             }
         }
@@ -383,7 +498,13 @@ Your responsibility:
             Write-Info "Stopping the running engine (pid $($engine.Id)) for the upgrade."
             $stoppedForUpgrade = $true
             $null = Invoke-Native $Exe @('stop')
-            if (-not $engine.WaitForExit(20000)) { Write-Warn 'The engine did not stop within 20 s; its files will be replaced by rename.' }
+            if (-not $engine.WaitForExit(20000)) {
+                # Asked to stop and still running: end it, or the old version would keep serving
+                # (a later `start` would just report it as running).
+                Write-Warn "The engine did not stop within 20 s; ending it (pid $($engine.Id))."
+                try { $engine.Kill() } catch { $null = $_ }
+                if (-not $engine.WaitForExit(5000)) { Write-Warn 'The old engine could not be ended; its files will be replaced by rename.' }
+            }
         }
 
         foreach ($name in $Assets) {
@@ -402,7 +523,7 @@ Your responsibility:
             if ($installed -ne $hashes[$name]) { throw "Installed $name does not match the verified hash." }
         }
         $r = Invoke-Native $Exe @('version')
-        if ($r.Code -ne 0) { throw "quayflow.exe does not run: $($r.Out)" }
+        if ($r.Code -ne 0) { throw "quayflow.exe does not run: $($r.All)" }
         Write-Info "Installed: $($r.Out)"
 
         if (-not $NoPath) {
@@ -411,51 +532,54 @@ Your responsibility:
         }
 
         # ---------------------------------------------------------- the Mod
+        # A Mod failure does not undo the engine install: the consents and the engine restart
+        # below still happen (the consent was given above, and a restored previous Mod uses
+        # it too), and the installer reports the failure and exits with an error at the end.
+        $modError = $null
         if ($NoPlugin) {
             Write-Warn 'Skipped the Claude Code plugin (-NoPlugin).'
         } elseif (-not $claude) {
             Write-Warn 'Claude Code (claude) was not found on PATH. Install it, then run this installer again to add the Mod.'
         } else {
             Write-Step 'Installing the Quayflow Mod into Claude Code'
-            Remove-PocPlugin $claude
-            $market = $MarketplaceSource
-            if (-not $market -and $Source) {
-                $dir = Get-Item -LiteralPath (Resolve-Path -LiteralPath $Source).Path
-                while ($dir) {
-                    $manifest = Join-Path $dir.FullName '.claude-plugin\marketplace.json'
-                    if ((Test-Path -LiteralPath $manifest) -and ((Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).name -eq 'quayflow')) {
-                        $market = $dir.FullName; break
+            try {
+                Remove-PocPlugin $claude
+                $market = $MarketplaceSource
+                if (-not $market -and $Source) {
+                    $dir = Get-Item -LiteralPath (Resolve-Path -LiteralPath $Source).Path
+                    while ($dir) {
+                        $manifest = Join-Path $dir.FullName '.claude-plugin\marketplace.json'
+                        if ((Test-Path -LiteralPath $manifest) -and ((Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).name -eq 'quayflow')) {
+                            $market = $dir.FullName; break
+                        }
+                        $dir = $dir.Parent
                     }
-                    $dir = $dir.Parent
+                    if (-not $market) { throw "No Quayflow marketplace found above $Source; pass -MarketplaceSource <repository folder>." }
                 }
-                if (-not $market) { throw "No Quayflow marketplace found above $Source; pass -MarketplaceSource <repository folder>." }
+                if (-not $market) {
+                    $market = "$Repo#$tag"
+                    if (-not $sourceCommit) {
+                        Write-Warn "This release does not record its source commit (SOURCE_COMMIT), so the Mod from tag $tag cannot be checked against the commit the engine was built from."
+                    }
+                }
+                # Re-adding pins the Mod to the same release as the engine (matched pair).
+                Install-Mod $claude $market $sourceCommit
+                Write-Info "Marketplace: $market"
+                Write-Info 'Plugin quayflow@quayflow installed (user scope). Running Claude sessions load it after a restart.'
+            } catch {
+                $modError = $_.Exception.Message
+                Write-Warn "The Mod was not installed: $modError"
             }
-            if (-not $market) { $market = "$Repo#$tag" }
-
-            # Re-adding pins the Mod to the same release as the engine (matched pair).
-            $markets = Get-ClaudeJson $claude @('plugin', 'marketplace', 'list', '--json')
-            if (@($markets | Where-Object { $_.name -eq 'quayflow' }).Count -gt 0) {
-                $r = Invoke-Native $claude @('plugin', 'marketplace', 'remove', 'quayflow')
-                if ($r.Code -ne 0) { throw "Could not replace the quayflow marketplace: $($r.Out)" }
-            }
-            $r = Invoke-Native $claude @('plugin', 'marketplace', 'add', $market)
-            if ($r.Code -ne 0) {
-                throw "claude plugin marketplace add $market failed: $($r.Out)`nFor a private repository, run 'gh auth login' and 'gh auth setup-git' first (or set CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1 without an SSH key)."
-            }
-            Write-Info "Marketplace: $market"
-            $r = Invoke-Native $claude @('plugin', 'install', 'quayflow@quayflow', '--scope', 'user')
-            if ($r.Code -ne 0) { throw "claude plugin install quayflow@quayflow failed: $($r.Out)" }
-            Write-Info 'Plugin quayflow@quayflow installed (user scope). Running Claude sessions load it after a restart.'
         }
 
         # ---------------------------------------------------------- consents
         Write-Step 'Recording your consent'
         $r = Invoke-Native $Exe @('consent', 'engine-start', 'on')
-        if ($r.Code -ne 0) { throw "quayflow consent engine-start on failed: $($r.Out)" }
+        if ($r.Code -ne 0) { throw "quayflow consent engine-start on failed: $($r.All)" }
         Write-Info 'On-demand engine start: on'
         if ($Startup) {
             $r = Invoke-Native $Exe @('consent', 'signin-startup', 'on')
-            if ($r.Code -ne 0) { throw "quayflow consent signin-startup on failed: $($r.Out)" }
+            if ($r.Code -ne 0) { throw "quayflow consent signin-startup on failed: $($r.All)" }
             Write-Info 'Engine start at sign-in: on'
         }
         if ($wasRunning) {
@@ -463,17 +587,24 @@ Your responsibility:
             # (`start --if-consented` would honor that marker and leave the engine off).
             $state = Start-Engine
             $restarted = $true
-            if ($state -eq 'started' -or $state -eq 'running') { Write-Info "Engine restarted ($state)." }
+            $now = Get-EngineProcess
+            if ($now -and -not $engine.HasExited -and $now.Id -eq $engine.Id) {
+                # `start` found the OLD engine still running: it is not the new version. Its
+                # "stopped by user" marker would block later on-demand starts, so it goes.
+                Remove-Item -LiteralPath (Join-Path $DataRoot 'engine.stopped') -Force -ErrorAction SilentlyContinue
+                Write-Warn "The previous engine (pid $($engine.Id)) is still running the old version. Run 'quayflow stop' and then 'quayflow start', or sign out of Windows and back in."
+            } elseif ($state -eq 'started' -or $state -eq 'running') { Write-Info "Engine restarted ($state)." }
             else { Write-Warn "The engine did not restart ($state). Run 'quayflow start' (log: $(Join-Path $DataRoot 'logs'))." }
         }
 
-        Write-Step 'Done'
         $shown = $tag; if (-not $shown) { $shown = '(local files)' }
+        if ($modError) { Write-Step 'Done, except the Mod' } else { Write-Step 'Done' }
         Write-Info "Version:     $shown"
         Write-Info "Attestation: $attestation"
         Write-Info 'Next: start Claude as usual (claude) and run /quay to register your login and choose groups.'
         Write-Info 'Optional: quayflow shell install   (same-terminal session replacement in PowerShell)'
         Write-Info 'Uninstall:  quayflow uninstall'
+        if ($modError) { throw "The engine was installed, but the Mod was not: $modError`nFix the cause and run the installer again." }
     } finally {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
         if ($stoppedForUpgrade -and -not $restarted) {

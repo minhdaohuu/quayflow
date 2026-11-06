@@ -118,8 +118,15 @@ export function startWatcher($: EngineInterface): void {
           failBackoff = Math.min(failBackoff * 2, 60_000)
           continue
         }
+        if (ev.events.length && !(await refresh($))) {
+          // The state behind this batch was not read: keep the sequence where it was, so
+          // the batch is not lost, and refresh again (after a pause) before the next poll.
+          drawnOn = false
+          await pause($, failBackoff)
+          failBackoff = Math.min(failBackoff * 2, 60_000)
+          continue
+        }
         failBackoff = 5_000
-        if (ev.events.length) await refresh($)
         Q.seq = Math.max(Q.seq, ev.seq)
         // An engine that answers at once with nothing (no long-poll support) is not hammered.
         if (Date.now() - startedAt < 2_000) await pause($, 5_000)

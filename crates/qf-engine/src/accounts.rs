@@ -247,8 +247,18 @@ impl Engine {
         }
         let id = AccountId::from_uuid(&uuid);
         let mut inner = self.lock();
+        // Inconsistent login files (credentials of one account, record of another) name no
+        // account reliably: nothing is registered or stored from them.
+        let mixed = inner.envs.get(&env_id).is_some_and(|s| s.mixed.is_some())
+            || matches!(self.live_owner(&inner, &login), crate::core::LiveOwner::Mixed { .. });
+        if mixed {
+            return Err(ApiErr::refused(
+                "the login files of this environment are inconsistent (credentials of one account, account record of another); switch to an account first",
+            ));
+        }
         if let Some(existing) = inner.config.account(&id).cloned() {
-            self.capture(&mut inner, &id, &login);
+            self.capture(&mut inner, &id, &login)
+                .map_err(|e| ApiErr::new(500, "vault", e))?;
             return Ok((
                 id,
                 Some(format!(
@@ -366,11 +376,13 @@ impl Engine {
                         continue;
                     }
                     if inner.config.account(&id).is_some() {
-                        self.capture(&mut inner, &id, &p.login);
-                        out.push(format!(
-                            "{}: already registered; protected copy refreshed if newer",
-                            p.name
-                        ));
+                        match self.capture(&mut inner, &id, &p.login) {
+                            Ok(_) => out.push(format!(
+                                "{}: already registered; protected copy refreshed if newer",
+                                p.name
+                            )),
+                            Err(e) => out.push(format!("{}: already registered; not refreshed ({e})", p.name)),
+                        }
                         continue;
                     }
                     let mut label = p.name.clone();
@@ -698,24 +710,51 @@ impl Engine {
     pub fn remove_account(&self, key: &str) -> Result<(), ApiErr> {
         let mut inner = self.lock();
         let id = self.find_account(&inner, key)?;
-        if inner.envs.values().any(|s| s.live.as_ref() == Some(&id)) {
+        if inner.envs.values().any(|s| s.holds_login(&id)) {
             return Err(ApiErr::refused("this account is live; switch to another account first"));
         }
-        inner.config.accounts.retain(|a| a.id != id);
-        for g in inner.config.groups.iter_mut() {
+        if inner.envs.values().any(|s| {
+            s.transition
+                .as_ref()
+                .is_some_and(|t| t.to == id && !t.state.is_terminal())
+        }) {
+            return Err(ApiErr::refused(
+                "a switch to this account is in progress; try again when it ends",
+            ));
+        }
+        // Save the new config first (from a copy), then commit it in memory, then delete the
+        // protected copy: a failure leaves memory and disk agreeing, and at worst an orphaned
+        // vault entry (never a registered account without its copy).
+        let mut config = inner.config.clone();
+        config.accounts.retain(|a| a.id != id);
+        for g in config.groups.iter_mut() {
             g.accounts.retain(|a| a != &id);
             if g.preferred.as_ref() == Some(&id) {
                 g.preferred = None;
             }
             g.ranks.remove(&id);
         }
+        let previous = std::mem::replace(&mut inner.config, config);
+        if let Err(e) = self.save_config(&inner) {
+            inner.config = previous;
+            return Err(ApiErr::invalid(e));
+        }
         inner.observations.retain(|o| o.account != id);
-        self.vault
-            .remove(id.as_str())
-            .map_err(|e| ApiErr::new(500, "vault", e.to_string()))?;
-        self.save_config(&inner).map_err(ApiErr::invalid)?;
         self.save_observations(&inner);
         self.record(&inner, "account.removed", json!({"account": id}), true);
+        if let Err(e) = self.vault.remove(id.as_str()) {
+            self.log.log(
+                "error",
+                "vault.remove_failed",
+                json!({"account": id, "error": e.to_string()}),
+                &[],
+            );
+            return Err(ApiErr::new(
+                500,
+                "vault",
+                format!("removed from Quayflow, but its protected copy could not be deleted: {e}"),
+            ));
+        }
         Ok(())
     }
 
@@ -740,6 +779,9 @@ impl Engine {
         let s = |k: &str| body.get(k).and_then(|v| v.as_str()).map(|x| x.trim().to_string());
         let group = s("group")
             .or_else(|| s("name"))
+            .filter(|g| !g.is_empty())
+            // A mode change without a group applies to the configured default group.
+            .or_else(|| (op == "mode").then(|| inner.config.default_group.clone()))
             .ok_or_else(|| ApiErr::invalid("group required"))?;
         let msg = match op {
             "create" => {

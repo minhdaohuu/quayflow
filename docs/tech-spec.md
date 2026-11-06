@@ -25,7 +25,7 @@ Companion to [requirements.md](requirements.md). This file holds the engineering
 | `journal.jsonl` | Durable journal (switches, recovery decisions, policy overrides, unresolved operations); fsync before a transition write |
 | `logs\quayflow-YYYYMMDD.jsonl` | Sanitized structured log; 7 days, 20 MB per day cap |
 | `engine.json` | `{port, token, pid, protocol, version, startedAt}` for the running engine |
-| `engine.lock` | Single-instance lock: PID, created with `CREATE_NEW`; a dead holder is replaced |
+| `engine.lock` | Single-instance lock: holds the engine's PID and stays open without write sharing for the engine's lifetime; a sharing violation means another engine runs, and the OS releases it when a crashed engine exits |
 | `engine.stopped` | Present after an intentional stop: on-demand start from the Mod is skipped until `quayflow start` is run by the user |
 | `compat\<claude-version>.json` | `qf_model::CompatRecord` |
 | `lanes\<name>\` | Lane credential environment (its own `.credentials.json`, `.claude.json`, `sessions\`, policy files; links to the shared setup) |

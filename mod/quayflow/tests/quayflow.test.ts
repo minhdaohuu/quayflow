@@ -3,8 +3,9 @@
 // Run: claude plugin test mod/quayflow
 import { describe, expect, test } from 'claude-code/testing'
 
+import { pathCovers } from '../hooks/format'
 import { errorKindOf, isFailedRequest } from '../hooks/step'
-import { failed, ok } from './fixtures'
+import { STATE, failed, ok } from './fixtures'
 import { ENGINE_EXE, PROFILE_UUID, STEP, quay, refuse, start, step, world } from './harness'
 
 async function hash12(value: string): Promise<string> {
@@ -25,7 +26,7 @@ describe('handshake and engine start', () => {
     expect(r.stopReason).toBeNull()
     expect(requests).toBe(1)
     expect(w.routes()).toEqual(['/v1/hello'])
-    expect(w.bodies('/v1/hello')[0]).toEqual({ protocol: 1, modVersion: '0.1.0', sessionId: 'S1', headless: true, claudeVersion: '2.1.316' })
+    expect(w.bodies('/v1/hello')[0]).toEqual({ protocol: 1, modVersion: '0.1.1', sessionId: 'S1', headless: true, claudeVersion: '2.1.316' })
   })
 
   test('no engine: start runs once with --if-consented; no_consent is respected', async ($, on) => {
@@ -107,6 +108,38 @@ describe('request hook', () => {
     expect(w.bodies('/v1/step').map(b => b.ok)).toEqual([false, true])
   })
 
+  test('simulate-limit.json is ignored unless QUAYFLOW_SIM_LIMIT=1', async ($, on) => {
+    const w = world(on, { simLimit: '{"atStep":0}' })
+    let requests = 0
+    on('turn.step', async function* (_$, e) {
+      requests += 1
+      return ok(e)
+    })
+    await start($, w, false)
+    await step($)
+    expect(requests).toBe(1)
+    expect(w.routes()).not.toContain('/v1/failure')
+    expect(w.runs.filter(r => r.includes('move'))).toEqual([])
+  })
+
+  test('with QUAYFLOW_SIM_LIMIT=1 the simulated limit is taken by rename and fires once', async ($, on) => {
+    const w = world(on, { simLimit: '{"atStep":0}', env: { QUAYFLOW_SIM_LIMIT: '1' }, recover: { retry: false, why: 'test' } })
+    let requests = 0
+    on('turn.step', async function* (_$, e) {
+      requests += 1
+      return ok(e)
+    })
+    await start($, w, false)
+    await step($)
+    // Answered as failed without being sent.
+    expect(requests).toBe(0)
+    expect(w.bodies('/v1/failure')).toEqual([expect.objectContaining({ simulated: true })])
+    expect(w.runs.filter(r => r.includes('move'))).toHaveLength(1)
+    await step($, { ...STEP, turnId: 'turn-2' })
+    expect(requests).toBe(1)
+    expect(w.bodies('/v1/failure')).toHaveLength(1)
+  })
+
   test('an interrupted request is never recovered or retried', async ($, on) => {
     const w = world(on)
     let requests = 0
@@ -152,6 +185,17 @@ describe('request hook', () => {
     expect(s0).toBeGreaterThanOrEqual(t0)
     expect(s1).toBeGreaterThanOrEqual(s0)
     expect(w.bodies('/v1/adoption')[0]?.startedAt).toBe(s0)
+  })
+
+  test('a project path covers its own folder and subfolders only', () => {
+    expect(pathCovers('C:\\code\\app', 'C:\\code\\app')).toBe(true)
+    expect(pathCovers('C:\\code\\app\\', 'c:\\CODE\\app')).toBe(true)
+    expect(pathCovers('C:\\code\\app', 'C:\\code\\app\\src')).toBe(true)
+    expect(pathCovers('C:/code/app', 'C:\\code\\app\\src')).toBe(true)
+    expect(pathCovers('C:\\code\\app', 'C:\\code\\app-v2')).toBe(false)
+    expect(pathCovers('C:\\code\\app', 'C:\\code')).toBe(false)
+    expect(pathCovers('C:\\', 'C:\\code')).toBe(true)
+    expect(pathCovers('', 'C:\\code')).toBe(false)
   })
 
   test('failure rules', () => {
@@ -301,6 +345,34 @@ describe('interactive sessions', () => {
       expect(status).toMatch(/^Quayflow · suggest/)
     })
   }
+
+  test('a failed refresh after an event batch keeps the sequence, so the batch is read again', async ($, on) => {
+    const seq0 = STATE.seq
+    let states = 0
+    const since: number[] = []
+    const w = world(on, {
+      routes: {
+        // First read at start-up works; the read after the event batch fails once; later reads see the new state.
+        '/v1/state': () => {
+          states += 1
+          if (states === 2) return { status: 503, body: { error: 'busy', code: 'busy' } }
+          return states === 1 ? STATE : { ...STATE, seq: seq0 + 1 }
+        },
+        '/v1/events': (_b: Record<string, unknown>, q: URLSearchParams) => {
+          const s = Number(q.get('since'))
+          since.push(s)
+          return s < seq0 + 1 ? { seq: seq0 + 1, events: [{ seq: seq0 + 1, ts: 1, kind: 'usage' }] } : { seq: seq0 + 1, events: [] }
+        },
+      },
+    })
+    await start($, w, true)
+    await w.clock.advance(60_000)
+    await w.clock.settle()
+    // The failed read did not advance the sequence: the state was read again and only then did polling move on.
+    expect(states).toBeGreaterThanOrEqual(3)
+    expect(since[0]).toBe(seq0)
+    expect(since).toContain(seq0 + 1)
+  })
 
   test('a late failing start-up attempt does not overwrite a link /quay start brought on', async ($, on) => {
     let helloOk = true

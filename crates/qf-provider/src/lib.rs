@@ -214,6 +214,11 @@ pub struct Schedule {
     pub note: BTreeMap<String, String>,
 }
 
+/// Seconds to milliseconds, saturating at `i64::MAX`.
+fn secs_to_ms(s: u64) -> i64 {
+    i64::try_from(s).unwrap_or(i64::MAX).saturating_mul(1000)
+}
+
 impl Schedule {
     pub fn due(&self, id: &AccountId, now: i64) -> bool {
         self.next_at.get(id.as_str()).is_none_or(|t| now >= *t)
@@ -234,16 +239,17 @@ impl Schedule {
                 retry_after_s,
             } => {
                 let doubled = self.backoff_ms.get(id.as_str()).copied().unwrap_or(60_000) * 2;
-                let ra = retry_after_s.map(|s| s as i64 * 1000).unwrap_or(0);
-                let w = doubled.max(ra).min(max_backoff_s as i64 * 1000);
+                // A server-supplied Retry-After can be any number: saturate, never overflow.
+                let ra = retry_after_s.map(secs_to_ms).unwrap_or(0);
+                let w = doubled.max(ra).min(secs_to_ms(max_backoff_s));
                 self.backoff_ms.insert(id.0.clone(), w);
                 w
             }
             // Expired idle token: look again later; it changes when the account is live.
             ProviderError::Expired => 10 * 60_000,
-            _ => live_s as i64 * 1000,
+            _ => secs_to_ms(live_s),
         };
-        self.next_at.insert(id.0.clone(), now + wait);
+        self.next_at.insert(id.0.clone(), now.saturating_add(wait));
     }
 
     /// After an engine restart, do not burst: the first poll waits at least a minute
@@ -338,6 +344,14 @@ mod tests {
         };
         s.on_error(&id, 0, &ra, 60, 900);
         assert_eq!(s.next_at["a"], 900_000, "Retry-After also capped");
+        for huge in [u64::MAX, i64::MAX as u64, i64::MAX as u64 / 1000 + 1] {
+            let ra = ProviderError::Status {
+                code: 429,
+                retry_after_s: Some(huge),
+            };
+            s.on_error(&id, 0, &ra, 60, 900);
+            assert_eq!(s.next_at["a"], 900_000, "huge Retry-After saturates and is capped");
+        }
         s.poke(&id);
         assert!(!s.due(&id, 0), "poke does not cut a backoff short");
         s.on_success(&id, 0, false, 60, 600);

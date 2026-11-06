@@ -191,8 +191,26 @@ fn remove_stale(spec: &LockSpec) -> bool {
         return true;
     }
     // A fresh lock was moved, or the stale one cannot be deleted: put it back.
-    let _ = std::fs::rename(&aside, path);
+    put_back(&aside, path);
     false
+}
+
+/// Return a directory moved aside by [`remove_stale`] to the lock path. If the path was
+/// taken by a new lock in the meantime, the moved one cannot go back (that would replace or
+/// merge with the new holder's lock); it is removed when empty instead of being left
+/// stranded under its temporary name, where no holder or waiter would ever find it.
+fn put_back(aside: &Path, path: &Path) {
+    for attempt in 0..3 {
+        if std::fs::rename(aside, path).is_ok() {
+            return;
+        }
+        if std::fs::symlink_metadata(path).is_ok() {
+            // `remove_dir` only removes an empty directory: a lock directory, never content.
+            let _ = std::fs::remove_dir(aside);
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10 * (attempt + 1)));
+    }
 }
 
 /// Acquire one lock, waiting up to `wait`. Every path through the loop honors the deadline
@@ -392,6 +410,25 @@ mod tests {
         assert!(remove_stale(&spec));
         assert!(!spec.path.exists());
         assert!(leftovers(d.path()).is_empty());
+    }
+
+    #[test]
+    fn moved_lock_is_not_stranded_when_a_new_lock_took_the_path() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("x.lock");
+        let aside = d.path().join("x.lock.quayflow-stale-1-0");
+        // A fresh lock was moved aside, and a new holder created the lock meanwhile.
+        std::fs::create_dir(&aside).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("marker"), "new holder").unwrap();
+        put_back(&aside, &path);
+        assert!(leftovers(d.path()).is_empty(), "nothing left under the temporary name");
+        assert!(path.join("marker").is_file(), "the new lock is untouched");
+        // With the path free, the moved lock goes back.
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::create_dir(&aside).unwrap();
+        put_back(&aside, &path);
+        assert!(path.is_dir() && !aside.exists());
     }
 
     #[test]

@@ -51,8 +51,10 @@ fn managed_dir() -> PathBuf {
     pf.join("ClaudeCode")
 }
 
+/// The raw registry policy values: (label, `Settings` value or why it is unreadable).
+/// A missing key or value is left out.
 #[cfg(windows)]
-fn registry_sources() -> Vec<Source> {
+fn registry_values() -> Vec<(&'static str, Result<String, String>)> {
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use winreg::RegKey;
     let mut out = vec![];
@@ -62,10 +64,10 @@ fn registry_sources() -> Vec<Source> {
     ] {
         if let Ok(key) = RegKey::predef(hive).open_subkey("SOFTWARE\\Policies\\ClaudeCode") {
             match key.get_value::<String, _>("Settings") {
-                Ok(text) => out.push(source(label.into(), parse_settings(&text))),
+                Ok(text) => out.push((label, Ok(text))),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 // Present but not a readable string: enforcement unknown.
-                Err(e) => out.push(source(label.into(), Err(e.to_string()))),
+                Err(e) => out.push((label, Err(e.to_string()))),
             }
         }
     }
@@ -73,8 +75,29 @@ fn registry_sources() -> Vec<Source> {
 }
 
 #[cfg(not(windows))]
-fn registry_sources() -> Vec<Source> {
+fn registry_values() -> Vec<(&'static str, Result<String, String>)> {
     vec![]
+}
+
+fn registry_sources() -> Vec<Source> {
+    registry_values()
+        .into_iter()
+        .map(|(label, v)| source(label.into(), v.and_then(|t| parse_settings(&t))))
+        .collect()
+}
+
+/// The `*.json` drop-in files of `managed-settings.d`, sorted by path.
+fn drop_in_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir.join("managed-settings.d")) else {
+        return vec![];
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    files
 }
 
 fn file_sources(dir: &Path) -> Vec<Source> {
@@ -83,23 +106,15 @@ fn file_sources(dir: &Path) -> Vec<Source> {
     if let Some(r) = read(&main) {
         out.push(source("file:managed-settings.json".into(), r));
     }
-    if let Ok(entries) = std::fs::read_dir(dir.join("managed-settings.d")) {
-        let mut files: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "json"))
-            .collect();
-        files.sort();
-        for f in files {
-            if let Some(r) = read(&f) {
-                out.push(source(
-                    format!(
-                        "file:managed-settings.d\\{}",
-                        f.file_name().unwrap_or_default().to_string_lossy()
-                    ),
-                    r,
-                ));
-            }
+    for f in drop_in_files(dir) {
+        if let Some(r) = read(&f) {
+            out.push(source(
+                format!(
+                    "file:managed-settings.d\\{}",
+                    f.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                r,
+            ));
         }
     }
     out
@@ -140,6 +155,19 @@ fn find<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
         .find_map(|x| x.get(key))
 }
 
+/// The organizations of a `forceLoginOrgUUID` value: a non-empty string or a non-empty array
+/// of non-empty strings. Anything else is malformed (`None`).
+fn org_list(v: &Value) -> Option<Vec<String>> {
+    match v {
+        Value::String(x) if !x.trim().is_empty() => Some(vec![x.clone()]),
+        Value::Array(a) if !a.is_empty() => a
+            .iter()
+            .map(|x| x.as_str().filter(|t| !t.trim().is_empty()).map(String::from))
+            .collect(),
+        _ => None,
+    }
+}
+
 pub fn evaluate(sources: &[Source]) -> ManagedLogin {
     let mut m = ManagedLogin::default();
     let mut unreadable = false;
@@ -151,11 +179,12 @@ pub fn evaluate(sources: &[Source]) -> ManagedLogin {
             continue;
         }
         let mut hit = false;
-        if let Some(v) = find(&s.settings, "forceLoginOrgUUID") {
-            let orgs: Vec<String> = match v {
-                Value::String(x) if !x.is_empty() => vec![x.clone()],
-                Value::Array(a) => a.iter().filter_map(|x| x.as_str()).map(String::from).collect(),
-                _ => vec![],
+        if let Some(v) = find(&s.settings, "forceLoginOrgUUID").filter(|v| !v.is_null()) {
+            let Some(orgs) = org_list(v) else {
+                // Present but malformed: what it enforces is unknown, so fail closed.
+                unreadable = true;
+                m.sources.push(format!("{} (invalid forceLoginOrgUUID)", s.name));
+                continue;
             };
             for o in orgs {
                 let h = identity_hash(&o);
@@ -187,18 +216,42 @@ pub fn detect(env: &Env) -> ManagedLogin {
     evaluate(&sources(env))
 }
 
-/// Cheap fingerprint of the policy files to re-check after a change.
+/// Cheap fingerprint of every policy source [`detect`] reads (registry values, managed
+/// files including `managed-settings.d`, server-managed settings) to re-check after a change.
 pub fn fingerprint(env: &Env) -> String {
+    use sha2::{Digest, Sha256};
     let mut parts = vec![];
-    for p in [
-        managed_dir().join("managed-settings.json"),
-        env.config_dir.join("remote-settings.json"),
-    ] {
-        if let Ok(m) = std::fs::metadata(&p) {
-            parts.push(format!("{:?}:{}", m.modified().ok(), m.len()));
-        }
+    for (label, v) in registry_values() {
+        let digest = match v {
+            Ok(text) => hex::encode(Sha256::digest(text.as_bytes())),
+            Err(e) => format!("error:{e}"),
+        };
+        parts.push(format!("{label}={digest}"));
+    }
+    parts.extend(file_fingerprint(&managed_dir()));
+    let remote = env.config_dir.join("remote-settings.json");
+    if let Ok(m) = std::fs::metadata(&remote) {
+        parts.push(format!("server-managed={:?}:{}", m.modified().ok(), m.len()));
     }
     parts.join("|")
+}
+
+/// Names, modification times and sizes of the managed files in `dir`.
+fn file_fingerprint(dir: &Path) -> Vec<String> {
+    let mut paths = vec![dir.join("managed-settings.json")];
+    paths.extend(drop_in_files(dir));
+    paths
+        .into_iter()
+        .filter_map(|p| {
+            let m = std::fs::metadata(&p).ok()?;
+            Some(format!(
+                "{}={:?}:{}",
+                p.file_name().unwrap_or_default().to_string_lossy(),
+                m.modified().ok(),
+                m.len()
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -251,6 +304,36 @@ mod tests {
         assert_eq!(m.sources, vec!["file:managed-settings.json"]);
         assert!(m.permits(&account("o1")));
         assert!(!m.permits(&account("o2")));
+    }
+
+    #[test]
+    fn malformed_org_policy_fails_closed() {
+        for bad in [json!(""), json!(5), json!([]), json!(["o1", 7]), json!([""]), json!({})] {
+            let m = evaluate(&[source("file".into(), Ok(json!({"forceLoginOrgUUID": bad})))]);
+            assert!(m.is_enforced(), "{bad}");
+            assert!(!m.permits(&account("o1")), "{bad}");
+            assert_eq!(m.sources, vec!["file (invalid forceLoginOrgUUID)"]);
+        }
+        // An explicit null is no setting.
+        assert!(!evaluate(&[source("file".into(), Ok(json!({"forceLoginOrgUUID": null})))]).is_enforced());
+    }
+
+    #[test]
+    fn drop_in_files_change_the_fingerprint() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(file_fingerprint(d.path()).is_empty());
+        std::fs::create_dir(d.path().join("managed-settings.d")).unwrap();
+        std::fs::write(d.path().join("managed-settings.d").join("a.json"), "{}").unwrap();
+        let one = file_fingerprint(d.path());
+        assert_eq!(one.len(), 1);
+        std::fs::write(
+            d.path().join("managed-settings.d").join("a.json"),
+            "{\"forceLoginOrgUUID\": \"o1\"}",
+        )
+        .unwrap();
+        assert_ne!(file_fingerprint(d.path()), one);
+        std::fs::write(d.path().join("managed-settings.d").join("b.json"), "{}").unwrap();
+        assert_eq!(file_fingerprint(d.path()).len(), 2);
     }
 
     #[test]

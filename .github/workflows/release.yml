@@ -12,8 +12,14 @@
 # Attestations: GitHub only issues artifact attestations for public
 # repositories (or private ones on GitHub Enterprise Cloud). While this
 # repository is private, the attest step is allowed to fail and the release
-# notes say the assets are not attested; installers then need -SkipAttestation
-# when gh is signed in. Once public, every asset is attested and verified below.
+# notes say the assets are not attested; the installer then refuses them unless
+# run with -SkipAttestation. Once public, every asset is attested and verified
+# below with the same checks the installer makes (signer workflow, tag, commit).
+#
+# SOURCE_COMMIT (an asset, hashed and attested) records the tag's commit; the
+# installer adds the Mod from the tag only while the tag still points there.
+#
+# Third-party actions are pinned to full commit SHAs (Dependabot updates them).
 
 name: Release
 
@@ -35,12 +41,16 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       epoch: ${{ steps.meta.outputs.epoch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - id: meta
         name: Check versions and read the commit time
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          $tag = '${{ github.ref_name }}'
+          $tag = $env:TAG
           if ($tag -notmatch '^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') { throw "Tag $tag is not vX.Y.Z" }
           $version = $Matches[1]
           $cargo = Get-Content Cargo.toml -Raw
@@ -71,8 +81,9 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.epoch }}
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           path: ${{ matrix.dir }}
       - name: Install the pinned toolchain (rust-toolchain.toml)
         shell: pwsh
@@ -99,7 +110,7 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item target/release/quayflow.exe, target/release/quayflow-bg.exe out/
           Get-FileHash out/* -Algorithm SHA256 | Format-Table Hash, Path -AutoSize
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: build-${{ matrix.slot }}
           path: ${{ matrix.dir }}/out/*.exe
@@ -114,12 +125,14 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: build-a
           path: build-a
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: build-b
           path: build-b
@@ -140,6 +153,9 @@ jobs:
           New-Item -ItemType Directory -Force assets | Out-Null
           Copy-Item build-a/quayflow.exe, build-a/quayflow-bg.exe assets/
           Copy-Item installer/install.ps1, shell/Quayflow.psm1 assets/
+          # The commit this release was built from. The installer adds the Mod from this
+          # tag and refuses it unless the tag still points at this commit (tags can move).
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path assets) 'SOURCE_COMMIT'), "$env:GITHUB_SHA`n")
           $lines = Get-ChildItem assets -File | Sort-Object Name | ForEach-Object {
             '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
           }
@@ -148,7 +164,7 @@ jobs:
           Get-Content assets/SHA256SUMS
       - name: Attest build provenance
         id: attest
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         continue-on-error: ${{ github.event.repository.private }}
         with:
           subject-path: |
@@ -156,19 +172,21 @@ jobs:
             assets/quayflow-bg.exe
             assets/install.ps1
             assets/Quayflow.psm1
+            assets/SOURCE_COMMIT
             assets/SHA256SUMS
       - name: Create the GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           ATTESTED: ${{ steps.attest.outcome }}
+          TAG: ${{ github.ref_name }}
         run: |
-          $tag = '${{ github.ref_name }}'
+          $tag = $env:TAG
           $sums = Get-Content assets/SHA256SUMS -Raw
           $attest = if ($env:ATTESTED -eq 'success') {
-            "Every asset has a GitHub build-provenance attestation: ``gh attestation verify <file> --repo ${{ github.repository }}``."
+            "Every asset has a GitHub build-provenance attestation from this release workflow: ``gh attestation verify <file> --repo ${{ github.repository }} --signer-workflow ${{ github.repository }}/.github/workflows/release.yml --source-ref refs/tags/$tag``."
           } else {
-            '**Not attested**: this repository is private, and GitHub issues artifact attestations only for public repositories. Verify the SHA-256 hashes; install with `-SkipAttestation` if the GitHub CLI is signed in.'
+            '**Not attested**: this repository is private, and GitHub issues artifact attestations only for public repositories. Verify the SHA-256 hashes; the installer refuses unattested files unless run with `-SkipAttestation`.'
           }
           $notes = @"
           Quayflow $tag for Windows (x64).
@@ -181,7 +199,7 @@ jobs:
 
           Safer: download ``install.ps1``, check it against SHA256SUMS below, read it, then run it. See docs/verify-release.md.
 
-          Integrity: reproducible build (verified by two independent builds in this workflow), SHA-256 hashes below. Not Authenticode-signed. $attest
+          Integrity: reproducible build (verified by two independent builds in this workflow), SHA-256 hashes below. Not Authenticode-signed. $attest Built from commit $($env:GITHUB_SHA) (also in ``SOURCE_COMMIT``); the installer adds the Mod only if the tag still points there.
 
           ``````text
           $sums``````
@@ -205,15 +223,17 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release download '${{ github.ref_name }}' --repo '${{ github.repository }}' --dir dl
+          gh release download $env:TAG --repo $env:REPO --dir dl
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem dl
       - name: Check SHA256SUMS
         shell: pwsh
         run: |
           $bad = 0
-          $expected = @('quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1')
+          $expected = @('quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1', 'SOURCE_COMMIT')
           $seen = @()
           foreach ($line in Get-Content dl/SHA256SUMS) {
             if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { Write-Host "::error::Bad line: $line"; $bad++; continue }
@@ -222,16 +242,22 @@ jobs:
             if ($actual -ne $Matches[1]) { Write-Host "::error::$name hash mismatch"; $bad++ } else { Write-Host "$name OK" }
           }
           foreach ($n in $expected) { if ($seen -notcontains $n) { Write-Host "::error::$n missing from SHA256SUMS"; $bad++ } }
+          $commit = (Get-Content dl/SOURCE_COMMIT -Raw).Trim()
+          if ($commit -ne $env:GITHUB_SHA) { Write-Host "::error::SOURCE_COMMIT $commit is not the tag's commit $env:GITHUB_SHA"; $bad++ }
           if ($bad) { exit 1 }
       - name: Verify attestations
         if: ${{ !github.event.repository.private }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           $bad = 0
           foreach ($f in Get-ChildItem dl -File) {
-            gh attestation verify $f.FullName --repo '${{ github.repository }}'
+            # The same checks the installer makes: this repository's release workflow, this
+            # tag, this commit.
+            gh attestation verify $f.FullName --repo $env:REPO --signer-workflow "$env:REPO/.github/workflows/release.yml" --source-ref "refs/tags/$env:TAG" --source-digest $env:GITHUB_SHA
             if ($LASTEXITCODE -ne 0) { Write-Host "::error::attestation failed for $($f.Name)"; $bad++ }
           }
           if ($bad) { exit 1 }

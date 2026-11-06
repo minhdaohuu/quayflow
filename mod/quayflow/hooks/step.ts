@@ -56,12 +56,14 @@ async function rateLimits($: EngineInterface): Promise<SessionRateLimitWire[]> {
 }
 
 /**
- * Test hook: `%LOCALAPPDATA%\Quayflow\simulate-limit.json` `{"atStep": n}`
- * answers the first main-agent request with index >= n as failed, without
- * sending it, once; the file is then consumed.
+ * Test hook, off unless `QUAYFLOW_SIM_LIMIT=1` is set for the Claude process:
+ * `%LOCALAPPDATA%\Quayflow\simulate-limit.json` `{"atStep": n}` answers the
+ * first main-agent request with index >= n as failed, without sending it, once.
+ * The file is taken by an atomic rename, so of several sessions only one fires.
  */
 async function takeSimulatedLimit($: EngineInterface, e: StepEvent): Promise<boolean> {
   if (e.agentId) return false
+  if ((await $.env.get('QUAYFLOW_SIM_LIMIT').catch(() => undefined)) !== '1') return false
   let file: string
   try {
     file = `${await dataDir($)}\\simulate-limit.json`
@@ -75,7 +77,12 @@ async function takeSimulatedLimit($: EngineInterface, e: StepEvent): Promise<boo
     return false
   }
   if (typeof sim.atStep !== 'number' || e.index < sim.atStep) return false
-  await $.fs.write(file, '{}').catch(() => {})
+  // The plugin file API has no rename: `move` (MoveFileEx) succeeds for exactly one taker.
+  const cmd = (await $.env.get('ComSpec').catch(() => undefined)) || 'cmd.exe'
+  const taken = `${file}.${Q.sessionId.replace(/[^0-9A-Za-z-]/g, '')}-${e.index}.taken`
+  const moved = await $.process.run([cmd, '/d', '/c', 'move', '/y', file, taken], { timeoutMs: 5_000 }).catch(() => undefined)
+  if (moved?.exitCode !== 0) return false
+  await $.process.run([cmd, '/d', '/c', 'del', '/q', taken], { timeoutMs: 5_000 }).catch(() => undefined)
   return true
 }
 

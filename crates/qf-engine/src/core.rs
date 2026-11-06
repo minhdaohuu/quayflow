@@ -42,6 +42,13 @@ pub struct EnvState {
     pub policy_fp: Option<String>,
     pub in_place: InPlace,
     pub lane_canary: bool,
+    /// Automation is held here until a switch writes a consistent login (or, unless `mixed`
+    /// is set, until automation is resumed): why.
+    pub hold: Option<String>,
+    /// The login files are inconsistent: the credentials belong to this registered account
+    /// while `.claude.json` names another. No token is stored from this environment under the
+    /// account `.claude.json` names, and the account counts as live here.
+    pub mixed: Option<AccountId>,
 }
 
 impl EnvState {
@@ -73,7 +80,20 @@ impl EnvState {
                 governing_version: None,
             },
             lane_canary: false,
+            hold: None,
+            mixed: None,
         }
+    }
+
+    /// Whether `id`'s login is in use in this environment (live, or its credentials are).
+    pub fn holds_login(&self, id: &AccountId) -> bool {
+        self.live.as_ref() == Some(id) || self.mixed.as_ref() == Some(id)
+    }
+
+    /// A switch wrote a consistent login: holds no longer apply.
+    pub fn clear_hold(&mut self) {
+        self.hold = None;
+        self.mixed = None;
     }
 
     pub fn blocking_transition(&self) -> bool {
@@ -92,6 +112,9 @@ impl EnvState {
     pub fn pause_reason(&self, cfg: &Config) -> Option<String> {
         if cfg.automation_paused {
             return Some("automation paused by you (/quay resume)".into());
+        }
+        if let Some(h) = &self.hold {
+            return Some(h.clone());
         }
         if self.signed_out {
             return Some("no login in this environment".into());
@@ -116,6 +139,22 @@ impl EnvState {
         }
         None
     }
+}
+
+/// Whose login an environment's files hold (see [`Engine::live_owner`]).
+#[derive(Debug, Clone)]
+pub enum LiveOwner {
+    /// A registered account, consistent as far as can be told.
+    Registered(AccountId),
+    /// Not a registered account.
+    Unknown(AccountId),
+    /// The credentials are `owner`'s (its stored refresh token) while `.claude.json` names
+    /// `claimed`. `login` is the credentials with `owner`'s own account record.
+    Mixed {
+        owner: AccountId,
+        claimed: AccountId,
+        login: Login,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -152,7 +191,8 @@ pub struct Inner {
     pub progressed: HashMap<String, bool>,
     pub signins: HashMap<String, Signin>,
     pub canary: Option<CanaryRun>,
-    pub request_cache: VecDeque<(String, Value)>,
+    /// (method path requestId) -> response; None while the first request is still running.
+    pub request_cache: VecDeque<(String, Option<Value>)>,
     pub activity: VecDeque<ActivityItem>,
     /// Last model a session reported.
     pub session_model: HashMap<String, String>,
@@ -184,10 +224,17 @@ pub struct Engine {
     pub offline: bool,
 }
 
-pub fn random_hex(n: usize) -> String {
+/// `n` random bytes as hex, or an error when the OS random source fails (never zeros).
+pub fn try_random_hex(n: usize) -> Result<String, String> {
     let mut b = vec![0u8; n];
-    let _ = getrandom::getrandom(&mut b);
-    hex::encode(b)
+    getrandom::getrandom(&mut b).map_err(|e| format!("the OS random source is unavailable: {e}"))?;
+    Ok(hex::encode(b))
+}
+
+/// Random id as hex. Ids must be unpredictable: a failing OS random source panics rather
+/// than producing a predictable value.
+pub fn random_hex(n: usize) -> String {
+    try_random_hex(n).expect("random source")
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -200,6 +247,8 @@ impl Engine {
     pub fn new(dd: DataDir, default_env: Env, offline: bool) -> Result<Shared, String> {
         dd.ensure()
             .map_err(|e| format!("data folder {}: {e}", dd.root.display()))?;
+        // The API token must be unpredictable: no engine without a working random source.
+        let token = try_random_hex(24)?;
         let config = load_config(&dd)?;
         let obs: ObsFile = std::fs::read_to_string(dd.observations())
             .ok()
@@ -267,7 +316,7 @@ impl Engine {
             events_cv: Condvar::new(),
             long_polls: AtomicUsize::new(0),
             started_at: now_ms(),
-            token: random_hex(24),
+            token,
             shutdown: AtomicBool::new(false),
             exe_sha256,
             default_env,
@@ -363,6 +412,16 @@ impl Engine {
     }
 
     pub fn save_compat(&self, rec: &CompatRecord) {
+        // The version string comes from clients; it names a file only when it is a plain version.
+        if !safe_version_name(&rec.version) {
+            self.log.log(
+                "warn",
+                "compat.unsafe_version",
+                json!({"length": rec.version.len()}),
+                &[],
+            );
+            return;
+        }
         if let Ok(t) = serde_json::to_string_pretty(rec) {
             let _ = qf_vault::atomic_write(
                 &self.dd.compat_dir().join(format!("{}.json", rec.version)),
@@ -425,6 +484,13 @@ impl Engine {
         let known_ids: Vec<AccountId> = inner.config.accounts.iter().map(|a| a.id.clone()).collect();
         let st = inner.envs.get_mut(env_id).expect("env");
         st.last_stamp = qf_adapter::login::credentials_stamp(&env);
+        if st.mixed.is_some() {
+            // `.claude.json` does not name the credentials' account: it says nothing reliable.
+            st.live = None;
+            st.unknown = None;
+            st.signed_out = false;
+            return;
+        }
         match uuid.filter(|_| has_login) {
             None => {
                 st.live = None;
@@ -586,14 +652,42 @@ impl Engine {
                 continue; // our own switch is writing; it records the new stamp when it completes
             }
             let prev_live = st.live.clone();
+            let was_mixed = st.mixed.is_some();
             st.last_stamp = stamp;
             match login {
+                // Inconsistent login files: nothing here is stored under any account until a
+                // switch writes a consistent login.
+                Ok(Some(_)) if was_mixed => {}
                 Ok(Some(login)) => {
                     let h = AccountId(login.account_hash().unwrap_or_default());
+                    if let LiveOwner::Mixed {
+                        owner, login: fixed, ..
+                    } = self.live_owner(&inner, &login)
+                    {
+                        // The credentials are another registered account's: store them under that
+                        // account only, and hold this environment.
+                        if let Err(e) = self.capture(&mut inner, &owner, &fixed) {
+                            self.log.log(
+                                "error",
+                                "vault.capture_failed",
+                                json!({"account": owner, "error": e}),
+                                &[],
+                            );
+                        }
+                        self.hold_mixed(&mut inner, &id, &owner, Some(&h));
+                        continue;
+                    }
                     let registered = inner.config.account(&h).is_some();
                     let same = prev_live.as_ref() == Some(&h);
                     if registered {
-                        let captured = self.capture(&mut inner, &h, &login);
+                        let captured = match self.capture(&mut inner, &h, &login) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                self.log
+                                    .log("error", "vault.capture_failed", json!({"account": h, "error": e}), &[]);
+                                false
+                            }
+                        };
                         if let Some(a) = inner.config.account_mut(&h) {
                             if a.health == Health::StaleAccess {
                                 a.health = Health::Ok;
@@ -623,6 +717,8 @@ impl Engine {
                 }
                 Ok(None) => {
                     let st = inner.envs.get_mut(&id).expect("env");
+                    // No credentials left, so none are mixed (a hold stays until resumed).
+                    st.mixed = None;
                     if !st.signed_out {
                         st.signed_out = true;
                         st.live = None;
@@ -669,28 +765,24 @@ impl Engine {
 
     /// Store a login in its vault entry when it is newer than the stored copy.
     /// Never restores an old snapshot over a newer refresh (FR-21).
-    pub fn capture(&self, inner: &mut Inner, id: &AccountId, login: &Login) -> bool {
+    ///
+    /// `Ok(true)`: stored. `Ok(false)`: not needed (not registered, same tokens, or the stored
+    /// copy is newer). `Err`: it should have been stored but could not be (or the stored copy
+    /// could not be read to compare): the login in the environment may be the only fresh copy.
+    pub fn capture(&self, inner: &mut Inner, id: &AccountId, login: &Login) -> Result<bool, String> {
         if inner.config.account(id).is_none() {
-            return false;
+            return Ok(false);
         }
         let loaded = self.vault.load(id.as_str());
         if loaded.is_ok() {
             clear_vault_error(inner, id);
         }
         match loaded {
-            Ok(stored) if stored.same_tokens(login) => false,
-            Ok(stored) if stored.expires_at().unwrap_or(0) > login.expires_at().unwrap_or(0) => false,
+            Ok(stored) if stored.same_tokens(login) => Ok(false),
+            Ok(stored) if stored.expires_at().unwrap_or(0) > login.expires_at().unwrap_or(0) => Ok(false),
             Ok(_) | Err(qf_vault::VaultError::NotFound) => match self.vault.store(id.as_str(), login) {
-                Ok(()) => true,
-                Err(e) => {
-                    self.log.log(
-                        "error",
-                        "vault.capture_failed",
-                        json!({"account": id, "error": e.to_string()}),
-                        &[],
-                    );
-                    false
-                }
+                Ok(()) => Ok(true),
+                Err(e) => Err(format!("protected copy not stored: {e}")),
             },
             Err(e) => {
                 if let Some(a) = inner.config.account_mut(id) {
@@ -702,8 +794,96 @@ impl Engine {
                     json!({"account": id, "error": e.to_string()}),
                     &[],
                 );
-                false
+                Err(format!("protected copy unreadable: {e}"))
             }
+        }
+    }
+
+    /// Whose login an environment's files hold, judged by the credentials and not only by the
+    /// account record in `.claude.json`: when the refresh token is the one stored for another
+    /// registered account, the files are mixed (a half-written switch).
+    pub fn live_owner(&self, inner: &Inner, login: &Login) -> LiveOwner {
+        let claimed = AccountId(login.account_hash().unwrap_or_default());
+        if let Some(rt) = login.refresh_token().filter(|r| !r.is_empty()) {
+            for a in inner.config.accounts.iter().filter(|a| a.id != claimed) {
+                if let Ok(stored) = self.vault.load(a.id.as_str()) {
+                    if stored.refresh_token() == Some(rt) {
+                        return LiveOwner::Mixed {
+                            owner: a.id.clone(),
+                            claimed,
+                            login: Login {
+                                oauth: login.oauth.clone(),
+                                account: stored.account,
+                            },
+                        };
+                    }
+                }
+            }
+        }
+        if inner.config.account(&claimed).is_some() {
+            LiveOwner::Registered(claimed)
+        } else {
+            LiveOwner::Unknown(claimed)
+        }
+    }
+
+    /// Hold an environment whose credentials belong to `owner` while `.claude.json` names
+    /// `claimed`: nothing is stored from it under `claimed`, and automation waits for a switch.
+    pub fn hold_mixed(&self, inner: &mut Inner, env: &EnvId, owner: &AccountId, claimed: Option<&AccountId>) {
+        let Some(st) = inner.envs.get_mut(env) else { return };
+        let first = st.mixed.as_ref() != Some(owner);
+        st.mixed = Some(owner.clone());
+        st.live = None;
+        st.unknown = None;
+        st.signed_out = false;
+        st.suggestion = None;
+        st.pin = None;
+        st.hold = Some(
+            "the login files are inconsistent (credentials of one account, account record of another); switch to an account to repair them".into(),
+        );
+        if first {
+            self.record(
+                inner,
+                "login.mixed",
+                json!({"env": env, "credentials": owner, "record": claimed}),
+                true,
+            );
+            let text = format!(
+                "The login files here are inconsistent: the credentials are {}'s but the account record names {}. Quayflow stores no token from them and automation is paused. Switch to an account (quayflow use <account>) to repair them.",
+                inner.config.label(owner),
+                claimed.map(|c| inner.config.label(c)).unwrap_or_else(|| "another account".into())
+            );
+            self.emit(inner, "notice", Some(env), &text);
+        }
+    }
+
+    /// Keep the outgoing login of `env` safe before it is overwritten or removed: stored under
+    /// the account its credentials belong to, or as a protected backup when that is not known.
+    /// An error means it is not safe and the overwrite must not happen.
+    pub fn preserve_live(&self, inner: &mut Inner, env: &EnvId, login: &Login) -> Result<(), String> {
+        let mixed = inner.envs.get(env).is_some_and(|s| s.mixed.is_some());
+        let backup = |inner: &Inner, kind: &str, h: &AccountId| -> Result<(), String> {
+            self.vault
+                .backup(&self.dd.backups(), &format!("{kind}-{}", h.0), login)
+                .map_err(|e| format!("cannot back up the {kind} live login: {e}"))?;
+            self.record(
+                inner,
+                "login.backup",
+                json!({"env": env, "account": h, "kind": kind}),
+                true,
+            );
+            Ok(())
+        };
+        match self.live_owner(inner, login) {
+            LiveOwner::Mixed {
+                owner, login: fixed, ..
+            } => self.capture(inner, &owner, &fixed).map(drop),
+            // Credentials of the mixed state whose owner is no longer recognizable (refreshed
+            // since): never stored under the account `.claude.json` names.
+            LiveOwner::Registered(h) | LiveOwner::Unknown(h) if mixed => backup(inner, "mixed", &h),
+            LiveOwner::Registered(h) => self.capture(inner, &h, login).map(drop),
+            // Unknown login: keep a protected backup; inability blocks the overwrite (FR-04).
+            LiveOwner::Unknown(h) => backup(inner, "unknown", &h),
         }
     }
 
@@ -1053,6 +1233,16 @@ impl Engine {
     }
 }
 
+/// A Claude version usable as a file name: `[0-9A-Za-z.+-]`, at most 64 characters, starting
+/// with a digit (so never a dot or a reserved device name like `CON`), no `..`.
+pub fn safe_version_name(v: &str) -> bool {
+    v.len() <= 64
+        && v.starts_with(|c: char| c.is_ascii_digit())
+        && !v.contains("..")
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+}
+
 /// Forget per-session state of sessions no longer running in any environment.
 fn prune_session_state(inner: &mut Inner) {
     let alive: std::collections::HashSet<String> = inner
@@ -1061,6 +1251,8 @@ fn prune_session_state(inner: &mut Inner) {
         .flat_map(|st| st.sessions.iter().map(|s| s.session_id.clone()))
         .collect();
     inner.session_model.retain(|sid, _| alive.contains(sid));
+    inner.progressed.retain(|sid, _| alive.contains(sid));
+    inner.verified.retain(|sid, _| alive.contains(sid));
 }
 
 fn clear_vault_error(inner: &mut Inner, id: &AccountId) {

@@ -244,7 +244,11 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             0
         }
         "version" | "-V" => {
-            outln!("quayflow {} (protocol {})", qf_model::ENGINE_VERSION, qf_model::PROTOCOL);
+            outln!(
+                "quayflow {} (protocol {})",
+                qf_model::ENGINE_VERSION,
+                qf_model::PROTOCOL
+            );
             0
         }
         "serve" => match qf_engine::serve(dd.clone(), qf_adapter::Env::default_env(), Duration::from_secs(2)) {
@@ -274,7 +278,9 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         },
         "onboard" => onboard(dd),
         "register" => {
-            let (Some(label), Some(group)) = (a.val("label"), a.val("group")) else { return fail("register --label L --group G") };
+            let (Some(label), Some(group)) = (a.val("label"), a.val("group")) else {
+                return fail("register --label L --group G");
+            };
             let r = connect(dd).and_then(|c| {
                 c.post(
                     "/v1/accounts/register",
@@ -283,7 +289,13 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             });
             match r {
                 Ok(v) => {
-                    outln!("{}", v["note"].as_str().map(String::from).unwrap_or_else(|| format!("Registered {} in group \"{group}\". Nothing was switched.", v["label"].as_str().unwrap_or(&label))));
+                    outln!(
+                        "{}",
+                        v["note"].as_str().map(String::from).unwrap_or_else(|| format!(
+                            "Registered {} in group \"{group}\". Nothing was switched.",
+                            v["label"].as_str().unwrap_or(&label)
+                        ))
+                    );
                     0
                 }
                 Err(e) => say(Err(e)),
@@ -291,52 +303,92 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         }
         "add" | "reauth" => signin(dd, a),
         "remove" => {
-            let Some(acct) = a.p(1) else { return fail("remove <account>") };
-            if !a.has("yes") && !ask_yes(&format!("Remove {acct} from Quayflow (its protected copy is deleted; history stays)?")) {
+            let Some(acct) = a.p(1) else {
+                return fail("remove <account>");
+            };
+            if !a.has("yes")
+                && !ask_yes(&format!(
+                    "Remove {acct} from Quayflow (its protected copy is deleted; history stays)?"
+                ))
+            {
                 outln!("Cancelled; nothing was removed.");
                 return 1;
             }
             say(connect(dd).and_then(|c| c.post("/v1/accounts/remove", json!({"account": acct}))))
         }
         "label" => {
-            let (Some(acct), Some(l)) = (a.p(1), a.p(2)) else { return fail("label <account> <new label>") };
+            let (Some(acct), Some(l)) = (a.p(1), a.p(2)) else {
+                return fail("label <account> <new label>");
+            };
             say(connect(dd).and_then(|c| c.post("/v1/accounts/label", json!({"account": acct, "label": l}))))
         }
         "use" => {
             let Some(to) = a.p(1) else { return fail("use <account>") };
-            switch_result(connect(dd).and_then(|c| c.post("/v1/switch", json!({"to": to, "env": a.val("env"), "idleWait": a.has("idle-wait")}))))
+            switch_result(connect(dd).and_then(|c| {
+                c.post(
+                    "/v1/switch",
+                    json!({"to": to, "env": a.val("env"), "idleWait": a.has("idle-wait")}),
+                )
+            }))
         }
         "accept" => switch_result(connect(dd).and_then(|c| c.post("/v1/accept", json!({"env": a.val("env")})))),
         "unpin" => say(connect(dd).and_then(|c| c.post("/v1/unpin", json!({"env": a.val("env")})))),
         "mode" => {
-            let Some(m) = a.p(1) else { return fail("mode <manual|suggest|automatic>") };
-            let group = a.val("group").unwrap_or_else(|| "Default".into());
-            say(connect(dd).and_then(|c| c.post("/v1/groups/mode", json!({"group": group, "mode": m, "approveAutomatic": a.has("approve")}))))
+            let Some(m) = a.p(1) else {
+                return fail("mode <manual|suggest|automatic>");
+            };
+            // No --group: the engine applies the configured default group.
+            say(connect(dd).and_then(|c| {
+                c.post(
+                    "/v1/groups/mode",
+                    json!({"group": a.val("group"), "mode": m, "approveAutomatic": a.has("approve")}),
+                )
+            }))
         }
         "group" => group_cmd(dd, a),
         "project" => match a.p(1) {
             Some("assign") => {
-                let (Some(p), Some(g)) = (a.p(2), a.p(3)) else { return fail("project assign <path> <group>") };
-                let p = std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.into());
+                let (Some(p), Some(g)) = (a.p(2), a.p(3)) else {
+                    return fail("project assign <path> <group>");
+                };
+                let p = std::path::absolute(p)
+                    .map(|x| x.display().to_string())
+                    .unwrap_or_else(|_| p.into());
                 say(connect(dd).and_then(|c| c.post("/v1/projects/assign", json!({"path": p, "group": g}))))
             }
             Some("unassign") => {
-                let Some(p) = a.p(2) else { return fail("project unassign <path>") };
-                let p = std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.into());
+                let Some(p) = a.p(2) else {
+                    return fail("project unassign <path>");
+                };
+                let p = std::path::absolute(p)
+                    .map(|x| x.display().to_string())
+                    .unwrap_or_else(|_| p.into());
                 say(connect(dd).and_then(|c| c.post("/v1/projects/unassign", json!({"path": p}))))
             }
             _ => match connect(dd).and_then(|c| c.get("/v1/state")) {
                 Ok(v) => {
-                    outln!("Unassigned projects use \"{}\".", v["defaultGroup"].as_str().unwrap_or("?"));
+                    outln!(
+                        "Unassigned projects use \"{}\".",
+                        v["defaultGroup"].as_str().unwrap_or("?")
+                    );
                     for p in v["projects"].as_array().into_iter().flatten() {
-                        outln!("  {}  ->  {}", p["path"].as_str().unwrap_or(""), p["group"].as_str().unwrap_or(""));
+                        outln!(
+                            "  {}  ->  {}",
+                            p["path"].as_str().unwrap_or(""),
+                            p["group"].as_str().unwrap_or("")
+                        );
                     }
                     0
                 }
                 Err(e) => fail(e),
             },
         },
-        "unknown" => say(connect(dd).and_then(|c| c.post("/v1/unknown", json!({"action": a.p(1).unwrap_or("ignore"), "env": a.val("env")})))),
+        "unknown" => say(connect(dd).and_then(|c| {
+            c.post(
+                "/v1/unknown",
+                json!({"action": a.p(1).unwrap_or("ignore"), "env": a.val("env")}),
+            )
+        })),
         "lanes" | "lane" => match a.p(1).unwrap_or("list") {
             "list" => match connect(dd).and_then(|c| c.get("/v1/lanes")) {
                 Ok(v) => {
@@ -346,7 +398,9 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
                 Err(e) => fail(e),
             },
             op @ ("create" | "check" | "delete") => {
-                let Some(n) = a.p(2) else { return fail(format!("lanes {op} <name>")) };
+                let Some(n) = a.p(2) else {
+                    return fail(format!("lanes {op} <name>"));
+                };
                 let r = connect(dd).and_then(|c| c.post(&format!("/v1/lanes/{op}"), json!({"name": n})));
                 match r {
                     Ok(v) if op != "delete" => {
@@ -362,13 +416,22 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             let op = a.p(1).unwrap_or("");
             if op == "resume" {
                 let wait = a.val("wait-pid").and_then(|p| p.parse().ok());
-                return local::handoff_resume(dd, &a.val("session").unwrap_or_default(), &a.val("to").unwrap_or_default(), wait, a.val("cwd").as_deref());
+                return local::handoff_resume(
+                    dd,
+                    &a.val("session").unwrap_or_default(),
+                    &a.val("to").unwrap_or_default(),
+                    wait,
+                    a.val("cwd").as_deref(),
+                );
             }
             if !matches!(op, "prepare" | "open" | "replace") {
                 return fail("handoff prepare|open|replace --session ID --to ENV");
             }
             let r = connect(dd).and_then(|c| {
-                c.post(&format!("/v1/handoff/{op}"), json!({"sessionId": a.val("session"), "toEnv": a.val("to").unwrap_or_default()}))
+                c.post(
+                    &format!("/v1/handoff/{op}"),
+                    json!({"sessionId": a.val("session"), "toEnv": a.val("to").unwrap_or_default()}),
+                )
             });
             match r {
                 Ok(v) => {
@@ -390,10 +453,15 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
                         return 1;
                     }
                     let _ = local::set_consent(dd, "promptHook", true);
-                    outln!("Prompt hook installed in:
+                    outln!(
+                        "Prompt hook installed in:
   {}
-Open a new PowerShell window to load it.", r.done.join("
-  "));
+Open a new PowerShell window to load it.",
+                        r.done.join(
+                            "
+  "
+                        )
+                    );
                     let policy = local::ps51_execution_policy();
                     if !local::profiles_load(&policy) {
                         outln!("Note: Windows PowerShell 5.1's execution policy is {policy}, so it does not load profiles. To use the hook there, run in Windows PowerShell:
@@ -413,7 +481,14 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
                     let _ = local::set_consent(dd, "promptHook", false);
                 }
                 let p = &r.done;
-                outln!("Prompt hook removed{}.", if p.is_empty() { " (none found)".to_string() } else { format!(" from {}", p.join(", ")) });
+                outln!(
+                    "Prompt hook removed{}.",
+                    if p.is_empty() {
+                        " (none found)".to_string()
+                    } else {
+                        format!(" from {}", p.join(", "))
+                    }
+                );
                 i32::from(!r.problems.is_empty())
             }
             Some("claim") => {
@@ -443,31 +518,55 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
             Ok(v) => {
                 for e in v["envs"].as_array().into_iter().flatten() {
                     let m = &e["managed"];
-                    let enforced = !m["forceOrg"].as_array().map(|x| x.is_empty()).unwrap_or(true) || !m["forceMethod"].is_null();
+                    let enforced =
+                        !m["forceOrg"].as_array().map(|x| x.is_empty()).unwrap_or(true) || !m["forceMethod"].is_null();
                     outln!(
                         "{}: {}",
                         e["env"].as_str().unwrap_or("?"),
-                        if enforced { format!("enforced by {} (organization #{:?}, method {})", m["sources"], m["forceOrg"], m["forceMethod"]) } else { "no managed login enforcement".into() }
+                        if enforced {
+                            format!(
+                                "enforced by {} (organization #{:?}, method {})",
+                                m["sources"], m["forceOrg"], m["forceMethod"]
+                            )
+                        } else {
+                            "no managed login enforcement".into()
+                        }
                     );
                 }
-                outln!("Managed-login override setting: {}", if v["dOrg"]["enabled"] == json!(true) { "ON (recorded only; enforcement still respected)" } else { "off" });
+                outln!(
+                    "Managed-login override setting: {}",
+                    if v["dOrg"]["enabled"] == json!(true) {
+                        "ON (recorded only; enforcement still respected)"
+                    } else {
+                        "off"
+                    }
+                );
                 0
             }
             Err(e) => fail(e),
         },
-        "report" => match connect(dd).and_then(|c| c.post("/v1/report", json!({}))) {
-            Ok(v) => {
-                outln!("{}\n...\nSaved for your review: {}\nNothing was sent anywhere. Share it only if you choose to.", v["preview"].as_str().unwrap_or(""), v["path"].as_str().unwrap_or(""));
-                0
+        "report" => {
+            match connect(dd).and_then(|c| c.post("/v1/report", json!({}))) {
+                Ok(v) => {
+                    outln!("{}\n...\nSaved for your review: {}\nNothing was sent anywhere. Share it only if you choose to.", v["preview"].as_str().unwrap_or(""), v["path"].as_str().unwrap_or(""));
+                    0
+                }
+                Err(e) => fail(e),
             }
-            Err(e) => fail(e),
-        },
+        }
         "migrate-poc" => say(connect(dd).and_then(|c| {
-            c.post("/v1/migrate-poc", json!({"group": a.val("group").unwrap_or_else(|| "Default".into()), "acceptDisclosure": a.has("accept-disclosure")}))
+            c.post(
+                "/v1/migrate-poc",
+                json!({"group": a.val("group"), "acceptDisclosure": a.has("accept-disclosure")}),
+            )
         })),
         "consent" => {
-            let (Some(name), Some(state)) = (a.p(1), a.p(2)) else { return fail("consent <name> <on|off>") };
-            let Some(field) = local::consent_field(name) else { return fail("unknown consent name") };
+            let (Some(name), Some(state)) = (a.p(1), a.p(2)) else {
+                return fail("consent <name> <on|off>");
+            };
+            let Some(field) = local::consent_field(name) else {
+                return fail("unknown consent name");
+            };
             let on = match state {
                 "on" => true,
                 "off" => false,

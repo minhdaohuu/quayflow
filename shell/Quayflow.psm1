@@ -167,8 +167,17 @@ function Receive-QfClaim {
     $ErrorActionPreference = 'Continue'
     $lastError = ''
     for ($try = 1; $try -le 3; $try++) {
-        $output = & $exe shell claim --pid $PID 2>&1
-        $code = $LASTEXITCODE
+        # quayflow.exe writes UTF-8; PowerShell decodes native output with
+        # [Console]::OutputEncoding (the OEM code page by default), which would
+        # garble non-ASCII paths. Decode as UTF-8 for this call only.
+        $savedEncoding = $null
+        try { $savedEncoding = [Console]::OutputEncoding; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { $savedEncoding = $null }
+        try {
+            $output = & $exe shell claim --pid $PID 2>&1
+            $code = $LASTEXITCODE
+        } finally {
+            if ($null -ne $savedEncoding) { try { [Console]::OutputEncoding = $savedEncoding } catch { $null = $_ } }
+        }
         $stdout = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
         if ($code -eq 0) { return $stdout.Trim() }
         $lastError = (@($output | ForEach-Object { "$_" }) -join ' ').Trim()

@@ -41,7 +41,9 @@ try {
     # --- no engine running ---
     $o = Qf status; Check 'status without engine: clear message, nonzero' ($script:code -ne 0 -and $o -match '(?i)engine|start') "$($script:code) $o"
     $o = Qf frobnicate; Check 'unknown command: nonzero + hint' ($script:code -ne 0 -and $o -match '(?i)unknown|help') "$($script:code) $o"
-    $o = Qf --version; Check '--version' ($o -match '^quayflow 0\.1\.0') $o
+    $cargoToml = Get-Content (Join-Path $PSScriptRoot '..\..\Cargo.toml') -Raw
+    $null = $cargoToml -match '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"'
+    $o = Qf --version; Check '--version' ($o -match ('^quayflow ' + [regex]::Escape($Matches[1]) + ' ')) $o
     $o = Qf -h; Check '-h prints help' ($o -match 'Usage: quayflow') ''
     $o = Qf consent bogus on; Check 'consent unknown key refused' ($script:code -ne 0) "$($script:code) $o"
     $o = Qf consent terms maybe; Check 'consent bad value refused' ($script:code -ne 0) "$($script:code) $o"

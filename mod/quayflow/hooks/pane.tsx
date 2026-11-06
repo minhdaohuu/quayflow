@@ -4,7 +4,7 @@
 import type { Elements, EngineInterface, RenderSurface } from 'claude-code'
 
 import type { Mode, QuayView } from '../types'
-import { Q, flash, readPaneState, setDisclosure, setReport } from './context'
+import { MOD_VERSION, Q, flash, readPaneState, setDisclosure, setReport } from './context'
 import { actAccept, actRegister, actSigninConfirm, actAssign, actCompatCheck, actEngine, actGroupCreate, actGroupDelete, actHandoff, actLaneCheck, actLaneCreate, actLaneDelete, actMembers, actPreferred, actRank, actRelabel, actRemove, actReport, actSetDefault, actSetMode, actTuning, actUnassign, actUnpin, handoffOutcome } from './actions'
 import {
   account,
@@ -15,6 +15,7 @@ import {
   myEnv,
   myGroup,
   orgName,
+  pathCovers,
   persistentWarnings,
   sessionName,
   transitionWords,
@@ -320,7 +321,7 @@ function Groups($: EngineInterface, c: Ctx): JSX.Element {
   // The engine resolves the assignment; the path shown is the longest one that covers this folder.
   const assigned =
     s.session?.groupSource === 'assigned'
-      ? [...s.projects].sort((a, b) => b.path.length - a.path.length).find(p => Q.cwd.toLowerCase().startsWith(p.path.toLowerCase()))
+      ? [...s.projects].sort((a, b) => b.path.length - a.path.length).find(p => pathCovers(p.path, Q.cwd))
       : undefined
   const groupOpts = s.groups.map(g => ({ value: g.name, label: g.name }))
   return (
@@ -635,7 +636,7 @@ function Settings($: EngineInterface, c: Ctx): JSX.Element {
         'Engine',
         Line(c, `quayflow ${e.version} · protocol ${e.protocol} · pid ${e.pid} · started ${when(e.startedAt)} · data ${e.dataDir}`),
         Line(c, `Integrity: ${e.integrity} · version ${e.version} · SHA-256 ${e.exeSha256}`),
-        Line(c, `Mod ${Q.link.engineVersion ? '' : ''}0.1.0 · Claude ${c.claudeVersion || '?'}`, { dim: true }),
+        Line(c, `Mod ${MOD_VERSION} · Claude ${c.claudeVersion || '?'}`, { dim: true }),
         Row(
           c,
           env?.automationPaused

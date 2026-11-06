@@ -39,6 +39,19 @@ export function findAccount(s: StateView, ref: string): AccountView | undefined 
   )
 }
 
+/**
+ * Whether `folder` is `base` or inside it: a whole-component prefix (C:\code\app covers
+ * C:\code\app\src but not C:\code\app-v2), case-insensitive as Windows paths are, with
+ * either separator.
+ */
+export function pathCovers(base: string, folder: string): boolean {
+  const norm = (p: string): string => p.replace(/\//g, '\\').toLowerCase()
+  const b = norm(base).replace(/\\+$/, '')
+  const f = norm(folder)
+  if (!b) return false
+  return f === b || f.replace(/\\+$/, '') === b || f.startsWith(`${b}\\`)
+}
+
 export function findGroup(s: StateView, name: string): GroupView | undefined {
   const n = name.trim().toLowerCase()
   return s.groups.find(g => g.name.toLowerCase() === n)

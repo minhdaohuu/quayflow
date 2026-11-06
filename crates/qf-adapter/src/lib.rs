@@ -14,4 +14,4 @@ pub mod sessions;
 
 pub use env::Env;
 pub use lock::{HeldLocks, LockError};
-pub use login::{read_identity, read_login, swap, SwapError, SwapOutcome};
+pub use login::{read_identity, read_login, swap, swap_with, SwapError, SwapOutcome};

@@ -1,4 +1,4 @@
-# CI: Rust workspace, Mod, PowerShell scripts. Windows only (Quayflow v0.1 is Windows-only).
+# CI: Rust workspace, Mod, PowerShell scripts. Runs on Windows, the first supported platform.
 
 name: CI
 
@@ -23,13 +23,15 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Install the pinned toolchain (rust-toolchain.toml)
         shell: pwsh
         run: |
           rustup toolchain install
           rustc -Vv
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -69,8 +71,10 @@ jobs:
     name: Mod (marketplace, type check, validate, tests)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
       # Type check against Claude Code's host declarations in mod/host-types/.
@@ -91,7 +95,7 @@ jobs:
       - name: Install Claude Code
         shell: pwsh
         run: |
-          npm install -g @anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.319
           claude --version
       - name: Validate the marketplace and the Mod (strict)
         shell: pwsh
@@ -113,7 +117,9 @@ jobs:
     name: PowerShell (analyzer, shell hook, installer sandbox)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Parse every script in PowerShell 7 and Windows PowerShell 5.1
         shell: pwsh
         run: |
@@ -146,7 +152,7 @@ jobs:
       - name: PSScriptAnalyzer
         shell: pwsh
         run: |
-          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AcceptLicense
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force -AcceptLicense
           # Write-Host is deliberate (installer UI; the prompt hook must not write
           # to the output stream). ShouldProcess does not fit internal helpers.
           $exclude = 'PSAvoidUsingWriteHost', 'PSUseShouldProcessForStateChangingFunctions', 'PSUseSingularNouns'

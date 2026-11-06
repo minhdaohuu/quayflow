@@ -1111,3 +1111,237 @@ fn long_polls_are_capped() {
     assert!(!v["events"].as_array().unwrap().is_empty());
     assert_eq!(e.long_polls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+/// Write only the credential file (as a half-written switch leaves it).
+fn credentials_only(env: &Env, token: &str, sub: &str) {
+    let creds = json!({"claudeAiOauth": {"accessToken": format!("sk-ant-oat-{token}"), "refreshToken": format!("sk-ant-ort-{token}"), "expiresAt": 9_999_999_999_999i64, "subscriptionType": sub}});
+    std::fs::write(env.credentials(), creds.to_string()).unwrap();
+}
+
+fn vault_refresh(e: &Shared, uuid: &str) -> String {
+    e.vault
+        .load(id(uuid).as_str())
+        .unwrap()
+        .refresh_token()
+        .unwrap()
+        .to_string()
+}
+
+fn paused(e: &Shared) -> Option<String> {
+    let inner = e.lock();
+    inner.envs[&EnvId::default_env()].pause_reason(&inner.config)
+}
+
+#[test]
+fn mixed_login_files_are_held_and_never_captured_under_the_record() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    assert_eq!(vault_refresh(&e, "uuid-org"), "sk-ant-ort-O1");
+    // Credentials are personal's while .claude.json still names org (half-written switch).
+    credentials_only(&w.env, "P1", "max");
+    e.watch();
+    assert_eq!(vault_refresh(&e, "uuid-org"), "sk-ant-ort-O1", "org's copy untouched");
+    assert!(paused(&e).unwrap().contains("inconsistent"));
+    {
+        let inner = e.lock();
+        let st = &inner.envs[&EnvId::default_env()];
+        assert_eq!(st.mixed, Some(id("uuid-personal")));
+        assert!(st.live.is_none());
+    }
+    // Registering from inconsistent files is refused.
+    assert_eq!(e.register(None, "x", "Default", false).unwrap_err().code, "refused");
+    // A refresh of the mixed credentials is not stored under org either.
+    credentials_only(&w.env, "P2", "max");
+    e.watch();
+    assert_eq!(vault_refresh(&e, "uuid-org"), "sk-ant-ort-O1");
+    // A switch writes a consistent login and lifts the hold; nothing is stored under org.
+    let t = e
+        .start_switch(
+            &EnvId::default_env(),
+            &id("uuid-org"),
+            SwitchHow::Manual,
+            "repair",
+            false,
+            true,
+        )
+        .unwrap();
+    assert!(t.state.written(), "{t:?}");
+    assert_eq!(vault_refresh(&e, "uuid-org"), "sk-ant-ort-O1");
+    assert!(paused(&e).is_none_or(|r| !r.contains("inconsistent")));
+    assert!(e.lock().envs[&EnvId::default_env()].mixed.is_none());
+    let backups = std::fs::read_dir(w.dd.backups()).unwrap().count();
+    assert!(backups > 0, "the unattributable refreshed credentials were backed up");
+}
+
+#[test]
+fn reconcile_detects_a_half_written_switch_and_pauses() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let (org, personal) = (id("uuid-org"), id("uuid-personal"));
+    drop(e);
+    let j = qf_engine::journal::Journal::new(w.dd.journal());
+    for (ev, data) in [
+        (
+            "transition.requested",
+            json!({"id": "half", "env": "default", "from": org, "to": personal, "how": "manual"}),
+        ),
+        ("transition.applying", json!({"id": "half", "env": "default"})),
+    ] {
+        j.append(ev, data, &[], true).unwrap();
+    }
+    credentials_only(&w.env, "P1", "max");
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    let rec = j
+        .read_all()
+        .into_iter()
+        .find(|r| r["event"] == "transition.reconciled")
+        .unwrap();
+    assert!(rec["outcome"].as_str().unwrap().contains("half-written"), "{rec}");
+    assert!(paused(&e).unwrap().contains("inconsistent"));
+    assert_eq!(e.lock().envs[&EnvId::default_env()].mixed, Some(personal));
+    assert_eq!(vault_refresh(&e, "uuid-org"), "sk-ant-ort-O1");
+}
+
+#[test]
+fn reconcile_neither_side_really_pauses_until_resumed() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let personal = id("uuid-personal");
+    drop(e);
+    let j = qf_engine::journal::Journal::new(w.dd.journal());
+    for (ev, data) in [
+        (
+            "transition.requested",
+            json!({"id": "n", "env": "default", "from": "aaaaaaaaaaaa", "to": personal, "how": "automatic"}),
+        ),
+        ("transition.applying", json!({"id": "n", "env": "default"})),
+    ] {
+        j.append(ev, data, &[], true).unwrap();
+    }
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    assert!(paused(&e).unwrap().contains("interrupted switch"));
+    set_mode(&e, "automatic");
+    e.tick();
+    assert!(e.lock().envs[&EnvId::default_env()].decision.contains("paused"));
+    qf_engine::http::route(&e, "POST", "/v1/engine", "", &json!({"action": "resume"})).unwrap();
+    assert!(paused(&e).is_none_or(|r| !r.contains("interrupted switch")));
+}
+
+#[test]
+fn failed_capture_of_the_outgoing_login_stops_the_switch() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    // Claude refreshed org's token; its protected copy cannot be read or replaced.
+    login_files(&w.env, "uuid-org", "O2", "team");
+    let path = w.dd.vault().join(format!("{}.dpapi", id("uuid-org")));
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    let t = e
+        .start_switch(
+            &EnvId::default_env(),
+            &id("uuid-personal"),
+            SwitchHow::Manual,
+            "test",
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(t.state, TransitionState::Failed, "{t:?}");
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-org"));
+    let creds = std::fs::read_to_string(w.env.credentials()).unwrap();
+    assert!(
+        creds.contains("sk-ant-ort-O2"),
+        "the only fresh token is still in place"
+    );
+}
+
+fn in_flight_elsewhere(e: &Shared, w: &World, to: &AccountId) {
+    let lane = EnvId("lane1".into());
+    let mut st = qf_engine::core::EnvState::new(Env::at(lane.clone(), w.dd.root.join("lane1")));
+    st.transition = Some(Transition {
+        id: "t1".into(),
+        env: lane.clone(),
+        from: None,
+        to: to.clone(),
+        how: SwitchHow::Manual,
+        reason: "test".into(),
+        state: TransitionState::Applying,
+        requested_at: 0,
+        written_at: None,
+        ended_at: None,
+        locked_ms: None,
+        detail: None,
+        failure: None,
+    });
+    e.lock().envs.insert(lane, st);
+}
+
+#[test]
+fn a_login_switching_into_another_environment_is_refused_and_not_removable() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    in_flight_elsewhere(&e, &w, &id("uuid-personal"));
+    let r = e
+        .start_switch(
+            &EnvId::default_env(),
+            &id("uuid-personal"),
+            SwitchHow::Manual,
+            "test",
+            false,
+            true,
+        )
+        .unwrap_err();
+    assert!(r.message.contains("two environments"), "{}", r.message);
+    let err = e.remove_account("personal").unwrap_err();
+    assert!(err.message.contains("in progress"), "{}", err.message);
+    assert!(e.lock().config.account(&id("uuid-personal")).is_some());
+}
+
+#[test]
+fn remove_account_keeps_memory_and_disk_in_step() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    e.remove_account("personal").unwrap();
+    assert!(e.lock().config.account(&id("uuid-personal")).is_none());
+    let disk = qf_engine::core::load_config(&w.dd).unwrap();
+    assert!(disk.account(&id("uuid-personal")).is_none());
+    assert!(!e.vault.exists(id("uuid-personal").as_str()));
+}
+
+#[test]
+fn mode_without_a_group_uses_the_configured_default_group() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    e.group_op("create", &json!({"group": "Work"})).unwrap();
+    e.group_op("default", &json!({"group": "Work"})).unwrap();
+    e.group_op("mode", &json!({"mode": "manual"})).unwrap();
+    let inner = e.lock();
+    assert_eq!(inner.config.group("Work").unwrap().mode, Mode::Manual);
+    assert_eq!(inner.config.group("Default").unwrap().mode, Mode::Suggest);
+}
+
+#[test]
+fn engine_instance_lock_is_exclusive_and_survives_a_crash() {
+    let w = world();
+    let first = qf_engine::take_instance_lock(&w.dd).unwrap().expect("first engine");
+    assert!(
+        qf_engine::take_instance_lock(&w.dd).unwrap().is_none(),
+        "second engine refused"
+    );
+    // A crashed engine leaves the file behind with a PID; its handle is gone.
+    drop(first);
+    std::fs::write(w.dd.engine_lock(), "4000000000").unwrap();
+    assert!(qf_engine::take_instance_lock(&w.dd).unwrap().is_some());
+    // An empty lock file (an engine that died before writing its PID) is not a holder.
+    std::fs::write(w.dd.engine_lock(), "").unwrap();
+    assert!(qf_engine::take_instance_lock(&w.dd).unwrap().is_some());
+}
+
+#[test]
+fn unsafe_claude_versions_never_name_a_file() {
+    use qf_engine::core::safe_version_name as ok;
+    assert!(ok("2.1.104") && ok("1.0.0-beta+3"));
+    for bad in ["", "..", "../x", "..\\x", "1/2", "1\\2", "CON", ".1", "1..2", "1:2"] {
+        assert!(!ok(bad), "{bad}");
+    }
+}

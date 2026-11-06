@@ -225,6 +225,23 @@ try {
     Assert ($qf -contains "args=shell claim --pid $PID") 'CLI called with --pid' ($qf -join ' | ')
     Assert ((Get-LaunchLog) -contains 'args=--resume 11111111-2222-3333-4444-555555555555') 'claude launched from CLI output'
 
+    Write-Host 'T8b non-ASCII path in the CLI output decoded as UTF-8'
+    Reset-State
+    $wide = Join-Path $Work ('proj ' + [char]0x00E4 + [char]0x00F8 + ' ' + [char]0x65E5 + [char]0x672C)
+    $json = ([ordered]@{ sessionId = '11111111-2222-3333-4444-555555555555'; configDir = $LaneDir; cwd = $wide } | ConvertTo-Json -Compress)
+    [System.IO.File]::WriteAllText($ClaimPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+    # A typical console: an OEM code page, not UTF-8.
+    $realEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(437)
+        $text = & (Get-Module Quayflow) { param($p) Receive-QfClaim -Path $p } $ClaimPath
+        $after = [Console]::OutputEncoding.CodePage
+    } finally { [Console]::OutputEncoding = $realEncoding }
+    $got = $null
+    try { $got = ($text | ConvertFrom-Json).cwd } catch { $got = "unparsed: $text" }
+    Assert ($got -eq $wide) 'non-ASCII cwd survives quayflow.exe output' "$got"
+    Assert ($after -eq 437) 'console output encoding restored' "$after"
+
     Write-Host 'T9 CLI failure: no launch, claim kept, not retried on the next prompt'
     Reset-State
     New-Claim

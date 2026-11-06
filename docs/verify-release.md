@@ -8,6 +8,7 @@ Every Quayflow release publishes these assets:
 | `quayflow-bg.exe` | Windowless launcher used by the sign-in startup entry |
 | `install.ps1` | Installer |
 | `Quayflow.psm1` | PowerShell integration (also embedded in `quayflow.exe`) |
+| `SOURCE_COMMIT` | The commit the release was built from (releases after v0.1.0) |
 | `SHA256SUMS` | SHA-256 hash of each asset above, in `sha256sum` format |
 
 Each asset is built by this repository's release workflow (`.github/workflows/release.yml`) and has three integrity properties:
@@ -16,15 +17,15 @@ Each asset is built by this repository's release workflow (`.github/workflows/re
 2. **Build provenance.** A GitHub artifact attestation, signed through GitHub's Sigstore integration, records that the file was built by this repository's workflow from a specific commit and tag.
 3. **Reproducible build.** The workflow builds the same commit twice, in separate jobs and directories, and fails if the two executables differ. The toolchain is pinned in `rust-toolchain.toml`, dependencies are locked with `Cargo.lock`, paths are remapped, `/Brepro` makes the PE header deterministic, and `SOURCE_DATE_EPOCH` is set from the tag's commit.
 
-The installer checks (1) always and (2) when the GitHub CLI is installed and signed in. You can check everything by hand as described below.
+The installer checks (1) always, and (2) unless you pass `-SkipAttestation`: it refuses to install when the GitHub CLI is missing or signed out, or when an executable (or `SOURCE_COMMIT`) has no attestation from this repository's `.github/workflows/release.yml` for the release tag and commit. It also checks that the Mod it adds from the release tag is at the commit in `SOURCE_COMMIT`. You can check everything by hand as described below.
 
 ## Check the hashes by hand
 
 ```powershell
 $v = 'v0.1.0'
 $base = "https://github.com/minhdaohuu/quayflow/releases/download/$v"
-foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1', 'SHA256SUMS') {
-    Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f
+foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
+    try { Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f } catch { "$f is not in this release" }   # v0.1.0 has no SOURCE_COMMIT
 }
 Get-Content SHA256SUMS | ForEach-Object {
     $hash, $name = $_ -split '\s+\*?', 2
@@ -42,14 +43,18 @@ A hash check proves that you have the files the release lists, but `SHA256SUMS` 
 With the [GitHub CLI](https://cli.github.com/) signed in (`gh auth login`):
 
 ```powershell
-foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1', 'SHA256SUMS') {
-    gh attestation verify $f --repo minhdaohuu/quayflow
+$commit = (Get-Content SOURCE_COMMIT -Raw).Trim()   # releases after v0.1.0
+foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
+    gh attestation verify $f --repo minhdaohuu/quayflow `
+        --signer-workflow minhdaohuu/quayflow/.github/workflows/release.yml `
+        --source-ref "refs/tags/$v" --source-digest $commit
 }
+git ls-remote https://github.com/minhdaohuu/quayflow "refs/tags/$v^{}" "refs/tags/$v"   # should list $commit
 ```
 
-Each must end with `Verification succeeded`. To see which workflow, commit and tag built a file, add `--format json` and look at `buildDefinition`. The workflow should be `.github/workflows/release.yml` and the ref should be the release tag.
+Each must end with `Verification succeeded`. `--signer-workflow` accepts only an attestation made by the release workflow (not by any other workflow of the repository), and `--source-ref` / `--source-digest` tie it to the release tag and its commit. For v0.1.0, which has no `SOURCE_COMMIT`, leave out `--source-digest`.
 
-**Private repository.** GitHub issues artifact attestations only for public repositories, or for private ones on GitHub Enterprise Cloud. While Quayflow's repository is private, pilot releases are not attested. Their release notes say so, and only the hash check applies. Install those with `-SkipAttestation` when `gh` is signed in.
+**Private repository.** GitHub issues artifact attestations only for public repositories, or for private ones on GitHub Enterprise Cloud. While Quayflow's repository is private, pilot releases are not attested. Their release notes say so, and only the hash check applies. The installer refuses them unless you pass `-SkipAttestation`.
 
 ## Rebuild it yourself
 

@@ -24,10 +24,10 @@ To check the script before running it, see the safer variant in the [README](../
 The installer:
 
 1. Shows what Quayflow does and asks for your consent.
-2. Downloads `quayflow.exe` and `quayflow-bg.exe` and refuses to continue if their SHA-256 hashes do not match the release's `SHA256SUMS`. When the GitHub CLI (`gh`) is installed and signed in, it also verifies the GitHub build-provenance attestation and refuses on failure. Otherwise it reports the attestation as skipped.
+2. Downloads `quayflow.exe` and `quayflow-bg.exe` and refuses to continue if their SHA-256 hashes do not match the release's `SHA256SUMS`. It also verifies the GitHub build-provenance attestation with the GitHub CLI (`gh`, installed and signed in), accepting only an attestation made by this repository's release workflow for that tag and commit, and refuses on failure. Without a signed-in `gh` it refuses before downloading, unless you pass `-SkipAttestation`.
 3. Installs them to `%LOCALAPPDATA%\Quayflow\bin` and adds that folder to your user PATH (skip with `-NoPath`).
-4. Adds the `quayflow` plugin marketplace pinned to the same release and installs the Mod (`quayflow@quayflow`, user scope). If the old proof-of-concept plugin `quayflow@quayflow-local` is present, it is removed.
-5. Records your consent for on-demand engine start. With `-Startup`, it also records consent for starting the engine at Windows sign-in.
+4. Adds the `quayflow` plugin marketplace pinned to the same release tag and installs the Mod (`quayflow@quayflow`, user scope). The release records the commit it was built from (`SOURCE_COMMIT`); the installer refuses the Mod if the tag's checkout is at a different commit (for example, a moved tag). If the new Mod cannot be added or is refused, the previous one is put back. If the old proof-of-concept plugin `quayflow@quayflow-local` is present, it is removed.
+5. Records your consent for on-demand engine start. With `-Startup`, it also records consent for starting the engine at Windows sign-in. These are recorded even when the Mod step failed; the installer then ends with an error that says what to fix.
 
 It does not read, copy or change any Claude login. Running Claude sessions load the Mod after you restart them.
 
@@ -39,10 +39,10 @@ It does not read, copy or change any Claude login. Running Claude sessions load 
 | `-NoPlugin` | Engine only; do not touch Claude Code plugins |
 | `-Yes` | Accept the consent text without a prompt (it is still printed) |
 | `-Source <folder>` | Install from local files (`quayflow.exe`, `quayflow-bg.exe`, `SHA256SUMS`) |
-| `-SkipAttestation` | Skip `gh attestation verify` (for builds you made yourself). Hashes are still checked |
+| `-SkipAttestation` | Skip `gh attestation verify` (builds you made yourself, private pilot releases, or no GitHub CLI). Without it, files whose attestation cannot be verified are refused. Hashes are still checked |
 | `-Uninstall [-DeleteData]` | Remove Quayflow (see [Uninstall](#uninstall)) |
 
-With `irm | iex` you cannot pass options. Use `& ([scriptblock]::Create((irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1))) -Startup` instead.
+With `irm | iex` you cannot pass options. Use `& ([scriptblock]::Create((irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1))) -Startup` instead. Plain `irm | iex` therefore needs the GitHub CLI signed in; without it, pass `-SkipAttestation` this way to rely on the hash check alone.
 
 **Private pilot.** While the repository is private, sign in to the GitHub CLI first (`gh auth login`, then `gh auth setup-git` so Claude Code can clone the marketplace). The installer then downloads through `gh`. GitHub does not issue artifact attestations for private repositories, so pilot releases are hash-verified only: add `-SkipAttestation`. If you have no GitHub SSH key, set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` before installing.
 

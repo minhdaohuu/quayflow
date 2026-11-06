@@ -1,7 +1,7 @@
 //! Lanes (FR-10) and Open/Replace with full history (FR-17, FR-18).
 
 use crate::accounts::ApiErr;
-use crate::core::{lane_meta, Engine, EnvState};
+use crate::core::{lane_meta, Engine, EnvState, Inner};
 use qf_adapter::Env;
 use qf_model::api::{HandoffResponse, LaneView};
 use qf_model::time::now_ms;
@@ -100,37 +100,71 @@ impl Engine {
         // Lock order everywhere: cred_lock, then inner (switch apply, watcher). The engine
         // lock is not held across the bounded wait in `retire`.
         let _cred = self.cred_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let env = {
+        let (env, login) = {
             let mut inner = self.lock();
-            self.refresh_env(&mut inner, &id);
             let st = inner.envs.get(&id).ok_or_else(|| ApiErr::not_found("no such lane"))?;
-            if !st.sessions.is_empty() {
-                return Err(ApiErr::refused("sessions are running in this lane; end them first"));
-            }
             if st.blocking_transition() {
                 return Err(ApiErr::refused(
                     "a switch is in progress in this lane; try again when it ends",
                 ));
             }
             let env = st.env.clone();
-            // Keep the newest token of the lane's account before its copy goes away.
-            if let Ok(Some(login)) = qf_adapter::read_login(&env) {
-                let h = AccountId(login.account_hash().unwrap_or_default());
-                self.capture(&mut inner, &h, &login);
+            // Keep the newest token of the lane's account before its copy goes away; if that
+            // cannot be done, the lane's login is not removed.
+            let login = qf_adapter::read_login(&env).ok().flatten();
+            if let Some(l) = &login {
+                self.preserve_live(&mut inner, &id, l)
+                    .map_err(|e| ApiErr::refused(format!("lane not deleted: {e}")))?;
             }
-            env
+            // Sessions are checked last, right before the login is removed.
+            self.refresh_env(&mut inner, &id);
+            if inner.envs.get(&id).is_some_and(|st| !st.sessions.is_empty()) {
+                return Err(ApiErr::refused("sessions are running in this lane; end them first"));
+            }
+            (env, login)
         };
         qf_adapter::login::retire(&env, Duration::from_secs(9)).map_err(|e| ApiErr::refused(e.to_string()))?;
         let mut inner = self.lock();
-        // A session may have started in the lane meanwhile.
+        // A session may have started in the lane meanwhile: give it its login back.
         self.refresh_env(&mut inner, &id);
         if inner.envs.get(&id).is_some_and(|st| !st.sessions.is_empty()) {
-            return Err(ApiErr::refused("a session started in this lane; end it first"));
+            let restored = match &login {
+                Some(l) => self.restore_lane_login(&mut inner, &env, l),
+                None => true,
+            };
+            return Err(ApiErr::refused(if restored {
+                "a session started in this lane; its login was put back. End the session first"
+            } else {
+                "a session started in this lane and its login could not be put back; switch an account into the lane (quayflow use <account> --env <lane>)"
+            }));
         }
         qf_adapter::lanes::delete(&env).map_err(|e| ApiErr::invalid(e.to_string()))?;
         inner.envs.remove(&id);
         self.record(&inner, "lane.deleted", json!({"lane": name}), true);
         Ok(format!("lane \"{name}\" deleted; the shared setup is untouched"))
+    }
+
+    /// Write back a lane's login removed by an interrupted delete. Returns false on failure.
+    fn restore_lane_login(&self, inner: &mut Inner, env: &Env, login: &qf_vault::Login) -> bool {
+        match qf_adapter::swap(env, login, Duration::from_secs(3), |_| Ok(())) {
+            Ok(out) => {
+                if let Some(st) = inner.envs.get_mut(&env.id) {
+                    st.own_stamp = out.stamp;
+                    st.last_stamp = out.stamp;
+                }
+                self.record(inner, "lane.login_restored", json!({"lane": env.id}), true);
+                true
+            }
+            Err(e) => {
+                self.log.log(
+                    "error",
+                    "lane.restore_failed",
+                    json!({"lane": env.id, "error": e.to_string()}),
+                    &[],
+                );
+                false
+            }
+        }
     }
 
     fn handoff_envs(&self, session_id: &str, to_env: &str) -> Result<(Env, Env, Option<SessionInfo>), ApiErr> {

@@ -36,6 +36,41 @@ pub fn is_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
 }
 
+/// Creation time of a running process, in Unix milliseconds (`None` when unknown).
+#[cfg(windows)]
+pub fn start_time_ms(pid: u32) -> Option<i64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    if pid == 0 {
+        return None;
+    }
+    // SAFETY: plain Win32 calls with a handle we close; FILETIME out-params are plain data.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return None;
+        }
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        let ok = GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user);
+        CloseHandle(h);
+        if ok == 0 {
+            return None;
+        }
+        let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
+        // 100 ns ticks since 1601-01-01 to Unix milliseconds.
+        Some((ticks as i64 - 116_444_736_000_000_000) / 10_000)
+    }
+}
+
+#[cfg(not(windows))]
+pub fn start_time_ms(_pid: u32) -> Option<i64> {
+    None
+}
+
 /// Parent process id (Toolhelp snapshot).
 #[cfg(windows)]
 pub fn parent_pid(pid: u32) -> Option<u32> {
@@ -243,5 +278,16 @@ mod tests {
         assert!(!is_alive(0));
         #[cfg(windows)]
         assert!(parent_pid(std::process::id()).is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn own_start_time_is_in_the_past() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let t = start_time_ms(std::process::id()).unwrap();
+        assert!(t <= now && t > now - 24 * 3_600_000, "{t} vs {now}");
     }
 }

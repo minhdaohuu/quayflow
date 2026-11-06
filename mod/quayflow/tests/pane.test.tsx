@@ -126,6 +126,35 @@ describe('groups', () => {
     await ui.unmount()
   })
 
+  // The session runs in C:\work\app: an assignment for C:\work\ap does not cover it, while
+  // C:\WORK\app (any case) does.
+  for (const [path, covered] of [
+    ['C:\\work\\ap', false],
+    ['C:\\WORK\\app', true],
+  ] as const) {
+    test(`project assignment ${path} ${covered ? 'covers' : 'does not cover'} C:\\work\\app`, async ($, on) => {
+      const state: StateView = {
+        ...STATE,
+        session: { ...STATE.session!, group: 'Default', groupSource: 'assigned' },
+        projects: [{ path, group: 'Default' }],
+      }
+      const w = world(on, { state })
+      await start($, w, true)
+      await quay($, '')
+      const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+      await ui.press({ key: 'tab:groups' })
+      if (covered) {
+        expect(await ui.find({ type: 'Text', text: /explicit assignment for C:\\WORK\\app\)/ })).toBeDefined()
+        await ui.press({ key: 'gr-unassign' })
+        expect(w.bodies('/v1/projects/unassign')).toEqual([{ path }])
+      } else {
+        expect(await ui.find({ type: 'Text', text: /\(default group\)/ })).toBeDefined()
+        expect(await ui.find({ key: 'gr-unassign' })).toBeUndefined()
+      }
+      await ui.unmount()
+    })
+  }
+
   test('mixed identities: membership is resent with acceptDisclosure only after approval', async ($, on) => {
     const w = world(on, {
       state: MIXED,
@@ -173,7 +202,35 @@ describe('first use', () => {
     await ui.press({ key: 'c:engineStart' })
     await ui.press({ key: 'c:terms' })
     await ui.press({ key: 'welcome-continue' })
-    expect(w.bodies('/v1/onboarding')).toEqual([{ consents: { engineStart: true, signinStartup: false, credentialStorage: false, terms: true }, complete: true }])
+    // Optional consents left alone are not sent: an explicit false would revoke them.
+    expect(w.bodies('/v1/onboarding')).toEqual([{ consents: { engineStart: true, terms: true }, complete: true }])
+    await ui.unmount()
+  })
+
+  const GIVEN: StateView = { ...STATE, onboarded: false, consents: { engineStart: 1, signinStartup: 1, credentialStorage: 1, terms: 1 } }
+
+  test('Welcome starts from the consents already given; Continue revokes nothing', async ($, on) => {
+    const w = world(on, { state: GIVEN })
+    await start($, w, true)
+    await quay($, '')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    for (const key of ['c:engineStart', 'c:signinStartup', 'c:credentialStorage', 'c:terms']) {
+      expect((await ui.find({ key }))?.text).toMatch(/^\[x\] /)
+    }
+    await ui.press({ key: 'welcome-continue' })
+    expect(w.bodies('/v1/onboarding')).toEqual([{ consents: { engineStart: true, terms: true }, complete: true }])
+    await ui.unmount()
+  })
+
+  test('unticking a consent already given revokes only that one', async ($, on) => {
+    const w = world(on, { state: GIVEN })
+    await start($, w, true)
+    await quay($, '')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'c:signinStartup' })
+    expect((await ui.find({ key: 'c:signinStartup' }))?.text).toMatch(/^\[ \] /)
+    await ui.press({ key: 'welcome-continue' })
+    expect(w.bodies('/v1/onboarding')).toEqual([{ consents: { engineStart: true, terms: true, signinStartup: false }, complete: true }])
     await ui.unmount()
   })
 

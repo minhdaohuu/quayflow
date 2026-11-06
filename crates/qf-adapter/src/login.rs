@@ -117,6 +117,19 @@ pub fn swap(
     wait_each: Duration,
     before_write: impl FnOnce(Option<&Login>) -> Result<(), String>,
 ) -> Result<SwapOutcome, SwapError> {
+    swap_with(env, target, wait_each, false, before_write)
+}
+
+/// [`swap`], with `repair`: write the destination even when the live account record already
+/// names it. The caller uses this when it knows the files are inconsistent (credentials of
+/// another account under this account record), where skipping the write would keep them so.
+pub fn swap_with(
+    env: &Env,
+    target: &Login,
+    wait_each: Duration,
+    repair: bool,
+    before_write: impl FnOnce(Option<&Login>) -> Result<(), String>,
+) -> Result<SwapOutcome, SwapError> {
     let started = Instant::now();
     let held = lock::acquire_env(env, wait_each).map_err(SwapError::Lock)?;
     let t0 = Instant::now();
@@ -129,7 +142,14 @@ pub fn swap(
         }),
         _ => None,
     };
-    if previous.as_ref().is_some_and(|p| p.same_tokens(target)) {
+    // Already on the destination account (identity, not tokens): Claude may have refreshed
+    // the live tokens since the vault copy was taken, so writing the copy would replace fresh
+    // tokens with older ones. Leave the files alone; `previous` carries the live (fresh)
+    // login for the caller to capture.
+    let same_identity = previous.as_ref().is_some_and(|p| {
+        p.same_tokens(target) || (!repair && p.account_uuid().is_some() && p.account_uuid() == target.account_uuid())
+    });
+    if same_identity {
         drop(held);
         return Ok(SwapOutcome {
             previous,
@@ -145,14 +165,30 @@ pub fn swap(
     let creds_text = serde_json::to_string(&Value::Object(creds)).map_err(|e| SwapError::PreWrite(e.to_string()))?;
     let config_text =
         serde_json::to_string_pretty(&Value::Object(config)).map_err(|e| SwapError::PreWrite(e.to_string()))?;
+    // The credential file as it was, to put back if the account record cannot be written.
+    let creds_before = match std::fs::read(env.credentials()) {
+        Ok(b) => Some(b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(SwapError::Read(format!("{}: {e}", file_name(&env.credentials())))),
+    };
     // Credentials first: a client that reads between the two writes sees the new token,
     // which is what decides the account of its request.
     atomic_write(&env.credentials(), creds_text.as_bytes())
         .map_err(|e| SwapError::PreWrite(format!("credential file not written: {e}")))?;
     if let Err(e) = atomic_write(&env.claude_json, config_text.as_bytes()) {
-        return Err(SwapError::PostWrite(format!(
-            "account record not written after the credential write: {e}"
-        )));
+        // Roll the credential write back so tokens and account record never disagree.
+        let restored = match &creds_before {
+            Some(b) => atomic_write(&env.credentials(), b),
+            None => std::fs::remove_file(env.credentials()),
+        };
+        return Err(match restored {
+            Ok(()) => SwapError::PreWrite(format!(
+                "account record not written ({e}); the credential write was rolled back"
+            )),
+            Err(r) => SwapError::PostWrite(format!(
+                "account record not written after the credential write: {e}; rollback failed: {r}"
+            )),
+        });
     }
     let stamp = credentials_stamp(env);
     let after = read_login(env).map_err(SwapError::PostWrite)?;
@@ -297,6 +333,42 @@ mod tests {
         let current = read_login(&e).unwrap().unwrap();
         let out = swap(&e, &current, Duration::from_secs(1), |_| panic!("must not write")).unwrap();
         assert!(!out.changed);
+    }
+
+    #[test]
+    fn same_account_with_refreshed_tokens_is_not_overwritten() {
+        let (_d, e) = setup();
+        // The vault copy of u-a is older than what Claude refreshed into the live files.
+        let stale = Login {
+            oauth: json!({"accessToken":"A0","refreshToken":"R0","expiresAt":0}),
+            account: json!({"accountUuid":"u-a"}),
+        };
+        let before = std::fs::read(e.credentials()).unwrap();
+        let out = swap(&e, &stale, Duration::from_secs(1), |_| panic!("must not write")).unwrap();
+        assert!(!out.changed);
+        assert_eq!(out.previous.unwrap().refresh_token(), Some("R1"));
+        assert_eq!(std::fs::read(e.credentials()).unwrap(), before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn account_record_failure_rolls_back_credentials() {
+        let (_d, e) = setup();
+        let before = std::fs::read(e.credentials()).unwrap();
+        // A read-only .claude.json cannot be replaced.
+        let mut perm = std::fs::metadata(&e.claude_json).unwrap().permissions();
+        perm.set_readonly(true);
+        std::fs::set_permissions(&e.claude_json, perm.clone()).unwrap();
+        let r = swap(&e, &target(), Duration::from_secs(1), |_| Ok(()));
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        std::fs::set_permissions(&e.claude_json, perm).unwrap();
+        let err = r.unwrap_err();
+        assert!(matches!(err, SwapError::PreWrite(_)), "{err}");
+        assert!(!err.written());
+        assert_eq!(std::fs::read(e.credentials()).unwrap(), before);
+        assert_eq!(read_login(&e).unwrap().unwrap().refresh_token(), Some("R1"));
+        assert_eq!(read_identity(&e).as_deref(), Some("u-a"));
     }
 
     #[test]

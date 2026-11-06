@@ -20,9 +20,44 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-/// Single-instance lock: a file created with CREATE_NEW holding our PID.
-/// A lock left by a dead process is replaced. Returns false when another engine runs.
-pub fn take_instance_lock(dd: &DataDir) -> Result<bool, String> {
+/// The single-instance lock, held for the engine's lifetime. Dropping it releases the lock.
+pub struct InstanceLock {
+    _file: std::fs::File,
+}
+
+/// Single-instance lock: `engine.lock` held open without write sharing for the engine's
+/// lifetime, holding our PID (informational). Another engine cannot open it while we run;
+/// the OS closes the handle when an engine crashes, so the next engine simply takes it.
+/// Returns `None` when another engine runs.
+#[cfg(windows)]
+pub fn take_instance_lock(dd: &DataDir) -> Result<Option<InstanceLock>, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    let opened = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(FILE_SHARE_READ)
+        .open(dd.engine_lock());
+    match opened {
+        Ok(mut f) => {
+            f.set_len(0).map_err(|e| e.to_string())?;
+            f.write_all(std::process::id().to_string().as_bytes())
+                .map_err(|e| e.to_string())?;
+            Ok(Some(InstanceLock { _file: f }))
+        }
+        // ERROR_SHARING_VIOLATION 32, ERROR_LOCK_VIOLATION 33: another engine holds it.
+        Err(e) if matches!(e.raw_os_error(), Some(32) | Some(33)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Single-instance lock (non-Windows fallback): a file created with CREATE_NEW holding our
+/// PID. A lock left by a dead process is replaced; an empty lock younger than a few seconds
+/// is still being written by another engine and counts as held.
+#[cfg(not(windows))]
+pub fn take_instance_lock(dd: &DataDir) -> Result<Option<InstanceLock>, String> {
     for _ in 0..3 {
         match std::fs::OpenOptions::new()
             .write(true)
@@ -32,43 +67,44 @@ pub fn take_instance_lock(dd: &DataDir) -> Result<bool, String> {
             Ok(mut f) => {
                 f.write_all(std::process::id().to_string().as_bytes())
                     .map_err(|e| e.to_string())?;
-                return Ok(true);
+                return Ok(Some(InstanceLock { _file: f }));
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let holder: u32 = std::fs::read_to_string(dd.engine_lock())
+                let holder: Option<u32> = std::fs::read_to_string(dd.engine_lock())
                     .ok()
-                    .and_then(|t| t.trim().parse().ok())
-                    .unwrap_or(0);
-                if holder != 0 && holder != std::process::id() && qf_adapter::process::is_alive(holder) {
-                    return Ok(false);
+                    .and_then(|t| t.trim().parse().ok());
+                let young = std::fs::metadata(dd.engine_lock())
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|m| m.elapsed().ok())
+                    .is_some_and(|age| age < Duration::from_secs(5));
+                match holder {
+                    None if young => return Ok(None),
+                    Some(h) if h != std::process::id() && qf_adapter::process::is_alive(h) => return Ok(None),
+                    _ => {}
                 }
                 let _ = std::fs::remove_file(dd.engine_lock());
             }
             Err(e) => return Err(e.to_string()),
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
-pub fn release_instance_lock(dd: &DataDir) {
-    if std::fs::read_to_string(dd.engine_lock())
-        .ok()
-        .and_then(|t| t.trim().parse::<u32>().ok())
-        == Some(std::process::id())
-    {
-        let _ = std::fs::remove_file(dd.engine_lock());
-    }
+pub fn release_instance_lock(dd: &DataDir, lock: InstanceLock) {
     if EngineConn::read(dd).is_some_and(|c| c.pid == std::process::id()) {
         let _ = std::fs::remove_file(dd.engine_json());
     }
+    // The lock file itself stays: it is only a lock while an engine holds it open.
+    drop(lock);
 }
 
 /// Run the engine until stopped. Returns Ok(false) when another engine already runs.
 pub fn serve(dd: DataDir, default_env: qf_adapter::Env, tick: Duration) -> Result<bool, String> {
     dd.ensure().map_err(|e| e.to_string())?;
-    if !take_instance_lock(&dd)? {
+    let Some(lock) = take_instance_lock(&dd)? else {
         return Ok(false);
-    }
+    };
     let result = (|| {
         let engine = Engine::new(dd.clone(), default_env, std::env::var_os("QUAYFLOW_OFFLINE").is_some())?;
         let server = std::sync::Arc::new(tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?);
@@ -120,6 +156,6 @@ pub fn serve(dd: DataDir, default_env: qf_adapter::Env, tick: Duration) -> Resul
         engine.log("info", "engine.stop", serde_json::json!({}));
         Ok(true)
     })();
-    release_instance_lock(&dd);
+    release_instance_lock(&dd, lock);
     result
 }

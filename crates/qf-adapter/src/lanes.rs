@@ -123,6 +123,18 @@ pub fn create(shared: &Env, lanes_dir: &Path, name: &str) -> Result<Env, String>
     if lane.config_dir.exists() {
         return Err(format!("lane \"{name}\" already exists"));
     }
+    if let Err(e) = build(shared, &lane) {
+        // Remove the half-built lane. `delete` removes the links first (as links), so the
+        // shared folders they point to are never entered.
+        if lane.config_dir.exists() {
+            let _ = delete(&lane);
+        }
+        return Err(e);
+    }
+    Ok(lane)
+}
+
+fn build(shared: &Env, lane: &Env) -> Result<(), String> {
     std::fs::create_dir_all(lane.config_dir.join("sessions")).map_err(|e| e.to_string())?;
     for d in LINKED_DIRS {
         let target = shared.config_dir.join(d);
@@ -136,19 +148,19 @@ pub fn create(shared: &Env, lanes_dir: &Path, name: &str) -> Result<Env, String>
         }
     }
     for p in memory_dirs(shared) {
-        link_memory(shared, &lane, &p).map_err(|e| format!("memory {p}: {e}"))?;
+        link_memory(shared, lane, &p).map_err(|e| format!("memory {p}: {e}"))?;
     }
+    // A leading UTF-8 byte order mark (added by some Windows editors) is not JSON.
     let mut cfg: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&shared.claude_json)
         .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
+        .and_then(|t| serde_json::from_str(t.strip_prefix('\u{feff}').unwrap_or(&t)).ok())
         .unwrap_or_default();
     cfg.remove("oauthAccount");
     qf_vault::atomic_write(
         &lane.claude_json,
         serde_json::to_string_pretty(&cfg).unwrap_or_default().as_bytes(),
     )
-    .map_err(|e| e.to_string())?;
-    Ok(lane)
+    .map_err(|e| e.to_string())
 }
 
 /// Overwrite an existing file's content in place (open, truncate, write), keeping its file
@@ -388,6 +400,43 @@ mod tests {
         assert!(!shared_file.exists(), "the deleted shared file must not come back");
         assert!(!lane.config_dir.join("settings.json").exists());
         assert!(st(check(&shared, &lane, false)).ok);
+    }
+
+    #[test]
+    fn failed_create_removes_the_half_built_lane_only() {
+        let d = tempfile::tempdir().unwrap();
+        let shared = shared_with_settings(d.path());
+        std::fs::create_dir_all(shared.config_dir.join("skills").join("s1")).unwrap();
+        std::fs::write(shared.config_dir.join("skills").join("s1").join("SKILL.md"), "x").unwrap();
+        std::fs::create_dir_all(shared.projects_dir().join("C--p").join("memory")).unwrap();
+        std::fs::write(shared.projects_dir().join("C--p").join("memory").join("m.md"), "m").unwrap();
+        // "commands" is a file in the shared setup: linking it fails after the other links.
+        std::fs::write(shared.config_dir.join("commands"), "not a folder").unwrap();
+        let lanes = d.path().join("lanes");
+        assert!(create(&shared, &lanes, "work").is_err());
+        assert!(!lanes.join("work").exists(), "half-built lane removed");
+        assert!(shared.config_dir.join("skills").join("s1").join("SKILL.md").is_file());
+        assert!(shared.projects_dir().join("C--p").join("memory").join("m.md").is_file());
+        assert!(shared.config_dir.join("settings.json").is_file());
+        // The name is free again once the cause is fixed.
+        std::fs::remove_file(shared.config_dir.join("commands")).unwrap();
+        assert!(create(&shared, &lanes, "work").is_ok());
+    }
+
+    #[test]
+    fn bom_prefixed_shared_config_is_copied() {
+        let d = tempfile::tempdir().unwrap();
+        let shared = shared_with_settings(d.path());
+        std::fs::write(
+            &shared.claude_json,
+            "\u{feff}{\"oauthAccount\":{\"accountUuid\":\"u\"},\"hasCompletedOnboarding\":true}",
+        )
+        .unwrap();
+        let lane = create(&shared, &d.path().join("lanes"), "a").unwrap();
+        let cfg: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&lane.claude_json).unwrap()).unwrap();
+        assert_eq!(cfg["hasCompletedOnboarding"], true);
+        assert!(cfg.get("oauthAccount").is_none());
     }
 
     #[test]

@@ -79,9 +79,23 @@ const CONSENTS = [
   { key: 'c:terms', label: 'I am responsible for complying with the provider\'s terms and my organization\'s rules (required)' },
 ]
 
+/** A consent the engine already holds (from the last state read); false when unknown. */
+function given(c: Ctx, key: string): boolean {
+  const consents = (c.s?.consents ?? {}) as Record<string, unknown>
+  return !!consents[key.replace(/^c:/, '')]
+}
+
+/** A Welcome toggle: what the person set ('1' / '0'), else the consent already given. */
+function consentOn(c: Ctx, key: string): boolean {
+  const v = c.form[key]
+  if (v === '1') return true
+  if (v === '0') return false
+  return given(c, key)
+}
+
 export function Welcome($: EngineInterface, c: Ctx): JSX.Element {
   const { Box } = c.els
-  const on = (k: string): boolean => c.form[k] === '1'
+  const on = (k: string): boolean => consentOn(c, k)
   const ready = on('c:engineStart') && on('c:terms')
   return (
     <Box flexDirection="column">
@@ -95,7 +109,7 @@ export function Welcome($: EngineInterface, c: Ctx): JSX.Element {
         Line(c, '- A switch changes the login of a credential environment: every Claude session using it moves at its next request. Requests in progress finish on their account.'),
         Line(c, '- Modes: Suggest (default) shows a candidate and switches on /quay accept. Automatic is opt-in per group. Unattended headless jobs (claude -p) only switch or recover in Automatic mode.'),
       )}
-      {Section(c, 'Consent (each is separate; nothing is checked for you)', ...CONSENTS.map(k => Toggle(c, k.key, k.label, on(k.key), v => setForm($, k.key, v ? '1' : ''))))}
+      {Section(c, 'Consent (each is separate; only consents you already gave are checked)', ...CONSENTS.map(k => Toggle(c, k.key, k.label, on(k.key), v => setForm($, k.key, v ? '1' : '0'))))}
       {Row(
         c,
         Btn(c, 'welcome-continue', ready ? 'Continue' : 'Continue (needs the two required consents)', () => {
@@ -113,15 +127,17 @@ export function Welcome($: EngineInterface, c: Ctx): JSX.Element {
 }
 
 async function finishWelcome($: EngineInterface, c: Ctx): Promise<void> {
-  const on = (k: string): boolean => c.form[k] === '1'
   const ok = await run($, 'starting the engine and recording your consent', async () => {
     if (!Q.link.on) await establish($, { allowStart: true, explicit: true })
     if (!Q.link.on) throw new Error(`the engine did not start: ${linkOffText(Q.link)}`)
-    const consents = {
-      engineStart: true,
-      signinStartup: on('c:signinStartup'),
-      credentialStorage: on('c:credentialStorage'),
-      terms: true,
+    // The engine reads an explicit false as a revocation: an optional consent is sent only
+    // when the person changed it here (ticked it, or unticked one already given).
+    const consents: Record<string, boolean> = { engineStart: true, terms: true }
+    for (const key of ['c:signinStartup', 'c:credentialStorage']) {
+      const v = c.form[key]
+      const had = given(c, key)
+      if (v === '1' && !had) consents[key.slice(2)] = true
+      else if (v === '0' && had) consents[key.slice(2)] = false
     }
     const r = await actOnboarding($, consents, true)
     if (!r.ok) throw new Error(r.message ?? 'the engine did not record the consent')

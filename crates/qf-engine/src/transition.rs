@@ -61,11 +61,14 @@ impl Engine {
             if st.live.as_ref() == Some(to) && st.unknown.is_none() {
                 return Err(Refusal::new("noop", format!("{} is already live", account.label)));
             }
-            if let Some((other, _)) = inner
-                .envs
-                .iter()
-                .find(|(id, s)| *id != env && s.live.as_ref() == Some(to))
-            {
+            // Live there, its credentials there, or a switch to it there not yet ended.
+            if let Some((other, _)) = inner.envs.iter().find(|(id, s)| {
+                *id != env
+                    && (s.holds_login(to)
+                        || s.transition
+                            .as_ref()
+                            .is_some_and(|t| &t.to == to && !t.state.is_terminal()))
+            }) {
                 return Err(Refusal::new(
                     "refused",
                     format!(
@@ -291,34 +294,33 @@ impl Engine {
                 std::thread::sleep(Duration::from_millis(500));
             }
         }
-        if cancel.load(Ordering::SeqCst) {
-            return self.end(
-                env,
-                tid,
-                TransitionState::Cancelled,
-                "cancelled before the write".into(),
-            );
-        }
+        // The last cancel check and the move to Applying happen under the engine lock, as does
+        // `cancel`: a cancel either lands before (and wins) or sees Applying (and is refused).
         {
             let mut inner = self.lock();
+            if cancel.load(Ordering::SeqCst) {
+                drop(inner);
+                return self.end(
+                    env,
+                    tid,
+                    TransitionState::Cancelled,
+                    "cancelled before the write".into(),
+                );
+            }
             self.set_state(&mut inner, env, tid, TransitionState::Applying, None);
         }
         let _cred = self.cred_lock.lock().unwrap_or_else(|e| e.into_inner());
         let me = self.clone();
         let (env_id, tid_s) = (env.clone(), tid.to_string());
-        let result = qf_adapter::swap(&envx, &target, Duration::from_secs(lock_wait), move |prev| {
+        // Mixed files must be rewritten even when the account record already names the
+        // destination: its credentials are another account's.
+        let repair = self.lock().envs.get(env).is_some_and(|s| s.mixed.is_some());
+        let result = qf_adapter::swap_with(&envx, &target, Duration::from_secs(lock_wait), repair, move |prev| {
             let mut inner = me.lock();
             if let Some(p) = prev {
-                let h = AccountId(p.account_hash().unwrap_or_default());
-                if inner.config.account(&h).is_some() {
-                    me.capture(&mut inner, &h, p);
-                } else {
-                    // Unknown login: keep a protected backup; inability blocks the switch (FR-04).
-                    me.vault
-                        .backup(&me.dd.backups(), &format!("unknown-{}", h.0), p)
-                        .map_err(|e| format!("cannot back up the unknown live login: {e}"))?;
-                    me.record(&inner, "login.backup", json!({"env": env_id, "account": h}), true);
-                }
+                // The outgoing login must be safe before it is overwritten: a failure to store
+                // it (or back it up) stops the switch.
+                me.preserve_live(&mut inner, &env_id, p)?;
             }
             if !me.record(&inner, "transition.applying", json!({"id": tid_s, "env": env_id}), true) {
                 return Err("the journal cannot be written".into());
@@ -327,15 +329,47 @@ impl Engine {
         });
         drop(_cred);
         match result {
-            Ok(out) => self.after_write(env, tid, out),
+            Ok(out) => {
+                // Nothing written because the destination is already live here: its login in
+                // the environment may be fresher than the vault copy, so keep it now.
+                if let (false, Some(p)) = (out.changed, out.previous.as_ref()) {
+                    let mut inner = self.lock();
+                    let mixed = inner.envs.get(env).is_some_and(|s| s.mixed.is_some());
+                    if let crate::core::LiveOwner::Registered(h) = self.live_owner(&inner, p) {
+                        if h == to && !mixed {
+                            if let Err(e) = self.capture(&mut inner, &h, p) {
+                                self.log
+                                    .log("error", "vault.capture_failed", json!({"account": h, "error": e}), &[]);
+                            }
+                        }
+                    }
+                }
+                self.after_write(env, tid, out)
+            }
             Err(SwapError::Lock(e)) => self.end(env, tid, TransitionState::Failed, e.to_string()),
             Err(e @ (SwapError::PreWrite(_) | SwapError::Read(_))) => {
                 self.end(env, tid, TransitionState::Failed, e.to_string())
             }
             Err(SwapError::PostWrite(m)) => {
-                // Reconcile from the real state instead of assuming either account.
-                let live = qf_adapter::read_identity(&envx).map(|u| AccountId::from_uuid(&u));
-                if live.as_ref() == Some(&to) {
+                // Reconcile from the real state of both files instead of assuming either
+                // account: the account record and the credentials.
+                let now = qf_adapter::read_login(&envx).ok().flatten();
+                let identity = now.as_ref().and_then(|l| l.account_hash()).map(AccountId);
+                let creds_are_target = now
+                    .as_ref()
+                    .is_some_and(|l| l.refresh_token().is_some() && l.refresh_token() == target.refresh_token());
+                if creds_are_target && identity.as_ref() != Some(&to) {
+                    // Half-written: the destination's credentials under another account record.
+                    self.end(env, tid, TransitionState::Uncertain, m);
+                    let mut inner = self.lock();
+                    self.hold_mixed(&mut inner, env, &to, identity.as_ref());
+                    self.record(
+                        &inner,
+                        "transition.uncertain",
+                        json!({"id": tid, "env": env, "mixed": true}),
+                        true,
+                    );
+                } else if creds_are_target && identity.as_ref() == Some(&to) {
                     self.after_write(
                         env,
                         tid,
@@ -391,6 +425,9 @@ impl Engine {
         st.last_stamp = out.stamp;
         st.other_switcher = false;
         st.external_changes.clear();
+        // Both files now hold the destination's login: a mixed state or an earlier
+        // unresolved switch no longer holds automation.
+        st.clear_hold();
         let unpinned = st.unpinned_transition.take().is_some_and(|id| id == t.id);
         st.pin = if t.how.pins() && !unpinned {
             Some(Pin {

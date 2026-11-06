@@ -181,8 +181,13 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
             Ok(v)
         }
         ("POST", "/v1/migrate-poc") => {
+            // No group named: the configured default group.
+            let group = match s(body, "group").filter(|g| !g.trim().is_empty()) {
+                Some(g) => g.to_string(),
+                None => e.lock().config.default_group.clone(),
+            };
             let lines = e.migrate_poc(
-                s(body, "group").unwrap_or("Default"),
+                &group,
                 body.get("acceptDisclosure").and_then(|v| v.as_bool()).unwrap_or(false),
             )?;
             ok(OkResponse::ok(lines.join(
@@ -308,6 +313,13 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
                 let mut inner = e.lock();
                 inner.config.automation_paused = pause;
                 e.save_config(&inner).map_err(ApiErr::invalid)?;
+                if !pause {
+                    // Resuming also lifts a hold left by an unresolved switch, but not one over
+                    // inconsistent login files: only a switch repairs those.
+                    for st in inner.envs.values_mut().filter(|s| s.mixed.is_none()) {
+                        st.hold = None;
+                    }
+                }
                 e.record(&inner, "automation", json!({"paused": pause}), false);
                 let text = if pause {
                     "Automation paused. Manual switching still works."
@@ -430,6 +442,15 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
     }
 }
 
+/// Constant-time equality (the time taken does not depend on where the inputs differ).
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
 /// Handle one HTTP request (token, body limit, request-id cache).
 pub fn handle(e: &Shared, mut req: tiny_http::Request) {
     let method = req.method().as_str().to_string();
@@ -439,7 +460,7 @@ pub fn handle(e: &Shared, mut req: tiny_http::Request) {
     let token_ok = req
         .headers()
         .iter()
-        .any(|h| h.field.equiv("x-quayflow-token") && h.value.as_str() == e.token);
+        .any(|h| h.field.equiv("x-quayflow-token") && ct_eq(h.value.as_str().as_bytes(), e.token.as_bytes()));
     let respond = |req: tiny_http::Request, status: u16, body: Value| {
         let header = tiny_http::Header::from_bytes(&b"content-type"[..], &b"application/json"[..]).expect("header");
         let _ = req.respond(
@@ -464,10 +485,36 @@ pub fn handle(e: &Shared, mut req: tiny_http::Request) {
             Err(_) => return respond(req, 400, json!({"error": "body is not JSON", "code": "invalid"})),
         }
     };
-    let request_id = body.get("requestId").and_then(|v| v.as_str()).map(String::from);
-    if let Some(rid) = &request_id {
-        if let Some((_, v)) = e.lock().request_cache.iter().find(|(k, _)| k == rid) {
-            return respond(req, 200, v.clone());
+    // Duplicate protection: the key is (method, path, requestId); the entry is claimed before
+    // the route runs, so a concurrent retry gets 409 instead of running the request twice.
+    let request_key = body
+        .get("requestId")
+        .and_then(|v| v.as_str())
+        .map(|rid| format!("{method} {path} {rid}"));
+    if let Some(key) = &request_key {
+        let mut inner = e.lock();
+        match inner.request_cache.iter().find(|(k, _)| k == key) {
+            Some((_, Some(v))) => return respond(req, 200, v.clone()),
+            Some((_, None)) => {
+                drop(inner);
+                return respond(
+                    req,
+                    409,
+                    json!({"error": "this request is already being handled", "code": "in_progress"}),
+                );
+            }
+            None => {
+                inner.request_cache.push_back((key.clone(), None));
+                while inner.request_cache.len() > 256 {
+                    // Evict the oldest finished entry; in-flight claims stay.
+                    match inner.request_cache.iter().position(|(_, v)| v.is_some()) {
+                        Some(i) => {
+                            inner.request_cache.remove(i);
+                        }
+                        None => break,
+                    }
+                }
+            }
         }
     }
     // A panic while handling one request answers 500; the worker thread survives.
@@ -480,17 +527,20 @@ pub fn handle(e: &Shared, mut req: tiny_http::Request) {
                 .unwrap_or_else(|| "panic".into());
             Err(ApiErr::new(500, "internal", format!("internal error: {what}")))
         });
-    match routed {
-        Ok(v) => {
-            if let Some(rid) = request_id {
-                let mut inner = e.lock();
-                inner.request_cache.push_back((rid, v.clone()));
-                while inner.request_cache.len() > 256 {
-                    inner.request_cache.pop_front();
-                }
+    if let Some(key) = &request_key {
+        let mut inner = e.lock();
+        let pos = inner.request_cache.iter().position(|(k, _)| k == key);
+        match (&routed, pos) {
+            // A success is remembered for retries; a failure releases the claim (retry runs).
+            (Ok(v), Some(i)) => inner.request_cache[i].1 = Some(v.clone()),
+            (Err(_), Some(i)) => {
+                inner.request_cache.remove(i);
             }
-            respond(req, 200, v)
+            _ => {}
         }
+    }
+    match routed {
+        Ok(v) => respond(req, 200, v),
         Err(err) => {
             if err.status >= 500 {
                 e.log("error", "api.error", json!({"path": path, "error": err.message}));
