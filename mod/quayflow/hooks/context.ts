@@ -28,6 +28,10 @@ export const Q = {
   /** `quayflow start --if-consented` runs at most once per session (FR-19). */
   startAttempted: false,
   lastLinkTry: 0,
+  /** Ticket of the newest `establish` attempt; each attempt takes the next one. */
+  linkTicket: 0,
+  /** The newest ticket handed out when the link last turned on. */
+  linkOnTicket: 0,
   state: undefined as StateView | undefined,
   seq: 0,
   requestCounter: 0,

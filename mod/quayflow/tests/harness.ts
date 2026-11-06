@@ -13,7 +13,7 @@ export type Sent = { method: string; route: string; body: Record<string, unknown
 export type Reply = { status: number; body: unknown }
 
 /** An answer for one route: a body, a `Reply`, or a function of the request body. */
-export type RouteAnswer = unknown | ((body: Record<string, unknown>) => unknown)
+export type RouteAnswer = unknown | ((body: Record<string, unknown>) => unknown | Promise<unknown>)
 
 export type Answers = {
   hello?: Record<string, unknown>
@@ -24,6 +24,10 @@ export type Answers = {
   down?: boolean
   /** What `quayflow.exe start` prints; `started` / `running` bring a down engine up. */
   start?: 'running' | 'started' | 'failed' | 'no_consent' | 'stopped_by_user'
+  /** `quayflow.exe start` answers this long after it was run (on the mocked clock). */
+  startDelayMs?: number
+  /** The whole JSON line `quayflow.exe start` prints, when more than `{"state":...}`. */
+  startLine?: Record<string, unknown>
   /** Answers for any other route, by path. Unlisted routes answer `{ ok: true }`. */
   routes?: Record<string, RouteAnswer>
 }
@@ -68,10 +72,11 @@ export function world(on: On, a: Answers = {}) {
   })
   on('fs.exists', () => ({ value: true }))
   on('fs.write', () => ({ value: undefined }))
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
     runs.push([...e.argv])
+    if (a.startDelayMs) await clock.sleep(a.startDelayMs)
     if (a.start === 'started' || a.start === 'running') down = false
-    return { value: { exitCode: 0, stdout: `{"state":"${a.start ?? 'no_consent'}"}\n`, stderr: '' } as never }
+    return { value: { exitCode: 0, stdout: `${JSON.stringify(a.startLine ?? { state: a.start ?? 'no_consent' })}\n`, stderr: '' } as never }
   })
 
   on('ui.status', (_$, e) => {
@@ -96,7 +101,7 @@ export function world(on: On, a: Answers = {}) {
     return { deny: 'no one to ask' }
   })
 
-  on('http.fetch', (_$, e) => {
+  on('http.fetch', async (_$, e) => {
     const url = new URL(e.url)
     const reply = (status: number, body: unknown) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(body) } })
     if (url.hostname === 'api.anthropic.com') {
@@ -117,7 +122,7 @@ export function world(on: On, a: Answers = {}) {
       '/v1/events': { seq: state.seq, events: [] },
     }
     const route = a.routes?.[url.pathname]
-    const answer = typeof route === 'function' ? (route as (b: Record<string, unknown>) => unknown)(body ?? {}) : (route ?? fixed[url.pathname] ?? { ok: true })
+    const answer = typeof route === 'function' ? await (route as (b: Record<string, unknown>) => unknown)(body ?? {}) : (route ?? fixed[url.pathname] ?? { ok: true })
     return isReply(answer) ? reply(answer.status, answer.body) : reply(200, answer)
   })
 
@@ -129,6 +134,10 @@ export function world(on: On, a: Answers = {}) {
     /** The engine comes up by other means (installed, set up or started from the command line). */
     up: () => {
       down = false
+    },
+    /** The engine goes away: engine.json gone, connections refused. */
+    down: () => {
+      down = true
     },
     routes: () => sent.map(s => s.route),
     bodies: (route: string) => sent.filter(s => s.route === route).map(s => s.body ?? {}),
@@ -154,12 +163,16 @@ export async function quay($: { command: { run: (e: never) => Promise<{ text?: s
   return out.text ?? ''
 }
 
-/** Starts a session the way Claude Code does, then lets the Mod's start-up work settle. */
+/**
+ * Starts a session the way Claude Code does, then lets the Mod's start-up work settle:
+ * two seconds cover the first handshake's quick retries against a refused engine.
+ */
 export async function start(
   $: { session: { start: (e: { cwd: string; surface: 'terminal' | null; isInteractive: boolean }) => Promise<unknown> } },
-  w: { clock: { settle: () => Promise<void> } },
+  w: { clock: { advance: (ms: number) => Promise<void>; settle: () => Promise<void> } },
   interactive: boolean,
 ): Promise<void> {
   await $.session.start({ cwd: 'C:\\work\\app', surface: interactive ? 'terminal' : null, isInteractive: interactive })
+  await w.clock.advance(2_000)
   await w.clock.settle()
 }

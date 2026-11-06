@@ -9,7 +9,7 @@
 // everything Quayflow does is off and Claude behaves as without it.
 import type { Elements, Register } from 'claude-code'
 
-import { Q, setLink } from './context'
+import { Q, errorText, setLink, uiLog } from './context'
 import { establish } from './engine'
 import { onStep } from './step'
 import { openPane, runCommand, HELP } from './commands'
@@ -41,10 +41,15 @@ export const register: Register = on => {
         settle()
       }
       if (Q.headless) return
-      await refresh($).catch(() => undefined)
-      await paintStatus($)
+      try {
+        await refresh($)
+        await paintStatus($)
+      } catch (err) {
+        uiLog($, `Quayflow: could not draw its status (${errorText(err)}); it will retry.`)
+      }
+      // The watcher keeps the status current and reconnects; it must start whatever happened above.
       startWatcher($)
-    })()
+    })().catch(() => {})
     return started
   })
 
