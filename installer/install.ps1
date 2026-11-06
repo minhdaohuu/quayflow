@@ -161,6 +161,21 @@ function Install-Quayflow {
         return $null
     }
 
+    function Start-Engine {
+        # Runs `quayflow.exe start` and returns the state from its JSON line
+        # (started, running, failed, ...), or a short description when there is none.
+        $r = Invoke-Native $Exe @('start')
+        $state = $null
+        foreach ($line in @($r.Out -split "`n")) {
+            $t = $line.Trim()
+            if ($t.StartsWith('{')) {
+                try { $state = [string]($t | ConvertFrom-Json).state } catch { $null = $_ }
+            }
+        }
+        if ($state) { return $state }
+        return "unknown, exit $($r.Code): $($r.Out)"
+    }
+
     function Get-ClaudeJson([string]$Claude, [string[]]$Arguments) {
         $r = Invoke-Native $Claude $Arguments
         if ($r.Code -ne 0) { return @() }
@@ -281,6 +296,8 @@ Your responsibility:
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ('quayflow-install-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
     New-Item -ItemType Directory -Force -Path $work | Out-Null
+    $stoppedForUpgrade = $false
+    $restarted = $false
     try {
         $needed = @($Assets) + 'SHA256SUMS'
         if ($Source) {
@@ -361,7 +378,10 @@ Your responsibility:
         $engine = Get-EngineProcess
         $wasRunning = $null -ne $engine
         if ($wasRunning -and (Test-Path -LiteralPath $Exe)) {
+            # `stop` also writes the "stopped by user" marker; the engine is restarted below
+            # with a plain `start`, which clears it (or by the finally block if this fails).
             Write-Info "Stopping the running engine (pid $($engine.Id)) for the upgrade."
+            $stoppedForUpgrade = $true
             $null = Invoke-Native $Exe @('stop')
             if (-not $engine.WaitForExit(20000)) { Write-Warn 'The engine did not stop within 20 s; its files will be replaced by rename.' }
         }
@@ -439,8 +459,12 @@ Your responsibility:
             Write-Info 'Engine start at sign-in: on'
         }
         if ($wasRunning) {
-            $r = Invoke-Native $Exe @('start', '--if-consented')
-            Write-Info "Engine restarted: $($r.Out)"
+            # Plain `start`: it clears the "stopped by user" marker the upgrade's `stop` wrote
+            # (`start --if-consented` would honor that marker and leave the engine off).
+            $state = Start-Engine
+            $restarted = $true
+            if ($state -eq 'started' -or $state -eq 'running') { Write-Info "Engine restarted ($state)." }
+            else { Write-Warn "The engine did not restart ($state). Run 'quayflow start' (log: $(Join-Path $DataRoot 'logs'))." }
         }
 
         Write-Step 'Done'
@@ -452,6 +476,15 @@ Your responsibility:
         Write-Info 'Uninstall:  quayflow uninstall'
     } finally {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+        if ($stoppedForUpgrade -and -not $restarted) {
+            # The upgrade failed after stopping the engine: do not leave the user without one.
+            if (Test-Path -LiteralPath $Exe) {
+                $state = Start-Engine
+                Write-Warn "The upgrade did not finish; the engine was restarted ($state)."
+            } else {
+                Remove-Item -LiteralPath (Join-Path $DataRoot 'engine.stopped') -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 

@@ -53,7 +53,7 @@ Maintenance
   report                       local support report for review
   migrate-poc [--group G] [--accept-disclosure]
   consent <engine-start|signin-startup|credential-storage|terms|prompt-hook|live-canary> <on|off>
-  update [--check] [--version vX.Y.Z]
+  update [--check] [--version vX.Y.Z] [--skip-attestation]
   uninstall [--delete-data] [--yes]
   version
 ";
@@ -61,36 +61,53 @@ Maintenance
 struct Args {
     pos: Vec<String>,
     flags: Vec<(String, Option<String>)>,
+    /// Usage errors found while parsing (a value-taking flag without a value, ...).
+    errors: Vec<String>,
+}
+
+fn takes_value(name: &str) -> bool {
+    matches!(
+        name,
+        "label" | "group" | "env" | "session" | "to" | "threshold" | "margin" | "pid" | "wait-pid" | "cwd" | "version"
+    )
 }
 
 impl Args {
     fn parse(raw: Vec<String>) -> Args {
         let mut pos = vec![];
         let mut flags = vec![];
+        let mut errors = vec![];
         let mut it = raw.into_iter().peekable();
         while let Some(a) = it.next() {
-            if let Some(name) = a.strip_prefix("--") {
-                let takes = matches!(
-                    name,
-                    "label"
-                        | "group"
-                        | "env"
-                        | "session"
-                        | "to"
-                        | "threshold"
-                        | "margin"
-                        | "pid"
-                        | "wait-pid"
-                        | "cwd"
-                        | "version"
-                );
-                let val = if takes { it.next() } else { None };
-                flags.push((name.to_string(), val));
-            } else {
+            let Some(flag) = a.strip_prefix("--") else {
                 pos.push(a);
+                continue;
+            };
+            let (name, inline) = match flag.split_once('=') {
+                Some((n, v)) => (n.to_string(), Some(v.to_string())),
+                None => (flag.to_string(), None),
+            };
+            if !takes_value(&name) {
+                if inline.is_some() {
+                    errors.push(format!("--{name} does not take a value"));
+                }
+                flags.push((name, None));
+                continue;
+            }
+            // A value never starts with "--": `--label --group G` must not make "--group" a label.
+            let val = match inline {
+                Some(v) => Some(v),
+                None => it.next_if(|n| !n.starts_with("--")),
+            };
+            match val {
+                Some(v) if !v.is_empty() && !v.starts_with("--") => flags.push((name, Some(v))),
+                _ => {
+                    errors.push(format!("--{name} needs a value"));
+                    flags.push((name, None));
+                }
             }
         }
-        Args { pos, flags }
+        Args { pos, flags, errors }
     }
     fn has(&self, f: &str) -> bool {
         self.flags.iter().any(|(n, _)| n == f)
@@ -100,6 +117,35 @@ impl Args {
     }
     fn p(&self, i: usize) -> Option<&str> {
         self.pos.get(i).map(|s| s.as_str())
+    }
+}
+
+/// `0.1.0` -> `v0.1.0`; refuses anything that is not a release tag (as the installer does).
+fn normalize_version(v: &str) -> Result<String, String> {
+    let v = v.trim();
+    let tag = if v.starts_with('v') {
+        v.to_string()
+    } else {
+        format!("v{v}")
+    };
+    let (core, suffix) = match tag[1..].find(['-', '+']) {
+        Some(i) => (&tag[1..1 + i], &tag[2 + i..]),
+        None => (&tag[1..], ""),
+    };
+    let parts: Vec<&str> = core.split('.').collect();
+    let core_ok = parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    let suffix_ok = tag[1..].find(['-', '+']).is_none()
+        || (!suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'));
+    if core_ok && suffix_ok {
+        Ok(tag)
+    } else {
+        Err(format!("not a release version: \"{v}\" (expected vX.Y.Z)"))
     }
 }
 
@@ -187,6 +233,11 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         None if a.has("version") => "version",
         None => "help",
     };
+    if !matches!(cmd, "help" | "-h" | "/?" | "version" | "-V") {
+        if let Some(e) = a.errors.first() {
+            return fail(e);
+        }
+    }
     match cmd {
         "help" | "-h" | "/?" => {
             outln!("{HELP}");
@@ -331,11 +382,17 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         }
         "shell" => match a.p(1) {
             Some("install") => match local::shell_install(dd, &local::profile_paths()) {
-                Ok(p) => {
+                Ok(r) => {
+                    for e in &r.problems {
+                        eprintln!("quayflow: {}", term::fit(&format!("prompt hook NOT installed: {e}")));
+                    }
+                    if r.done.is_empty() {
+                        return 1;
+                    }
                     let _ = local::set_consent(dd, "promptHook", true);
                     outln!("Prompt hook installed in:
   {}
-Open a new PowerShell window to load it.", p.join("
+Open a new PowerShell window to load it.", r.done.join("
   "));
                     let policy = local::ps51_execution_policy();
                     if !local::profiles_load(&policy) {
@@ -343,18 +400,22 @@ Open a new PowerShell window to load it.", p.join("
   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 Quayflow does not change it for you. PowerShell 7 is not affected.");
                     }
-                    0
+                    i32::from(!r.problems.is_empty())
                 }
                 Err(e) => fail(e),
             },
-            Some("uninstall") => match local::shell_uninstall(dd, &local::profile_paths()) {
-                Ok(p) => {
+            Some("uninstall") => {
+                let r = local::shell_uninstall(dd, &local::profile_paths());
+                for e in &r.problems {
+                    eprintln!("quayflow: {}", term::fit(&format!("prompt hook NOT removed: {e}")));
+                }
+                if r.problems.is_empty() {
                     let _ = local::set_consent(dd, "promptHook", false);
-                    outln!("Prompt hook removed{}.", if p.is_empty() { " (none found)".to_string() } else { format!(" from {}", p.join(", ")) });
-                    0
                 }
-                Err(e) => fail(e),
-            },
+                let p = &r.done;
+                outln!("Prompt hook removed{}.", if p.is_empty() { " (none found)".to_string() } else { format!(" from {}", p.join(", ")) });
+                i32::from(!r.problems.is_empty())
+            }
             Some("claim") => {
                 let pid = a.val("pid").and_then(|p| p.parse().ok()).unwrap_or(0);
                 local::shell_claim(dd, pid)
@@ -423,27 +484,60 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
             outln!("{name}: {}", if on { "on" } else { "off" });
             0
         }
-        "update" => match local::update(dd, a.has("check"), a.val("version").as_deref()) {
-            Ok(m) => {
-                outln!("{m}");
-                0
+        "update" => {
+            let version = match a.val("version").map(|v| normalize_version(&v)).transpose() {
+                Ok(v) => v,
+                Err(e) => return fail(e),
+            };
+            match local::update(dd, a.has("check"), version.as_deref(), a.has("skip-attestation")) {
+                Ok(m) => {
+                    outln!("{m}");
+                    0
+                }
+                Err(e) => fail(e),
             }
-            Err(e) => fail(e),
-        },
+        }
         "uninstall" => {
-            if !a.has("yes")
-                && !ask_yes(if a.has("delete-data") {
-                    "Uninstall Quayflow and delete its vault, logs and settings?"
+            let delete_data = a.has("delete-data");
+            if delete_data {
+                let busy = local::busy_lanes(dd);
+                if !busy.is_empty() {
+                    return fail(format!(
+                        "Claude sessions are running in lane(s) {}; end them before deleting data. Nothing was changed.",
+                        busy.join(", ")
+                    ));
+                }
+            }
+            let question = if delete_data {
+                let lanes = local::lane_names(dd);
+                let lanes_text = if lanes.is_empty() {
+                    "no lanes exist".to_string()
                 } else {
-                    "Uninstall Quayflow (vault and logs are kept)?"
-                })
-            {
+                    format!("lanes: {}", lanes.join(", "))
+                };
+                format!(
+                    "Uninstall Quayflow and permanently delete:
+  - its vault (the protected copies of your registered logins), logs and settings
+  - every lane in {} ({lanes_text}): each is a separate Claude folder with its own login
+    and its own conversation history, which is deleted with it
+Your default Claude folder and its current login are not touched. Continue?",
+                    dd.lanes().display()
+                )
+            } else {
+                "Uninstall Quayflow (vault, lanes and logs are kept)?".to_string()
+            };
+            if !a.has("yes") && !ask_yes(&question) {
                 return 1;
             }
-            for n in local::uninstall(dd, a.has("delete-data")) {
-                outln!("- {n}");
+            match local::uninstall(dd, delete_data) {
+                Ok(notes) => {
+                    for n in notes {
+                        outln!("- {n}");
+                    }
+                    0
+                }
+                Err(e) => fail(e),
             }
-            0
         }
         _ => {
             eprintln!("unknown command \"{cmd}\"\n");
@@ -665,4 +759,61 @@ fn onboard(dd: &DataDir) -> i32 {
     }
     outln!("Saved. Next: quayflow register --label <name> --group Default");
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(s: &[&str]) -> Args {
+        Args::parse(s.iter().map(|x| x.to_string()).collect())
+    }
+
+    #[test]
+    fn value_flags_never_swallow_the_next_flag() {
+        let a = parse(&["add", "--label", "--group", "G"]);
+        assert_eq!(a.val("label"), None);
+        assert_eq!(a.val("group").as_deref(), Some("G"));
+        assert_eq!(a.errors, vec!["--label needs a value"]);
+        let a = parse(&["update", "--version"]);
+        assert_eq!(a.errors, vec!["--version needs a value"]);
+        let a = parse(&["register", "--label", "a", "--group", "Default", "--accept-disclosure"]);
+        assert!(a.errors.is_empty());
+        assert_eq!(a.val("label").as_deref(), Some("a"));
+        assert!(a.has("accept-disclosure"));
+        // Negative numbers are values, not flags.
+        let a = parse(&["group", "tuning", "G", "--margin", "-5"]);
+        assert_eq!(a.val("margin").as_deref(), Some("-5"));
+        assert_eq!(a.pos, vec!["group", "tuning", "G"]);
+    }
+
+    #[test]
+    fn flag_equals_value() {
+        let a = parse(&["register", "--label=work one", "--group=Default", "--yes"]);
+        assert!(a.errors.is_empty(), "{:?}", a.errors);
+        assert_eq!(a.val("label").as_deref(), Some("work one"));
+        assert_eq!(a.val("group").as_deref(), Some("Default"));
+        assert!(a.has("yes"));
+        assert_eq!(parse(&["x", "--label="]).errors, vec!["--label needs a value"]);
+        assert_eq!(parse(&["x", "--label=--group"]).errors, vec!["--label needs a value"]);
+        assert_eq!(parse(&["x", "--yes=1"]).errors, vec!["--yes does not take a value"]);
+    }
+
+    #[test]
+    fn usage_errors_are_refused_but_bare_version_still_works() {
+        let dd = DataDir::at(std::path::Path::new("Z:\\qf-test-does-not-exist"));
+        assert_eq!(run(&parse(&["update", "--version"]), &dd), 1);
+        assert_eq!(run(&parse(&["add", "--label", "--group", "G"]), &dd), 1);
+        assert_eq!(run(&parse(&["--version"]), &dd), 0);
+    }
+
+    #[test]
+    fn versions_are_normalized() {
+        assert_eq!(normalize_version("0.1.0").unwrap(), "v0.1.0");
+        assert_eq!(normalize_version("v0.1.0").unwrap(), "v0.1.0");
+        assert_eq!(normalize_version(" v1.2.3-rc.1 ").unwrap(), "v1.2.3-rc.1");
+        for bad in ["", "v", "latest", "1.2", "v1.2.3.4", "v1.x.3", "v1.2.3-", "1.2.3 ; rm"] {
+            assert!(normalize_version(bad).is_err(), "{bad}");
+        }
+    }
 }
