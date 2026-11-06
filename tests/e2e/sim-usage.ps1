@@ -173,9 +173,12 @@ try {
     Sim @{ $TB = @{ status = 200; five_hour = 92 } }
 
     # 7. Hard-limit recovery (the Mod's call, made directly)
-    Qf mode automatic --group Default --approve | Out-Null
+    # Usage first, then Automatic: enabling Automatic while the live account still reads 95%
+    # would switch at once, and a recovery right after a switch shares it by design.
     Sim @{ $TA = @{ five_hour = 30 }; $TB = @{ five_hour = 92 }; $TC = @{ five_hour = 60 } }
-    Start-Sleep 5
+    Start-Sleep 3  # fresh readings (1 s polling)
+    Qf mode automatic --group Default --approve | Out-Null
+    Start-Sleep 6  # past cooldown and the concurrent-failure window
     $before = LiveToken
     $r = Recover 'turn-unconfirmed'
     Check 'no recovery on an unconfirmed limit (live at 60%)' (-not $r.retry -and -not $r.switched -and (LiveToken) -eq $before) ($r | ConvertTo-Json -Compress)
