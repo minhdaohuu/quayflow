@@ -367,6 +367,14 @@ Your responsibility:
     }
 
     # ------------------------------------------------------- resolve the release
+    # The requested version is checked first: a bad value is refused before anything else.
+    $tag = $null
+    if ($Version) {
+        $tag = $Version.Trim()
+        if ($tag -notmatch '^v') { $tag = "v$tag" }
+        if ($tag -notmatch '^v\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { throw "Not a release version: $Version" }
+    }
+
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $ghReady = $false
     if ($gh) { $ghReady = ((Invoke-Native $gh @('auth', 'status', '--hostname', 'github.com')).Code -eq 0) }
@@ -377,13 +385,6 @@ Your responsibility:
         throw ("REFUSED: the build-provenance attestation cannot be verified because $why. Nothing was installed.`n" +
             "Install and sign in to the GitHub CLI and run this again, or accept the SHA-256 check alone by adding -SkipAttestation:`n" +
             "    & ([scriptblock]::Create((irm https://github.com/$Repo/releases/latest/download/install.ps1))) -SkipAttestation")
-    }
-
-    $tag = $null
-    if ($Version) {
-        $tag = $Version.Trim()
-        if ($tag -notmatch '^v') { $tag = "v$tag" }
-        if ($tag -notmatch '^v\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { throw "Not a release version: $Version" }
     }
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ('quayflow-install-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
