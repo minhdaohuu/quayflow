@@ -153,11 +153,25 @@ export async function markUnreachable($: EngineInterface): Promise<void> {
   if (Q.link.on) await setLink($, { on: false, reason: 'unreachable' })
 }
 
-const DESKTOP_VARS = ['DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY'] as const
+const DESKTOP_VARS = [
+  'DISPLAY',
+  'WAYLAND_DISPLAY',
+  'XDG_RUNTIME_DIR',
+  'DBUS_SESSION_BUS_ADDRESS',
+  'XAUTHORITY',
+  'XDG_CURRENT_DESKTOP',
+  'XDG_SESSION_TYPE',
+  'XDG_SESSION_DESKTOP',
+  'DESKTOP_SESSION',
+  'XDG_DATA_DIRS',
+  'XDG_CONFIG_DIRS',
+  'BROWSER',
+] as const
 
 /**
  * Linux, interactive: this session's desktop variables, so the engine (which may have
- * started over SSH or from systemd) opens a sign-in or Open New Session window here.
+ * started over SSH or from systemd) opens a sign-in or Open New Session window here, and a
+ * link opened in it goes to the desktop's browser (not, say, to LibreOffice).
  * Undefined on Windows, headless, or without a display.
  */
 async function desktopVars($: EngineInterface): Promise<Record<string, string> | undefined> {
@@ -171,6 +185,13 @@ async function desktopVars($: EngineInterface): Promise<Record<string, string> |
     XDG_RUNTIME_DIR: await $.env.get('XDG_RUNTIME_DIR').catch(() => undefined),
     DBUS_SESSION_BUS_ADDRESS: await $.env.get('DBUS_SESSION_BUS_ADDRESS').catch(() => undefined),
     XAUTHORITY: await $.env.get('XAUTHORITY').catch(() => undefined),
+    XDG_CURRENT_DESKTOP: await $.env.get('XDG_CURRENT_DESKTOP').catch(() => undefined),
+    XDG_SESSION_TYPE: await $.env.get('XDG_SESSION_TYPE').catch(() => undefined),
+    XDG_SESSION_DESKTOP: await $.env.get('XDG_SESSION_DESKTOP').catch(() => undefined),
+    DESKTOP_SESSION: await $.env.get('DESKTOP_SESSION').catch(() => undefined),
+    XDG_DATA_DIRS: await $.env.get('XDG_DATA_DIRS').catch(() => undefined),
+    XDG_CONFIG_DIRS: await $.env.get('XDG_CONFIG_DIRS').catch(() => undefined),
+    BROWSER: await $.env.get('BROWSER').catch(() => undefined),
   }
   const out: Record<string, string> = {}
   for (const k of DESKTOP_VARS) {

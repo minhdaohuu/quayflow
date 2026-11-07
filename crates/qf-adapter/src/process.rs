@@ -310,13 +310,22 @@ pub fn spawn_new_console(
     c.spawn()
 }
 
-/// The desktop variables a new window needs on Linux.
+/// The desktop variables a new window needs on Linux: the display, the session bus, and what
+/// `xdg-open` uses to find the browser (a snap browser is listed only through the desktop's
+/// `XDG_DATA_DIRS`; without them a link can open in another program).
 pub const DESKTOP_VARS: &[&str] = &[
     "DISPLAY",
     "WAYLAND_DISPLAY",
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
     "XAUTHORITY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_SESSION_TYPE",
+    "XDG_SESSION_DESKTOP",
+    "DESKTOP_SESSION",
+    "XDG_DATA_DIRS",
+    "XDG_CONFIG_DIRS",
+    "BROWSER",
 ];
 
 static DESKTOP: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());

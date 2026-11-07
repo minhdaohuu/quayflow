@@ -68,6 +68,10 @@ pub fn disclosure(cfg: &Config, group: &str, members: &[AccountId]) -> String {
     )
 }
 
+/// The Linux sign-in window's script: `$0` is Claude Code. It runs `claude auth login`, then
+/// says whether it finished and waits for Enter, so the result stays readable.
+const SIGNIN_WINDOW: &str = r#"echo "Quayflow: sign in with the account to add (a link opens in your browser; paste the code here)."; echo; "$0" auth login; s=$?; echo; if [ "$s" -eq 0 ]; then echo "Signed in. Go back to Claude and finish adding the account."; else echo "The sign-in did not finish (exit $s). Nothing was saved; try Add account again."; fi; printf "Press Enter to close this window. "; read _"#;
+
 impl Engine {
     pub fn find_account(&self, inner: &Inner, key: &str) -> Result<AccountId, ApiErr> {
         inner
@@ -502,9 +506,19 @@ impl Engine {
         let mut state = "waiting".to_string();
         match qf_adapter::process::find_claude() {
             Some(claude) => {
+                // Linux terminals close the window when its command ends, which would hide an
+                // error: the window says how the sign-in ended and waits for Enter.
+                let (program, args): (std::path::PathBuf, Vec<String>) = if cfg!(windows) {
+                    (claude.clone(), vec!["auth".into(), "login".into()])
+                } else {
+                    (
+                        "sh".into(),
+                        vec!["-c".into(), SIGNIN_WINDOW.into(), claude.display().to_string()],
+                    )
+                };
                 let r = qf_adapter::process::spawn_new_console(
-                    &claude,
-                    &["auth".into(), "login".into()],
+                    &program,
+                    &args,
                     &[("CLAUDE_CONFIG_DIR", Some(dir.as_os_str()))],
                     None,
                 );
