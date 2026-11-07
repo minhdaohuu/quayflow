@@ -48,7 +48,7 @@ Accounts and groups
 Lanes and sessions
   lanes list | create N | check N | delete N
   handoff prepare|open|replace --session ID --to ENV
-  shell install | uninstall    PowerShell prompt hook for same-terminal Replace
+  shell install | uninstall | refresh   PowerShell prompt hook for same-terminal Replace
 
 Maintenance
   canary [--live]              version check (static); --live runs the synthetic adoption job
@@ -56,7 +56,7 @@ Maintenance
   report [--preview]           local support report for review (--preview: print, save nothing)
   migrate-poc [--group G] [--accept-disclosure]
   consent <engine-start|signin-startup|credential-storage|terms|prompt-hook|live-canary> <on|off>
-  update [--check] [--version vX.Y.Z] [--skip-attestation]
+  update [--check] [--version vX.Y.Z | --source DIR] [--skip-attestation]
   uninstall [--delete-vault] [--delete-logs] [--delete-data] [--yes]
   version
 ";
@@ -71,7 +71,18 @@ struct Args {
 fn takes_value(name: &str) -> bool {
     matches!(
         name,
-        "label" | "group" | "env" | "session" | "to" | "threshold" | "margin" | "pid" | "wait-pid" | "cwd" | "version"
+        "label"
+            | "group"
+            | "env"
+            | "session"
+            | "to"
+            | "threshold"
+            | "margin"
+            | "pid"
+            | "wait-pid"
+            | "cwd"
+            | "version"
+            | "source"
     )
 }
 
@@ -499,7 +510,18 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
                 let pid = a.val("pid").and_then(|p| p.parse().ok()).unwrap_or(0);
                 local::shell_claim(dd, pid)
             }
-            _ => fail("shell install|uninstall|claim --pid N"),
+            Some("refresh") => match local::shell_refresh(dd) {
+                Ok(true) => {
+                    outln!("Shell module refreshed.");
+                    0
+                }
+                Ok(false) => {
+                    outln!("Shell module not installed or already current.");
+                    0
+                }
+                Err(e) => fail(e),
+            },
+            _ => fail("shell install|uninstall|refresh|claim --pid N"),
         },
         "canary" => {
             if a.has("live") {
@@ -602,7 +624,17 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
                 Ok(v) => v,
                 Err(e) => return fail(e),
             };
-            match local::update(dd, a.has("check"), version.as_deref(), a.has("skip-attestation")) {
+            if version.is_some() && a.has("source") {
+                return fail("--version and --source cannot be combined");
+            }
+            let source = a.val("source").map(std::path::PathBuf::from);
+            match local::update(
+                dd,
+                a.has("check"),
+                version.as_deref(),
+                a.has("skip-attestation"),
+                source.as_deref(),
+            ) {
                 Ok(m) => {
                     outln!("{m}");
                     0

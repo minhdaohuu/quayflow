@@ -325,6 +325,25 @@ public static class Program {
             Remove-Item Env:QF_FAKE_CLAUDE_ADD_FAIL
             Assert ($r.Code -ne 0 -and $r.Out -match 'marketplace add minhdaohuu/quayflow#broken failed' -and $r.Out -match 'previous Mod \(minhdaohuu/quayflow#v9.9.9\) was restored') 'failed add reported, previous Mod restored' $r.Out
             Assert ((Get-Content (Join-Path $claudeState 'market.txt') -Raw) -eq 'minhdaohuu/quayflow#v9.9.9' -and (Test-Path (Join-Path $claudeState 'plugin.txt'))) 'failed add: marketplace and plugin back'
+
+            # ---- -Update (quayflow update): no consent text, no consent changes, the shell
+            # module follows the new program, the Mod moves with the release.
+            $shellDir = Join-Path $lad 'Quayflow\shell'
+            New-Item -ItemType Directory -Force $shellDir | Out-Null
+            Set-Content (Join-Path $shellDir 'Quayflow.psm1') 'old module' -Encoding ASCII
+            Remove-Item $log -ErrorAction SilentlyContinue
+            $r = RunWith $fakeBin @('-Source', $rel, '-SkipAttestation', '-Update', '-Startup', '-MarketplaceSource', 'minhdaohuu/quayflow#v9.9.9')
+            Assert ($r.Code -eq 0 -and $r.Out -match 'Updating Quayflow' -and $r.Out -notmatch 'not affiliated with or endorsed') 'update: no consent text' $r.Out
+            Assert (-not ((LogLines) -match '^consent ')) 'update: no consent changed (not even with -Startup)' ((LogLines) -join ' | ')
+            Assert ((LogLines) -contains 'shell refresh') 'update: installed shell module refreshed' ((LogLines) -join ' | ')
+            Assert ((Get-Content (Join-Path $claudeState 'market.txt') -Raw) -eq 'minhdaohuu/quayflow#v9.9.9' -and $r.Out -match "Mod source verified: commit $cloneHead") 'update: Mod moved to the release' $r.Out
+            # A Mod installed from a local folder (a development checkout) is left alone.
+            Set-Content (Join-Path $claudeState 'market.txt') $clone -NoNewline -Encoding ASCII
+            Remove-Item $log -ErrorAction SilentlyContinue
+            $r = RunWith $fakeBin @('-Source', $rel, '-SkipAttestation', '-Update')
+            Assert ($r.Code -eq 0 -and $r.Out -match 'installed from .* and was not changed') 'update: local-folder Mod reported as kept' $r.Out
+            Assert ((Get-Content (Join-Path $claudeState 'market.txt') -Raw) -eq $clone -and -not ((LogLines) -match '^claude: plugin marketplace (add|remove)')) 'update: local-folder Mod untouched' ((LogLines) -join ' | ')
+            Remove-Item $shellDir -Recurse -Force
             Remove-Item Env:QF_FAKE_CLAUDE_STATE, Env:QF_FAKE_CLAUDE_CLONE
 
             # ---- An engine that ignores `stop` is ended, and the new one started.

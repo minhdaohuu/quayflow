@@ -133,6 +133,29 @@ try {
     $o = Qf policy; Check 'policy' ($script:code -eq 0) $o
     $o = Qf canary; Check 'canary static, no installed version: graceful' ($o -notmatch '(?i)panick') "$($script:code) $o"
     $o = Qf update --check; Check 'update --check respects QUAYFLOW_OFFLINE' ($script:code -ne 0 -and $o -match 'network access is disabled') "$($script:code) $o"
+    # update hands the install to the release's install.ps1 (-Update): a local release folder,
+    # installed into a sandboxed LOCALAPPDATA (engine only, no PATH, no consents, no Mod).
+    $rel = Join-Path $root 'release'
+    New-Item -ItemType Directory -Force $rel | Out-Null
+    Copy-Item $Exe, (Join-Path (Split-Path $Exe) 'quayflow-bg.exe') $rel
+    Copy-Item (Join-Path $PSScriptRoot '..\..\installer\install.ps1') $rel
+    $sums = Get-ChildItem $rel -File | Sort-Object Name | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }
+    [IO.File]::WriteAllText((Join-Path $rel 'SHA256SUMS'), (($sums -join "`n") + "`n"))
+    $o = Qf update --source $rel --skip-attestation; Check 'update refuses a data folder the installer does not use' ($script:code -ne 0 -and $o -match 'installs into') "$($script:code) $o"
+    $o = Qf update --source $rel --version v1.2.3; Check 'update: --source and --version refused together' ($script:code -ne 0) "$($script:code) $o"
+    $savedLad = $env:LOCALAPPDATA; $savedHome = $env:QUAYFLOW_HOME
+    $env:LOCALAPPDATA = Join-Path $root 'lad'
+    $env:QUAYFLOW_HOME = Join-Path $env:LOCALAPPDATA 'Quayflow'
+    try {
+        New-Item -ItemType Directory -Force (Join-Path $env:QUAYFLOW_HOME 'shell') | Out-Null
+        Set-Content (Join-Path $env:QUAYFLOW_HOME 'shell\Quayflow.psm1') 'old module'
+        $o = Qf update --source $rel --skip-attestation
+        $binNew = Join-Path $env:QUAYFLOW_HOME 'bin\quayflow.exe'
+        Check 'update installs a local release through install.ps1' ($script:code -eq 0 -and $o -match 'Updating Quayflow' -and $o -match 'updated to the local build' -and (Test-Path $binNew) -and (Get-FileHash $binNew).Hash -eq (Get-FileHash $Exe).Hash) "$($script:code) $o"
+        Check 'update: no consent text, Mod left alone' ($o -notmatch 'not affiliated with' -and $o -match 'Skipped the Claude Code plugin') $o
+        Check 'update refreshed the installed shell module' ((Get-Content -Raw (Join-Path $env:QUAYFLOW_HOME 'shell\Quayflow.psm1')) -match 'function') ''
+        Check 'update left no download folder' (-not (Test-Path (Join-Path $env:QUAYFLOW_HOME 'update'))) ''
+    } finally { $env:LOCALAPPDATA = $savedLad; $env:QUAYFLOW_HOME = $savedHome }
     $o = Qf shell install; Check 'shell install (sandboxed profile)' ($script:code -eq 0) $o
     $prof = Get-ChildItem -Recurse (Join-Path $env:USERPROFILE 'Documents') -Filter '*profile.ps1' -ErrorAction SilentlyContinue
     Check 'shell install wrote only the sandboxed profile' ($prof.Count -ge 1) ($prof.FullName -join ';')

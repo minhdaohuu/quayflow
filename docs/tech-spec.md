@@ -1,6 +1,6 @@
 # Quayflow v0.1 technical specification
 
-> Scope: this specification describes the Windows MVP as of v0.1.3. Quayflow targets all platforms Claude Code runs on; platform-specific parts (DPAPI vault, Windows paths and locks, PowerShell integration, installer) are isolated so that macOS and Linux can provide their own. See [requirements.md](requirements.md#platform-scope).
+> Scope: this specification describes the Windows MVP as of v0.1.4. Quayflow targets all platforms Claude Code runs on; platform-specific parts (DPAPI vault, Windows paths and locks, PowerShell integration, installer) are isolated so that macOS and Linux can provide their own. See [requirements.md](requirements.md#platform-scope).
 
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
@@ -22,7 +22,7 @@ Tests can move the whole folder with `QUAYFLOW_HOME`.
 |---|---|
 | `bin\` | `quayflow.exe` and `quayflow-bg.exe` as installed |
 | `shell\` | `Quayflow.psm1` written by `quayflow shell install` |
-| `update\` | Temporary download folder of `quayflow update`; removed after each run |
+| `update\` | Temporary download folder of `quayflow update` (`SHA256SUMS`, `install.ps1`); removed after each run |
 | `config.json` | `qf_model::Config` (accounts metadata, groups, projects, tuning, consents, managed-login override setting). No credentials |
 | `vault\<account-id>.dpapi` | Base64 of a DPAPI blob (CurrentUser, entropy `quayflow-vault-v1`, `CRYPTPROTECT_UI_FORBIDDEN`) of `{"oauth": <claudeAiOauth>, "account": <oauthAccount>}` |
 | `backups\unknown-<hash>-<ts>.dpapi` | Protected backup of an unknown live login taken before a manual switch |
@@ -173,11 +173,12 @@ canary [--live]                static check now; --live runs the synthetic adopt
 lanes list | create <name> | delete <name> | check <name>
 handoff open|replace|prepare --session <id> --to <env>
 shell install | uninstall      PowerShell prompt hook (PowerShell 7 and 5.1 profiles)
+shell refresh                  rewrite an installed hook module from this version (no profile change)
 shell claim --pid N            used by the prompt hook: print and consume this terminal's pending replacement
 policy [--json]                managed login enforcement per environment
 report [--preview]             build a local support report for review (--preview prints it and saves nothing)
 migrate-poc [--group G] [--accept-disclosure]   import the PoC vault (~/.quayflow-poc)
-update [--check] [--version vX.Y.Z] [--skip-attestation]   engine and Mod as a matched pair (hash-verified)
+update [--check] [--version vX.Y.Z | --source DIR] [--skip-attestation]   runs the release's install.ps1 -Update (hash-checked): engine and Mod as a matched pair
 uninstall [--delete-vault] [--delete-logs] [--delete-data] [--yes]   each deletion separate and off by default; --delete-data = vault, logs, settings and lanes
 consent <engine-start|signin-startup|credential-storage|terms|prompt-hook|live-canary> <on|off>
 version

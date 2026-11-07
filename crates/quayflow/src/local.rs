@@ -415,6 +415,17 @@ pub fn shell_install(dd: &DataDir, profiles: &[PathBuf]) -> Result<ProfileReport
     Ok(r)
 }
 
+/// `quayflow shell refresh`: rewrite the installed shell module from this build (after an
+/// upgrade). Profiles are not touched. Returns whether the module was rewritten.
+pub fn shell_refresh(dd: &DataDir) -> Result<bool, String> {
+    let p = dd.shell().join("Quayflow.psm1");
+    if !p.exists() || std::fs::read(&p).map(|b| b == PSM1.as_bytes()).unwrap_or(false) {
+        return Ok(false);
+    }
+    qf_vault::atomic_write(&p, PSM1.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Returns whether the block was removed.
 fn uninstall_profile(p: &Path) -> Result<bool, String> {
     let (text, enc) = match read_profile(p) {
@@ -628,208 +639,146 @@ fn download(assets: &[&str], dest: &Path, tag: &str, gh_ready: bool) -> Result<(
 
 pub const PROGRAM_FILES: [&str; 2] = ["quayflow.exe", "quayflow-bg.exe"];
 
-/// Install verified files from `from` into `bin`: stage every file next to its target first,
-/// then swap them in. On any failure every file already swapped is put back and the staged
-/// copies are removed, so `bin` holds either the complete old set or the complete new set.
-/// A replaced file is kept as `<name>.old-<n>` (a running executable can be renamed, not deleted).
-pub fn swap_in(bin: &Path, from: &Path, names: &[&str]) -> Result<(), String> {
-    std::fs::create_dir_all(bin).map_err(|e| e.to_string())?;
-    // Leftovers of earlier updates (still locked ones stay).
-    if let Ok(rd) = std::fs::read_dir(bin) {
-        for e in rd.flatten() {
-            let n = e.file_name().to_string_lossy().to_string();
-            if names
-                .iter()
-                .any(|a| n.starts_with(&format!("{a}.old")) || n == format!("{a}.new"))
-            {
-                let _ = std::fs::remove_file(e.path());
-            }
-        }
+/// Arguments for the release's `install.ps1` in update mode: no consent prompt, no PATH change,
+/// consents left as they are. A local `source` is installed engine-only (the Mod is not moved).
+pub fn installer_args(script: &Path, tag: Option<&str>, source: Option<&Path>, skip_attestation: bool) -> Vec<String> {
+    let mut v: Vec<String> = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    v.push(script.display().to_string());
+    v.push("-Update".into());
+    if let Some(t) = tag {
+        v.extend(["-Version".into(), t.to_string()]);
     }
-    let staged = |a: &str| bin.join(format!("{a}.new"));
-    let unstage = || {
-        for a in names {
-            let _ = std::fs::remove_file(staged(a));
-        }
-    };
-    for a in names {
-        let r = std::fs::copy(from.join(a), staged(a))
-            .map_err(|e| format!("{a}: {e}"))
-            .and_then(|_| match (sha256_file(&from.join(a)), sha256_file(&staged(a))) {
-                (Ok(x), Ok(y)) if x == y => Ok(()),
-                _ => Err(format!("{a}: the staged copy does not match the verified file")),
-            });
-        if let Err(e) = r {
-            unstage();
-            return Err(e);
-        }
+    if let Some(s) = source {
+        v.extend(["-Source".into(), s.display().to_string(), "-NoPlugin".into()]);
     }
-    let stamp = qf_model::time::now_ms();
-    let old = |a: &str| bin.join(format!("{a}.old-{stamp}"));
-    // (name, had an old file)
-    let mut swapped: Vec<(&str, bool)> = vec![];
-    for a in names {
-        let target = bin.join(a);
-        let had = target.exists();
-        let r = (|| -> std::io::Result<()> {
-            if had {
-                std::fs::rename(&target, old(a))?;
-            }
-            std::fs::rename(staged(a), &target)
-        })();
-        if let Err(e) = r {
-            // This file: put the old one back if it was moved away.
-            if had && !target.exists() {
-                let _ = std::fs::rename(old(a), &target);
-            }
-            for (b, had_b) in swapped.iter().rev() {
-                let t = bin.join(b);
-                let _ = std::fs::remove_file(&t);
-                if *had_b {
-                    let _ = std::fs::rename(old(b), &t);
-                }
-            }
-            unstage();
-            return Err(format!("{a}: {e}"));
-        }
-        swapped.push((a, had));
+    if skip_attestation {
+        v.push("-SkipAttestation".into());
     }
-    // Remove what can be removed now (a running executable's old copy stays until next time).
-    for a in names {
-        let _ = std::fs::remove_file(old(a));
-    }
-    Ok(())
+    v
 }
 
-/// Run `quayflow.exe start` (clears the "stopped by user" marker) and return its state.
-fn restart_engine(dd: &DataDir, exe: &Path) -> String {
-    let _ = std::fs::remove_file(dd.stopped_marker());
-    match qf_adapter::process::hidden(exe).arg("start").output() {
-        Ok(o) => {
-            let text = String::from_utf8_lossy(&o.stdout);
-            let state = text
-                .lines()
-                .rev()
-                .find_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
-                .and_then(|v| v["state"].as_str().map(String::from));
-            state.unwrap_or_else(|| format!("unknown (exit {})", o.status.code().unwrap_or(-1)))
-        }
-        Err(e) => format!("failed ({e})"),
-    }
+/// The folder the installer installs into (`%LOCALAPPDATA%\Quayflow`).
+fn installer_root() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Quayflow"))
 }
 
-/// Move the Mod to the release tag, as the installer does (matched pair).
-fn update_mod(tag: &str) -> Vec<String> {
-    let Some(claude) = qf_adapter::process::find_claude() else {
-        return vec!["Claude Code (claude) not found: the Mod was not updated; run the installer again once Claude Code is installed".into()];
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
     };
-    let run = |args: &[&str]| -> (bool, String) {
-        match qf_adapter::process::hidden(&claude).args(args).output() {
-            Ok(o) => (
-                o.status.success(),
-                format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&o.stdout),
-                    String::from_utf8_lossy(&o.stderr)
-                )
-                .trim()
-                .to_string(),
-            ),
-            Err(e) => (false, e.to_string()),
-        }
-    };
-    let market = format!("{REPO}#{tag}");
-    let (ok, out) = run(&["plugin", "marketplace", "list", "--json"]);
-    let listed = ok
-        && serde_json::from_str::<Value>(&out)
-            .ok()
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .any(|m| m["name"] == "quayflow");
-    if listed {
-        let (ok, out) = run(&["plugin", "marketplace", "remove", "quayflow"]);
-        if !ok {
-            return vec![format!(
-                "the Mod was not updated: claude plugin marketplace remove quayflow failed: {out}"
-            )];
-        }
-    }
-    let (ok, out) = run(&["plugin", "marketplace", "add", &market]);
-    if !ok {
-        return vec![format!(
-            "the Mod was not updated: claude plugin marketplace add {market} failed: {out}. For a private repository run `gh auth login` and `gh auth setup-git` first, then `claude plugin marketplace add {market}` and `claude plugin install quayflow@quayflow --scope user`"
-        )];
-    }
-    let (ok, out) = run(&["plugin", "install", "quayflow@quayflow", "--scope", "user"]);
-    if !ok {
-        return vec![format!(
-            "the Mod was not updated: claude plugin install quayflow@quayflow failed: {out}; run `claude plugin install quayflow@quayflow --scope user` yourself"
-        )];
-    }
-    vec![format!(
-        "Mod moved to {tag}; restart running Claude sessions to load it"
-    )]
+    norm(a) == norm(b)
 }
 
-pub fn update(dd: &DataDir, check_only: bool, version: Option<&str>, skip_attestation: bool) -> Result<String, String> {
-    if std::env::var_os("QUAYFLOW_OFFLINE").is_some() {
+/// `quayflow update`: compare a release with the installed programs, then hand the install to
+/// that release's own `install.ps1` (hash-checked against its SHA256SUMS). The installer verifies
+/// the files and their attestation, replaces the programs, moves the Mod to the same release and
+/// restarts the engine. `source` is a local release folder (testing, private use).
+pub fn update(
+    dd: &DataDir,
+    check_only: bool,
+    version: Option<&str>,
+    skip_attestation: bool,
+    source: Option<&Path>,
+) -> Result<String, String> {
+    if source.is_none() && std::env::var_os("QUAYFLOW_OFFLINE").is_some() {
         return Err("network access is disabled (QUAYFLOW_OFFLINE is set)".into());
+    }
+    if !check_only {
+        match installer_root() {
+            Some(r) if same_dir(&r, &dd.root) => {}
+            r => {
+                return Err(format!(
+                "quayflow update installs into {}, but this command uses {} (QUAYFLOW_HOME); run the installer instead",
+                r.map(|r| r.display().to_string())
+                    .unwrap_or_else(|| "%LOCALAPPDATA%\\Quayflow".into()),
+                dd.root.display()
+            ))
+            }
+        }
     }
     let gh_installed = have("gh");
     let gh_ready = gh_installed && gh_signed_in();
-    let tag = match version {
-        Some(v) => v.to_string(),
-        None => latest_tag(gh_ready)?,
+    // Same rule as the installer: refuse before downloading anything.
+    if !check_only && !skip_attestation && !gh_ready {
+        let why = if gh_installed {
+            "the GitHub CLI is not signed in (run `gh auth login`)"
+        } else {
+            "the GitHub CLI (gh) is not installed"
+        };
+        return Err(format!(
+            "REFUSED: the build-provenance attestation cannot be verified because {why}. Nothing was installed. Install and sign in to the GitHub CLI and run this again, or accept the SHA-256 check alone with --skip-attestation"
+        ));
+    }
+    let tag = match (source, version) {
+        (Some(_), _) => None,
+        (None, Some(v)) => Some(v.to_string()),
+        (None, None) => Some(latest_tag(gh_ready)?),
     };
     let tmp = dd.root.join("update");
     let _ = std::fs::remove_dir_all(&tmp);
-    let mut assets = PROGRAM_FILES.to_vec();
-    assets.push("SHA256SUMS");
-    download(&assets, &tmp, &tag, gh_ready)?;
-    let sums = parse_sums(&std::fs::read_to_string(tmp.join("SHA256SUMS")).map_err(|e| e.to_string())?);
-    for a in PROGRAM_FILES {
-        verify_against(&sums, &tmp.join(a))?;
+    let mut wanted = vec!["SHA256SUMS"];
+    if !check_only {
+        wanted.push("install.ps1");
     }
-    let attest = if skip_attestation {
-        "attestation skipped (--skip-attestation)"
-    } else if !gh_installed {
-        "attestation not checked (GitHub CLI not installed)"
-    } else if !gh_ready {
-        "attestation skipped (GitHub CLI not signed in; run `gh auth login` to enable)"
-    } else {
-        for a in PROGRAM_FILES {
-            let o = qf_adapter::process::hidden("gh")
-                .args(["attestation", "verify"])
-                .arg(tmp.join(a))
-                .args(["--repo", REPO])
-                .output()
-                .map_err(|e| e.to_string())?;
-            if !o.status.success() {
-                let _ = std::fs::remove_dir_all(&tmp);
-                return Err(format!(
-                    "GitHub attestation verification failed for {a}; refusing to install (--skip-attestation is only for builds you made yourself)"
-                ));
-            }
-        }
-        "attestation verified"
+    let fetched = match (source, tag.as_deref()) {
+        (Some(s), _) => std::fs::create_dir_all(&tmp).map_err(|e| e.to_string()).and_then(|_| {
+            wanted.iter().try_for_each(|a| {
+                std::fs::copy(s.join(a), tmp.join(a))
+                    .map(|_| ())
+                    .map_err(|e| format!("{}: {e}", s.join(a).display()))
+            })
+        }),
+        (None, Some(t)) => download(&wanted, &tmp, t, gh_ready),
+        (None, None) => Err("no release to update from".into()),
     };
+    let result = fetched.and_then(|_| hand_off(dd, &tmp, check_only, tag.as_deref(), source, skip_attestation));
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+fn hand_off(
+    dd: &DataDir,
+    tmp: &Path,
+    check_only: bool,
+    tag: Option<&str>,
+    source: Option<&Path>,
+    skip_attestation: bool,
+) -> Result<String, String> {
+    let sums = parse_sums(&std::fs::read_to_string(tmp.join("SHA256SUMS")).map_err(|e| e.to_string())?);
     let bin = dd.bin();
-    let same = PROGRAM_FILES
-        .iter()
-        .all(|a| matches!((sha256_file(&bin.join(a)), sha256_file(&tmp.join(a))), (Ok(x), Ok(y)) if x == y));
-    if same {
-        let _ = std::fs::remove_dir_all(&tmp);
-        return Ok(format!("Quayflow is up to date ({tag})."));
+    let same = PROGRAM_FILES.iter().all(|a| {
+        let listed = sums.iter().find(|(_, n)| n == a).map(|(h, _)| h.clone());
+        matches!((listed, sha256_file(&bin.join(a))), (Some(x), Ok(y)) if x == y)
+    });
+    let shown = tag.unwrap_or("the local build");
+    // A local source is always installed: that is how a build is tested.
+    if same && source.is_none() {
+        return Ok(format!("Quayflow is up to date ({shown})."));
     }
     if check_only {
-        let _ = std::fs::remove_dir_all(&tmp);
-        return Ok(format!(
-            "Quayflow {tag} is available (hash verified, {attest}). Run `quayflow update` to install it."
+        return Ok(if same {
+            format!("The programs in {shown} match the installed ones.")
+        } else {
+            format!(
+                "Quayflow {shown} is available. Run `quayflow update` to install it (the files and their attestation are verified first)."
+            )
+        });
+    }
+    let script = tmp.join("install.ps1");
+    verify_against(&sums, &script)?;
+    let text = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
+    if !text.contains("[switch]$Update") {
+        return Err(format!(
+            "the installer of {shown} has no update mode (releases before v0.1.4); run that release's installer directly (docs/user-guide.md, Install)"
         ));
     }
-    // Never replace components mid-transition.
-    let mut was_running = false;
+    // Never replace components mid-transition (the installer stops and restarts the engine).
     if let Some(c) = engine_alive(dd) {
         let st = c.get("/v1/state").map_err(|e| e.to_string())?;
         let busy = st["envs"].as_array().into_iter().flatten().any(|e| {
@@ -841,34 +790,21 @@ pub fn update(dd: &DataDir, check_only: bool, version: Option<&str>, skip_attest
         if busy {
             return Err("a switch is in progress; try again in a minute".into());
         }
-        was_running = true;
-        let _ = c.post("/v1/engine", json!({"action": "stop"}));
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while qf_adapter::process::is_alive(c.pid()) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(200));
-        }
     }
-    let swapped = swap_in(&bin, &tmp, &PROGRAM_FILES);
-    let _ = std::fs::remove_dir_all(&tmp);
-    if let Err(e) = swapped {
-        let mut msg = format!("update failed ({e}); the previous version was kept");
-        if was_running {
-            msg.push_str(&format!(
-                "; engine restarted: {}",
-                restart_engine(dd, &bin.join("quayflow.exe"))
-            ));
-        }
-        return Err(msg);
+    let shell = if have("pwsh") { "pwsh" } else { "powershell" };
+    // The installer talks to the person directly (progress, warnings): its output is not captured.
+    let status = std::process::Command::new(shell)
+        .args(installer_args(&script, tag, source, skip_attestation))
+        .status()
+        .map_err(|e| format!("could not run the installer with {shell}: {e}"))?;
+    if status.success() {
+        Ok(format!("Quayflow updated to {shown}."))
+    } else {
+        Err(format!(
+            "the installer stopped (exit {}); see its messages above",
+            status.code().unwrap_or(-1)
+        ))
     }
-    let mut notes = vec![format!("engine updated to {tag} (hash verified, {attest})")];
-    notes.extend(update_mod(&tag));
-    if was_running {
-        notes.push(format!(
-            "engine restarted: {}",
-            restart_engine(dd, &bin.join("quayflow.exe"))
-        ));
-    }
-    Ok(notes.join("; "))
 }
 
 // ---------------- uninstall ----------------
@@ -1371,63 +1307,45 @@ mod tests {
     }
 
     #[test]
-    fn swap_in_installs_all_or_nothing() {
-        let d = tempfile::tempdir().unwrap();
-        let (bin, new) = (d.path().join("bin"), d.path().join("new"));
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::create_dir_all(&new).unwrap();
-        for a in PROGRAM_FILES {
-            std::fs::write(bin.join(a), format!("old {a}")).unwrap();
-            std::fs::write(new.join(a), format!("new {a}")).unwrap();
-        }
-        // A missing source file: nothing changes and nothing is left staged.
-        std::fs::remove_file(new.join("quayflow-bg.exe")).unwrap();
-        assert!(swap_in(&bin, &new, &PROGRAM_FILES).is_err());
-        let names = |dir: &Path| {
-            let mut v: Vec<String> = std::fs::read_dir(dir)
-                .unwrap()
-                .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
-                .collect();
-            v.sort();
-            v
-        };
-        assert_eq!(names(&bin), vec!["quayflow-bg.exe", "quayflow.exe"]);
-        for a in PROGRAM_FILES {
-            assert_eq!(std::fs::read_to_string(bin.join(a)).unwrap(), format!("old {a}"));
-        }
-        // Success: both replaced, old copies cleaned up.
-        std::fs::write(new.join("quayflow-bg.exe"), "new quayflow-bg.exe").unwrap();
-        swap_in(&bin, &new, &PROGRAM_FILES).unwrap();
-        for a in PROGRAM_FILES {
-            assert_eq!(std::fs::read_to_string(bin.join(a)).unwrap(), format!("new {a}"));
-        }
-        assert_eq!(names(&bin), vec!["quayflow-bg.exe", "quayflow.exe"]);
+    fn update_hands_off_to_the_installer_in_update_mode() {
+        let s = Path::new(r"C:\q\update\install.ps1");
+        let a = installer_args(s, Some("v0.1.4"), None, false);
+        assert_eq!(
+            a,
+            [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                r"C:\q\update\install.ps1",
+                "-Update",
+                "-Version",
+                "v0.1.4"
+            ]
+        );
+        // A local build: engine only, the Mod stays where it is.
+        let a = installer_args(s, None, Some(Path::new(r"C:\dist")), true);
+        assert!(a.ends_with(&[
+            "-Update".to_string(),
+            "-Source".into(),
+            r"C:\dist".into(),
+            "-NoPlugin".into(),
+            "-SkipAttestation".into()
+        ]));
+        assert!(!a.iter().any(|x| x == "-Version" || x == "-Yes" || x == "-Startup"));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn swap_in_rolls_back_when_a_swap_fails() {
+    fn shell_refresh_rewrites_only_an_installed_module() {
         let d = tempfile::tempdir().unwrap();
-        let (bin, new) = (d.path().join("bin"), d.path().join("new"));
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::create_dir_all(&new).unwrap();
-        for a in PROGRAM_FILES {
-            std::fs::write(bin.join(a), format!("old {a}")).unwrap();
-            std::fs::write(new.join(a), format!("new {a}")).unwrap();
-        }
-        // Hold the second target open without delete sharing: it cannot be renamed away.
-        use std::os::windows::fs::OpenOptionsExt;
-        let held = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(1) // FILE_SHARE_READ only
-            .open(bin.join("quayflow-bg.exe"))
-            .unwrap();
-        assert!(swap_in(&bin, &new, &PROGRAM_FILES).is_err());
-        drop(held);
-        for a in PROGRAM_FILES {
-            assert_eq!(std::fs::read_to_string(bin.join(a)).unwrap(), format!("old {a}"), "{a}");
-        }
-        assert!(!bin.join("quayflow.exe.new").exists() && !bin.join("quayflow-bg.exe.new").exists());
+        let dd = DataDir::at(&d.path().join("qf"));
+        assert!(!shell_refresh(&dd).unwrap());
+        assert!(!dd.shell().join("Quayflow.psm1").exists());
+        std::fs::create_dir_all(dd.shell()).unwrap();
+        std::fs::write(dd.shell().join("Quayflow.psm1"), "old").unwrap();
+        assert!(shell_refresh(&dd).unwrap());
+        assert_eq!(std::fs::read_to_string(dd.shell().join("Quayflow.psm1")).unwrap(), PSM1);
+        assert!(!shell_refresh(&dd).unwrap());
     }
 
     #[test]

@@ -4,14 +4,22 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-07
+
+`quayflow update` runs the release's own installer, with all its checks; wording fixes; documentation reviewed against the code.
+
 ### Fixed
 - Messages about an account that needs a new sign-in pointed to "/quay accounts → Reauthenticate", which does not exist; they now say /quay → Accounts → Sign in again.
 - A reading that is out of date is called "usage unknown" everywhere (`quayflow status`, `/quay status`, the pane); the Mod said "not current".
 - A `/quay` command sent while the engine is still starting says "Quayflow is still connecting to the engine; try again in a moment" instead of "Quayflow is off".
 - The build's integrity line no longer claims "provenance-attested": releases are not attested while the repository is private. It says to verify with the release's `SHA256SUMS`.
 - An idle account whose token could not be refreshed yet is explained as such, not as "usage unknown until it is live".
+- After an update, the PowerShell prompt hook module stayed at the old version. The installer and `quayflow update` now refresh it (`quayflow shell refresh`).
+- `quayflow update` could leave the Mod uninstalled when adding the new release failed; it now puts the previous Mod back, as the installer does.
 
 ### Changed
+- `quayflow update` makes the same checks as the installer: it downloads the release's `install.ps1`, checks it against `SHA256SUMS`, and runs it in a new update mode (`-Update`). Without a signed-in GitHub CLI it refuses, unless you add `--skip-attestation`. Your consents, PATH and startup setting are kept, and a Mod installed from a local folder is left as it is.
+- `quayflow update --source <folder>` installs a local release folder (the engine only).
 - Documentation reviewed against the code: README (a walkthrough with real outputs, interactive and headless, and a section on headless jobs), user guide, technical specification, requirements, acceptance results (real usage-limit and headless evidence of 2026-11-07), security notes, known limits, release verification, contributing guide, Mod and test READMEs.
 
 ## [0.1.3] - 2026-11-07
@@ -101,7 +109,8 @@ First release: a private pilot for Windows 10/11 x64 (Quayflow targets every pla
 - Release assets are not attested while the repository is private; install with `-SkipAttestation`.
 - An idle account's access token expires, so it is not observed until it is used again (see `docs/known-limits.md`).
 
-[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/minhdaohuu/quayflow/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/minhdaohuu/quayflow/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/minhdaohuu/quayflow/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/minhdaohuu/quayflow/compare/v0.1.0...v0.1.1

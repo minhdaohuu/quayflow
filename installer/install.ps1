@@ -39,6 +39,10 @@ repository, or no GitHub CLI). Without it the installer refuses files whose
 attestation it cannot verify. Hash verification still applies.
 .PARAMETER Yes
 Accept the consent text without asking (it is still shown).
+.PARAMETER Update
+Used by `quayflow update`: upgrade an existing install without the consent text,
+without touching PATH and without changing any consent. A Mod installed from a
+local folder (a development checkout) is left as it is.
 .PARAMETER Uninstall
 Remove Quayflow (delegates to `quayflow.exe uninstall`) and its PATH entry.
 .PARAMETER DeleteData
@@ -54,6 +58,7 @@ param(
     [switch]$NoPlugin,
     [switch]$SkipAttestation,
     [switch]$Yes,
+    [switch]$Update,
     [switch]$Uninstall,
     [switch]$DeleteData
 )
@@ -69,6 +74,7 @@ function Install-Quayflow {
         [switch]$NoPlugin,
         [switch]$SkipAttestation,
         [switch]$Yes,
+        [switch]$Update,
         [switch]$Uninstall,
         [switch]$DeleteData
     )
@@ -82,6 +88,8 @@ function Install-Quayflow {
     $DataRoot = Join-Path $env:LOCALAPPDATA 'Quayflow'
     $BinDir = Join-Path $DataRoot 'bin'
     $Exe = Join-Path $BinDir 'quayflow.exe'
+    # An update keeps every earlier choice: no consent prompt, no PATH change (see below for the Mod).
+    if ($Update) { $Yes = $true; $NoPath = $true }
     $PocPlugin = 'quayflow@quayflow-local'
     $PocMarketplace = 'quayflow-local'
 
@@ -315,6 +323,9 @@ function Install-Quayflow {
     }
 
     # ----------------------------------------------------------------- consent
+    if ($Update) {
+        Write-Step 'Updating Quayflow (your settings and consents are kept)'
+    } else {
     $startupText = '  - Engine start at Windows sign-in: not enabled (re-run with -Startup to enable).'
     if ($Startup) { $startupText = '  - Engine start at Windows sign-in: ENABLED by -Startup (a per-user startup entry; no window).' }
     Write-Host @"
@@ -365,6 +376,7 @@ Your responsibility:
         if ($answer -notmatch '^(y|yes)$') { Write-Host 'Nothing changed.'; return }
     } else {
         Write-Info 'Consent given with -Yes.'
+    }
     }
 
     # ------------------------------------------------------- resolve the release
@@ -527,6 +539,12 @@ Your responsibility:
         $r = Invoke-Native $Exe @('version')
         if ($r.Code -ne 0) { throw "quayflow.exe does not run: $($r.All)" }
         Write-Info "Installed: $($r.Out)"
+        # The shell module is written by quayflow.exe; an installed copy follows the new program.
+        if (Test-Path -LiteralPath (Join-Path $DataRoot 'shell\Quayflow.psm1')) {
+            $r = Invoke-Native $Exe @('shell', 'refresh')
+            if ($r.Code -ne 0) { Write-Warn "The PowerShell prompt hook module was not refreshed: $($r.All)" }
+            else { Write-Info 'PowerShell prompt hook module refreshed.' }
+        }
 
         if (-not $NoPath) {
             if (Add-UserPath $BinDir) { Write-Info "Added $BinDir to your user PATH (new terminals)." }
@@ -546,8 +564,19 @@ Your responsibility:
             Write-Step 'Installing the Quayflow Mod into Claude Code'
             try {
                 Remove-PocPlugin $claude
+                $localMod = $null
+                if ($Update -and -not $MarketplaceSource) {
+                    # A Mod installed from a local folder is a development checkout: leave it alone.
+                    $entry = @(Get-ClaudeJson $claude @('plugin', 'marketplace', 'list', '--json') | Where-Object { $_.name -eq 'quayflow' }) | Select-Object -First 1
+                    $src = $null
+                    if ($entry) { $src = Get-MarketplaceSource $entry }
+                    if ($src -and (Test-Path -LiteralPath $src -PathType Container)) { $localMod = $src }
+                }
                 $market = $MarketplaceSource
-                if (-not $market -and $Source) {
+                if ($localMod) {
+                    $market = $null
+                    Write-Info "The Mod is installed from $localMod and was not changed; it may not match the new engine."
+                } elseif (-not $market -and $Source) {
                     $dir = Get-Item -LiteralPath (Resolve-Path -LiteralPath $Source).Path
                     while ($dir) {
                         $manifest = Join-Path $dir.FullName '.claude-plugin\marketplace.json'
@@ -558,16 +587,18 @@ Your responsibility:
                     }
                     if (-not $market) { throw "No Quayflow marketplace found above $Source; pass -MarketplaceSource <repository folder>." }
                 }
-                if (-not $market) {
+                if (-not $market -and -not $localMod) {
                     $market = "$Repo#$tag"
                     if (-not $sourceCommit) {
                         Write-Warn "This release does not record its source commit (SOURCE_COMMIT), so the Mod from tag $tag cannot be checked against the commit the engine was built from."
                     }
                 }
-                # Re-adding pins the Mod to the same release as the engine (matched pair).
-                Install-Mod $claude $market $sourceCommit
-                Write-Info "Marketplace: $market"
-                Write-Info 'Plugin quayflow@quayflow installed (user scope). Running Claude sessions load it after a restart.'
+                if ($market) {
+                    # Re-adding pins the Mod to the same release as the engine (matched pair).
+                    Install-Mod $claude $market $sourceCommit
+                    Write-Info "Marketplace: $market"
+                    Write-Info 'Plugin quayflow@quayflow installed (user scope). Running Claude sessions load it after a restart.'
+                }
             } catch {
                 $modError = $_.Exception.Message
                 Write-Warn "The Mod was not installed: $modError"
@@ -575,11 +606,13 @@ Your responsibility:
         }
 
         # ---------------------------------------------------------- consents
-        Write-Step 'Recording your consent'
-        $r = Invoke-Native $Exe @('consent', 'engine-start', 'on')
-        if ($r.Code -ne 0) { throw "quayflow consent engine-start on failed: $($r.All)" }
-        Write-Info 'On-demand engine start: on'
-        if ($Startup) {
+        if (-not $Update) {
+            Write-Step 'Recording your consent'
+            $r = Invoke-Native $Exe @('consent', 'engine-start', 'on')
+            if ($r.Code -ne 0) { throw "quayflow consent engine-start on failed: $($r.All)" }
+            Write-Info 'On-demand engine start: on'
+        }
+        if ($Startup -and -not $Update) {
             $r = Invoke-Native $Exe @('consent', 'signin-startup', 'on')
             if ($r.Code -ne 0) { throw "quayflow consent signin-startup on failed: $($r.All)" }
             Write-Info 'Engine start at sign-in: on'
@@ -603,9 +636,11 @@ Your responsibility:
         if ($modError) { Write-Step 'Done, except the Mod' } else { Write-Step 'Done' }
         Write-Info "Version:     $shown"
         Write-Info "Attestation: $attestation"
-        Write-Info 'Next: start Claude as usual (claude) and run /quay to register your login and choose groups.'
-        Write-Info 'Optional: quayflow shell install   (same-terminal session replacement in PowerShell)'
-        Write-Info 'Uninstall:  quayflow uninstall'
+        if (-not $Update) {
+            Write-Info 'Next: start Claude as usual (claude) and run /quay to register your login and choose groups.'
+            Write-Info 'Optional: quayflow shell install   (same-terminal session replacement in PowerShell)'
+            Write-Info 'Uninstall:  quayflow uninstall'
+        }
         if ($modError) { throw "The engine was installed, but the Mod was not: $modError`nFix the cause and run the installer again." }
     } finally {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

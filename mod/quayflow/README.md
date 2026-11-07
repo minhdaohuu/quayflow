@@ -1,6 +1,6 @@
 # Quayflow Mod
 
-The Claude Code (2.1.316) side of Quayflow, version 0.1.3. It runs inside every Claude session and talks to the per-user engine `quayflow.exe` over its loopback API v1 (`docs/tech-spec.md` §6). It never reads or writes a credential.
+The Claude Code (2.1.316) side of Quayflow, version 0.1.4. It runs inside every Claude session and talks to the per-user engine `quayflow.exe` over its loopback API v1 (`docs/tech-spec.md` §6). It never reads or writes a credential.
 
 What it does:
 
@@ -45,7 +45,7 @@ The pane also uses `GET /v1/explain`, `/v1/identity`, `/v1/handoff/check`, `/v1/
 
 | Path | Content |
 |---|---|
-| `.claude-plugin/plugin.json` | Manifest (`quayflow` 0.1.3), names the type contract and the `statusLineUsage` option |
+| `.claude-plugin/plugin.json` | Manifest (`quayflow` 0.1.4), names the type contract and the `statusLineUsage` option |
 | `hooks/hooks.json` | Names the hooks module `./register.tsx` |
 | `hooks/register.tsx` | Entry: `session.start`, `session.end` (resume and `/clear`), `turn.step`, `command.run` (`/quay`), `ui.render` (pane `quay`) |
 | `hooks/context.ts` | Session context, `$.state` atoms (all reads and writes), headless UI gates |
@@ -121,4 +121,4 @@ The Mod sends the engine opaque ids (session, turn, agent, identity hashes), lab
 
 ## Install
 
-The Quayflow installer (`installer/install.ps1`) adds this repository's marketplace pinned to the release tag and installs the plugin at user scope; `quayflow update` updates the engine and the Mod as a matched pair. Running Claude sessions load a new Mod after a restart.
+The Quayflow installer (`installer/install.ps1`) adds this repository's marketplace pinned to the release tag and installs the plugin at user scope; `quayflow update` runs the release's installer in update mode, which updates the engine and the Mod as a matched pair (a Mod installed from a local folder is left as it is). Running Claude sessions load a new Mod after a restart.

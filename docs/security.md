@@ -88,7 +88,7 @@ Releases are reproducible and hashed (attestations once the repository is public
 
 The installer always checks the SHA-256 hashes. It also requires a build-provenance attestation made by this repository's release workflow (`.github/workflows/release.yml`) for the release tag and commit, verified with a signed-in GitHub CLI; if it cannot verify one, it refuses to install, unless you pass `-SkipAttestation`, which leaves the hash check as the only protection. Private pilot releases are not attested and need that switch. The Mod is added from the release tag and refused if the checkout is not at the commit the release records in `SOURCE_COMMIT`; the gaps that remain are in [Known limits](known-limits.md#distribution).
 
-`quayflow update` always checks the SHA-256 hashes, but it verifies attestations only when the GitHub CLI is installed and signed in (and then only the repository, not the workflow, tag or commit), and it does not check the Mod against `SOURCE_COMMIT`. For the installer's full checks, run the installer for the new version.
+`quayflow update` downloads the release's `install.ps1`, checks it against `SHA256SUMS`, and runs it, so an update makes the installer's full checks. Like the installer, it refuses when the attestation cannot be verified, unless `--skip-attestation` is given.
 
 The release workflow pins every third-party GitHub Action to a full commit SHA and checks out without keeping the job token in the git configuration.
 

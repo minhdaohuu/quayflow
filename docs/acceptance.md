@@ -3,7 +3,7 @@
 The [release conditions](requirements.md#release-conditions-for-v01) require recorded results on Windows against the **product build**. This table keeps three kinds of evidence apart. They are not interchangeable.
 
 - **Logic:** Rust unit and scenario tests on a fake Claude environment (`cargo test`; scenarios in `crates/qf-engine/tests/engine.rs`). They prove decisions and file handling. They cannot prove client adoption, isolation or refresh behavior.
-- **Smoke:** `tests/e2e/smoke-fake-env.ps1`, which runs the real `quayflow.exe` process against a fake environment (21 checks), and `tests/e2e/cli-fake-env.ps1`, which covers CLI argument validation and error paths the same way (72 checks).
+- **Smoke:** `tests/e2e/smoke-fake-env.ps1`, which runs the real `quayflow.exe` process against a fake environment (21 checks), and `tests/e2e/cli-fake-env.ps1`, which covers CLI argument validation and error paths the same way (78 checks).
 - **Simulation:** `tests/e2e/sim-usage.ps1` scripts usage over time from a loopback fake of the usage, profile and token API (`tests/sim/fake_api.py`) and checks observation, suggestion, Automatic switching, return home, stale data, backoff, rejected tokens, hard-limit recovery, concurrent failures, the all-exhausted case and idle-account token refresh (33 checks). It proves Quayflow's logic against these fakes, not that the real service behaves the same.
 - **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1`, `tests/e2e/real-lanes.ps1`, `tests/e2e/real-headless.ps1` and the manual steps below). Only this kind of evidence can pass a scenario.
 
@@ -11,6 +11,7 @@ The [release conditions](requirements.md#release-conditions-for-v01) require rec
 
 - interactive: Suggest mode suggested a switch at the limit and accepting it switched; Automatic mode recovered with one switch and one retry;
 - headless: `tests/e2e/real-headless.ps1` cases X1 to X5, 42/42 checks, on a local build of the v0.1.3 code. X1: Automatic recovery, one switch, one retry, one clean JSON result. X2: three parallel runs share one switch and every run answers. X3: Suggest mode, no switch, no question, no hang; Claude's own result stands. X4: engine stopped; `claude -p` behaves as without Quayflow. X5: a run fails at the limit, `quayflow last` names a time to run again, and a fresh `claude -p` succeeds on another account. In every case stdout was exactly Claude's JSON and no Quayflow line appeared on stdout or stderr.
+- update: `quayflow update --source` with a local build of the v0.1.4 code handed the install to `install.ps1 -Update`: engine stopped and restarted, consents and PATH unchanged, the Mod installed from a local folder left as it was; against the published v0.1.3 it refused with "no update mode" and changed nothing.
 
 Still open: Claude's own in-process usage-limit wait adopting a login switched during the wait (AC-23).
 
@@ -73,6 +74,6 @@ An earlier real run the same day found a defect, fixed in `0e657ca`: a request t
 | Claude's own usage-limit wait adopts a login switched during the wait | Open |
 | Claude reads and writes correctly through lane links | Passed on a local build (2026-11-03, `real-lanes.ps1` 8/8); repeat on the release build |
 | Crash reconciliation, version gating, dead-refresh-token handling built and passing | Built; logic passes (dead refresh token of an idle account also in Simulation); real runs open |
-| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (latest v0.1.3); the installer and `quayflow update` refuse a hash mismatch. Attestation open: releases are not attested while the repository is private, and `quayflow update` checks attestations only when the GitHub CLI is signed in |
+| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (latest v0.1.4); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attestation open: releases are not attested while the repository is private |
 | Disclaimer published | Done (README, installer, onboarding) |
 | Managed-login override documented with its risk | Done (`docs/security.md`); override not implemented in this build |

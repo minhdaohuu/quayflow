@@ -1,6 +1,6 @@
 # Quayflow user guide
 
-Quayflow v0.1.3. This guide covers installing, setting up accounts and groups, how switching behaves, and how to remove Quayflow. Quayflow targets every platform Claude Code runs on; Windows is the first release, so paths and shells below are the Windows ones.
+Quayflow v0.1.4. This guide covers installing, setting up accounts and groups, how switching behaves, and how to remove Quayflow. Quayflow targets every platform Claude Code runs on; Windows is the first release, so paths and shells below are the Windows ones.
 
 > **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Quayflow is not affiliated with or endorsed by Anthropic.
 
@@ -9,7 +9,7 @@ Contents: [Requirements](#requirements) · [Install](#install) · [First use](#f
 ## Requirements
 
 - Windows 10 or 11, x64 (the platform of this first release).
-- Claude Code installed and working (`claude --version`). Quayflow v0.1.3 was validated against Claude Code 2.1.316; other versions are checked automatically (see [Version checks](#version-checks)).
+- Claude Code installed and working (`claude --version`). Quayflow v0.1.4 was validated against Claude Code 2.1.316; other versions are checked automatically (see [Version checks](#version-checks)).
 - Windows PowerShell 5.1 or PowerShell 7 for the installer. No administrator rights.
 - Claude subscription logins (claude.ai sign-in). Quayflow never switches a subscription session to API-key billing.
 
@@ -33,7 +33,7 @@ It does not read, copy or change any Claude login. Running Claude sessions load 
 
 | Option | Effect |
 |---|---|
-| `-Version v0.1.3` | Install a specific release instead of the latest |
+| `-Version v0.1.4` | Install a specific release instead of the latest |
 | `-Startup` | Also start the engine at Windows sign-in (per-user startup entry, no window) |
 | `-NoPath` | Do not change your PATH |
 | `-NoPlugin` | Engine only; do not touch Claude Code plugins |
@@ -271,6 +271,7 @@ The integration is opt-in, for PowerShell 7 and Windows PowerShell 5.1:
 ```powershell
 quayflow shell install     # adds a marked block to both PowerShell profiles
 quayflow shell uninstall   # removes the block and the module
+quayflow shell refresh     # rewrites an installed module from this version (updates do this)
 ```
 
 `shell install` writes `%LOCALAPPDATA%\Quayflow\shell\Quayflow.psm1` and adds this block to your PowerShell 7 and Windows PowerShell 5.1 profiles:
@@ -315,10 +316,12 @@ When the engine sees a new Claude version, it checks automatically that the part
 
 ```powershell
 quayflow update --check   # is a newer release available?
-quayflow update           # update engine and Mod together, hash-verified
+quayflow update           # install it with the release's own installer and all its checks
 ```
 
-The engine and the Mod are updated as a matched pair and never in the middle of a switch. Re-running the installer also upgrades. It stops the engine, replaces the files, re-pins the Mod to the new release, and restarts the engine if it was running. Restart Claude sessions to load the new Mod.
+`quayflow update` downloads the release's `install.ps1`, checks it against the release's `SHA256SUMS`, and runs it in update mode. The installer then makes every check of a first install: the SHA-256 hashes, the build-provenance attestation of the release workflow for that tag and commit, and the Mod's source commit. The attestation check needs the GitHub CLI, signed in; without it the update is refused, unless you add `--skip-attestation` to accept the hashes alone (needed while the repository is private).
+
+An update never runs in the middle of a switch. It stops the engine, replaces the programs, refreshes the PowerShell prompt hook module if you installed it, moves the Mod to the same release, and restarts the engine if it was running. Your consents, PATH and startup setting are kept. A Mod installed from a local folder (a development checkout) is left as it is, with a note. `quayflow update --source <folder>` installs a local release folder (`SHA256SUMS`, `install.ps1` and the programs) and leaves the Mod as it is. Re-running the installer also upgrades. Restart Claude sessions to load the new Mod.
 
 ## Uninstall
 
