@@ -17,6 +17,11 @@ pub struct HelloRequest {
     pub headless: bool,
     #[serde(default)]
     pub claude_version: Option<String>,
+    /// Linux: the interactive session's desktop variables (`DISPLAY`, `WAYLAND_DISPLAY`,
+    /// `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`), so a sign-in or Open New
+    /// Session window opens on the person's desktop even when the engine started without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

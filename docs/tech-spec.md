@@ -29,7 +29,7 @@ Companion to [requirements.md](requirements.md). This file holds the engineering
 | Lanes | Folder links are symbolic links (junctions on Windows); shared files are hard links |
 | Managed settings | `/etc/claude-code` (`managed-settings.json`, `managed-settings.d`) |
 | Sign-in startup | systemd user unit `~/.config/systemd/user/quayflow.service` (`Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=<program> start`) |
-| New console | First of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `xterm` with `DISPLAY` or `WAYLAND_DISPLAY`; otherwise the caller shows the command |
+| New console | First of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `xterm`, with the engine's own `DISPLAY`/`WAYLAND_DISPLAY` or else the desktop variables the latest interactive session sent in `/v1/hello` (`desktop`: `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`, kept in memory only); otherwise the caller shows the command (POSIX syntax on Linux) |
 | Shell integration | None yet (the prompt hook is PowerShell) |
 | Mod | Finds the engine through `$XDG_DATA_HOME` or `$HOME` when `LOCALAPPDATA` is not set (`hooks/engine.ts` `layout`) |
 | Installer, update | `install.sh` (POSIX `sh`); `quayflow update` runs `sh install.sh --update ...` |

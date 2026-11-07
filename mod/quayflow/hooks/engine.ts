@@ -3,7 +3,7 @@
 // open: the caller gets an error or `off`, Claude keeps working unchanged.
 import type { EngineInterface } from 'claude-code'
 
-import type { HelloResponse, QuayLink, QuayOffReason, StartState, StateView } from '../types'
+import type { HelloRequest, HelloResponse, QuayLink, QuayOffReason, StartState, StateView } from '../types'
 import { MOD_VERSION, PROTOCOL, Q, errorText, pause, setLink } from './context'
 import type { Conn } from './context'
 
@@ -153,14 +153,38 @@ export async function markUnreachable($: EngineInterface): Promise<void> {
   if (Q.link.on) await setLink($, { on: false, reason: 'unreachable' })
 }
 
+const DESKTOP_VARS = ['DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY'] as const
+
+/**
+ * Linux, interactive: this session's desktop variables, so the engine (which may have
+ * started over SSH or from systemd) opens a sign-in or Open New Session window here.
+ * Undefined on Windows, headless, or without a display.
+ */
+async function desktopVars($: EngineInterface): Promise<Record<string, string> | undefined> {
+  if (Q.headless) return undefined
+  const l = await layout($).catch(() => undefined)
+  if (!l || l.sep !== '/') return undefined
+  // `$.env.get` takes literal names (the host lists what a module reads).
+  const got: Record<(typeof DESKTOP_VARS)[number], string | undefined> = {
+    DISPLAY: await $.env.get('DISPLAY').catch(() => undefined),
+    WAYLAND_DISPLAY: await $.env.get('WAYLAND_DISPLAY').catch(() => undefined),
+    XDG_RUNTIME_DIR: await $.env.get('XDG_RUNTIME_DIR').catch(() => undefined),
+    DBUS_SESSION_BUS_ADDRESS: await $.env.get('DBUS_SESSION_BUS_ADDRESS').catch(() => undefined),
+    XAUTHORITY: await $.env.get('XAUTHORITY').catch(() => undefined),
+  }
+  const out: Record<string, string> = {}
+  for (const k of DESKTOP_VARS) {
+    const v = got[k]
+    if (v) out[k] = v
+  }
+  return out.DISPLAY || out.WAYLAND_DISPLAY ? out : undefined
+}
+
 async function hello($: EngineInterface, timeoutMs: number): Promise<HelloResponse> {
-  return call<HelloResponse>(
-    $,
-    'POST',
-    '/v1/hello',
-    { protocol: PROTOCOL, modVersion: MOD_VERSION, sessionId: Q.sessionId, headless: Q.headless, claudeVersion: Q.claudeVersion || undefined },
-    { timeoutMs },
-  )
+  const desktop = await desktopVars($)
+  const body: HelloRequest = { protocol: PROTOCOL, modVersion: MOD_VERSION, sessionId: Q.sessionId, headless: Q.headless, claudeVersion: Q.claudeVersion || undefined }
+  if (desktop) body.desktop = desktop
+  return call<HelloResponse>($, 'POST', '/v1/hello', body, { timeoutMs })
 }
 
 /** `listening`: something answered or the wait ran out, so the engine may only be busy or starting. */

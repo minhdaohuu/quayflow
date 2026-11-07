@@ -433,7 +433,7 @@ Quayflow works the same way on Linux, with these differences:
 | Program and data | `%LOCALAPPDATA%\Quayflow` | `~/.local/share/quayflow` (or `$XDG_DATA_HOME/quayflow`), folder `0700`; program linked as `~/.local/bin/quayflow` |
 | Saved logins | Encrypted with DPAPI for your user | Owner-only files (`vault/<id>.login`, `0600`), not encrypted: the same protection Claude Code gives its own `~/.claude/.credentials.json` on Linux |
 | Engine start at sign-in | A per-user Run entry | A systemd user unit, `~/.config/systemd/user/quayflow.service` (`loginctl enable-linger` to start it at boot) |
-| Open New Session | A new console window | A new window of your desktop's terminal (`x-terminal-emulator`, GNOME Terminal, Konsole, xterm); without a desktop, the exact command to run |
+| Sign-in window, Open New Session | A new console window | A new window of your desktop's terminal (`x-terminal-emulator`, GNOME Terminal, Konsole, xterm), on the desktop of the Claude session that asked, even when the engine started over SSH; without a desktop, the exact command to run in another terminal |
 | Replace Current Session | PowerShell prompt hook | Not yet: use Open New Session, or run the prepared command after `/exit` |
 | Update | `quayflow update` runs `install.ps1 -Update` | `quayflow update` runs `install.sh --update` |
 

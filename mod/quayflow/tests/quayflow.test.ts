@@ -135,6 +135,18 @@ describe('request hook', () => {
     expect(w.runs.some(r => /cmd/i.test(r[0] ?? ''))).toBe(false)
   })
 
+  test('Linux: an interactive session hands its desktop to the engine; a headless one does not', async ($, on) => {
+    const w = world(on, { linux: true, env: { DISPLAY: ':0', XDG_RUNTIME_DIR: '/run/user/1000', SSH_AUTH_SOCK: '/tmp/agent' } })
+    await start($, w, true)
+    expect(w.bodies('/v1/hello')[0]?.desktop).toEqual({ DISPLAY: ':0', XDG_RUNTIME_DIR: '/run/user/1000' })
+  })
+
+  test('Linux: headless sends no desktop', async ($, on) => {
+    const w = world(on, { linux: true, env: { DISPLAY: ':0' } })
+    await start($, w, false)
+    expect(w.bodies('/v1/hello')[0]?.desktop).toBeUndefined()
+  })
+
   test('Linux: no engine runs bin/quayflow start --if-consented', async ($, on) => {
     const w = world(on, { linux: true, down: true, start: 'no_consent' })
     await start($, w, false)

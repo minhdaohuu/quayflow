@@ -144,7 +144,7 @@ export type DOrgSetting = { enabled: boolean; confirmedOrg?: string | null; conf
 
 // ---------------------------------------------------------------- api.rs
 
-export type HelloRequest = { protocol: number; modVersion?: string; sessionId?: string; headless: boolean; claudeVersion?: string }
+export type HelloRequest = { protocol: number; modVersion?: string; sessionId?: string; headless: boolean; claudeVersion?: string; desktop?: Record<string, string> }
 export type HelloResponse = {
   compatible: boolean
   protocol: number

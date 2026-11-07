@@ -263,6 +263,22 @@ impl Engine {
     }
 
     pub fn resume_command(to: &Env, session_id: &str, cwd: Option<&str>) -> String {
+        if !cfg!(windows) {
+            // POSIX shells: one line for bash or zsh.
+            let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+            let mut parts = vec![];
+            if let Some(c) = cwd {
+                parts.push(format!("cd {}", q(c)));
+            }
+            parts.push(match to.selector() {
+                Some(dir) => format!(
+                    "CLAUDE_CONFIG_DIR={} claude --resume {session_id}",
+                    q(&dir.display().to_string())
+                ),
+                None => format!("env -u CLAUDE_CONFIG_DIR claude --resume {session_id}"),
+            });
+            return parts.join(" && ");
+        }
         let mut parts = vec![];
         if let Some(c) = cwd {
             parts.push(format!("Set-Location -LiteralPath '{}'", c.replace('\'', "''")));

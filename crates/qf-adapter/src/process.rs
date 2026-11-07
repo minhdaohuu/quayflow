@@ -271,7 +271,8 @@ pub fn spawn_new_console(
     };
     #[cfg(not(windows))]
     let mut c = {
-        let graphical = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let desktop = desktop_env();
+        let graphical = desktop.iter().any(|(k, _)| k == "DISPLAY" || k == "WAYLAND_DISPLAY");
         let term = graphical
             .then(|| TERMINALS.iter().find_map(|t| which(t)))
             .flatten()
@@ -284,6 +285,7 @@ pub fn spawn_new_console(
             c.arg("-e");
         }
         c.arg(exe).args(args);
+        c.envs(desktop);
         std::os::unix::process::CommandExt::process_group(&mut c, 0);
         c
     };
@@ -306,6 +308,51 @@ pub fn spawn_new_console(
         c.creation_flags(CREATE_NEW_CONSOLE | CREATE_BREAKAWAY_FROM_JOB);
     }
     c.spawn()
+}
+
+/// The desktop variables a new window needs on Linux.
+pub const DESKTOP_VARS: &[&str] = &[
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XAUTHORITY",
+];
+
+static DESKTOP: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Remember the desktop of the latest interactive session (from its handshake). An engine
+/// started without a desktop (over SSH, by systemd) opens its windows there. Only the
+/// variables in `DESKTOP_VARS` are kept, and only when one names a display.
+pub fn set_desktop(vars: &std::collections::BTreeMap<String, String>) {
+    let kept: Vec<(String, String)> = vars
+        .iter()
+        .filter(|(k, v)| DESKTOP_VARS.contains(&k.as_str()) && !v.is_empty())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if kept.iter().any(|(k, _)| k == "DISPLAY" || k == "WAYLAND_DISPLAY") {
+        if let Ok(mut d) = DESKTOP.lock() {
+            *d = kept;
+        }
+    }
+}
+
+/// The desktop to open a window on: this process's own, else the latest session's.
+#[cfg(not(windows))]
+fn desktop_env() -> Vec<(String, String)> {
+    let own: Vec<(String, String)> = DESKTOP_VARS
+        .iter()
+        .filter_map(|k| {
+            std::env::var(k)
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(|v| (k.to_string(), v))
+        })
+        .collect();
+    if own.iter().any(|(k, _)| k == "DISPLAY" || k == "WAYLAND_DISPLAY") {
+        return own;
+    }
+    DESKTOP.lock().map(|d| d.clone()).unwrap_or_default()
 }
 
 /// Terminal emulators tried, in order, for a new console window on Linux.
@@ -382,5 +429,19 @@ mod tests {
             .as_millis() as i64;
         let t = start_time_ms(std::process::id()).unwrap();
         assert!(t <= now && t > now - 24 * 3_600_000, "{t} vs {now}");
+    }
+
+    #[test]
+    fn only_a_desktop_with_a_display_is_kept() {
+        let mut v = std::collections::BTreeMap::new();
+        v.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string());
+        v.insert("PATH".to_string(), "/bin".to_string());
+        set_desktop(&v);
+        assert!(DESKTOP.lock().unwrap().is_empty(), "no display: nothing kept");
+        v.insert("DISPLAY".to_string(), ":0".to_string());
+        set_desktop(&v);
+        let kept = DESKTOP.lock().unwrap().clone();
+        assert!(kept.contains(&("DISPLAY".to_string(), ":0".to_string())));
+        assert!(!kept.iter().any(|(k, _)| k == "PATH"), "only desktop variables");
     }
 }

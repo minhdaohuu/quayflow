@@ -490,7 +490,14 @@ impl Engine {
         let dir = self.dd.signin_dir().join(&id);
         std::fs::create_dir_all(&dir).map_err(|e| ApiErr::invalid(e.to_string()))?;
         let env = qf_adapter::Env::at(EnvId(format!("signin-{id}")), dir.clone());
-        let command = format!("$env:CLAUDE_CONFIG_DIR=\"{}\"; claude auth login", dir.display());
+        let command = if cfg!(windows) {
+            format!("$env:CLAUDE_CONFIG_DIR=\"{}\"; claude auth login", dir.display())
+        } else {
+            format!(
+                "CLAUDE_CONFIG_DIR='{}' claude auth login",
+                dir.display().to_string().replace('\'', "'\\''")
+            )
+        };
         let mut message = None;
         let mut state = "waiting".to_string();
         match qf_adapter::process::find_claude() {

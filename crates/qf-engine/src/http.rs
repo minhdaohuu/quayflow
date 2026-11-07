@@ -121,6 +121,9 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
     match (method, path) {
         ("POST", "/v1/hello") => {
             let h: HelloRequest = parse(body)?;
+            if let (false, Some(d)) = (h.headless, &h.desktop) {
+                qf_adapter::process::set_desktop(d);
+            }
             let accepted: Vec<u32> = (PROTOCOL.saturating_sub(1).max(1)..=PROTOCOL).collect();
             let compatible = accepted.contains(&h.protocol);
             let message = (!compatible).then(|| {
