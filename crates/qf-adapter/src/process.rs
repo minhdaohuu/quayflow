@@ -1,4 +1,5 @@
-//! Process helpers (Windows): liveness, parent process, window-less and new-console launches.
+//! Process helpers: liveness, parent process, window-less and new-console launches.
+//! Windows uses Win32; Linux reads `/proc`.
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -66,9 +67,28 @@ pub fn start_time_ms(pid: u32) -> Option<i64> {
     }
 }
 
+/// Fields of `/proc/<pid>/stat` after the command name (which may hold spaces): index 0 is
+/// the state (field 3), 1 the parent pid (field 4), 19 the start time in clock ticks (field 22).
 #[cfg(not(windows))]
-pub fn start_time_ms(_pid: u32) -> Option<i64> {
-    None
+fn proc_stat(pid: u32) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = &text[text.rfind(')')? + 1..];
+    Some(rest.split_whitespace().map(String::from).collect())
+}
+
+#[cfg(not(windows))]
+pub fn start_time_ms(pid: u32) -> Option<i64> {
+    if pid == 0 {
+        return None;
+    }
+    let ticks: i64 = proc_stat(pid)?.get(19)?.parse().ok()?;
+    // Boot time (seconds since the epoch) plus the start offset; Linux reports clock ticks
+    // at USER_HZ, which is 100 on every supported architecture.
+    let btime: i64 = std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("btime ")?.trim().parse().ok())?;
+    Some(btime * 1000 + ticks * 10)
 }
 
 /// Parent process id (Toolhelp snapshot).
@@ -104,8 +124,8 @@ pub fn parent_pid(pid: u32) -> Option<u32> {
 }
 
 #[cfg(not(windows))]
-pub fn parent_pid(_pid: u32) -> Option<u32> {
-    None
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    proc_stat(pid)?.get(1)?.parse().ok()
 }
 
 /// Image name of a process (lower-case, e.g. "pwsh.exe").
@@ -142,8 +162,9 @@ pub fn process_name(pid: u32) -> Option<String> {
 }
 
 #[cfg(not(windows))]
-pub fn process_name(_pid: u32) -> Option<String> {
-    None
+pub fn process_name(pid: u32) -> Option<String> {
+    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    Some(name.trim().to_ascii_lowercase())
 }
 
 /// The nearest PowerShell ancestor of a process (the terminal a Claude session runs in).
@@ -155,7 +176,7 @@ pub fn powershell_ancestor(pid: u32) -> Option<(u32, String)> {
             return None;
         }
         if let Some(name) = process_name(parent) {
-            if name == "pwsh.exe" || name == "powershell.exe" {
+            if matches!(name.as_str(), "pwsh.exe" | "powershell.exe" | "pwsh") {
                 return Some((parent, name));
             }
         }
@@ -166,6 +187,7 @@ pub fn powershell_ancestor(pid: u32) -> Option<(u32, String)> {
 
 /// Build a command that never shows a console window.
 pub fn hidden(program: impl AsRef<OsStr>) -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut c = Command::new(program);
     #[cfg(windows)]
     {
@@ -206,6 +228,13 @@ pub fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<Child> {
         use std::os::windows::process::CommandExt;
         c.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
     }
+    // Its own process group: a signal to the caller's group (a closed terminal, Ctrl+C in
+    // the session that started it) does not reach the engine.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0);
+    }
     match c.spawn() {
         Ok(child) => Ok(child),
         // Breakaway is refused inside some job objects; retry without it.
@@ -226,14 +255,38 @@ pub fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<Child> {
 }
 
 /// Open a new console window running a command (user-visible on purpose: sign-in, Open New Session).
+/// On Linux this needs a desktop session and a terminal emulator; without one it fails, and
+/// the caller shows the command to run instead.
 pub fn spawn_new_console(
     exe: &Path,
     args: &[String],
     env: &[(&str, Option<&OsStr>)],
     cwd: Option<&Path>,
 ) -> std::io::Result<Child> {
-    let mut c = Command::new(exe);
-    c.args(args);
+    #[cfg(windows)]
+    let mut c = {
+        let mut c = Command::new(exe);
+        c.args(args);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut c = {
+        let graphical = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let term = graphical
+            .then(|| TERMINALS.iter().find_map(|t| which(t)))
+            .flatten()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no terminal window available"))?;
+        let mut c = Command::new(&term);
+        // Every listed terminal takes `-e <program> <args>`; gnome-terminal wants `--`.
+        if term.file_name().is_some_and(|n| n == "gnome-terminal") {
+            c.arg("--");
+        } else {
+            c.arg("-e");
+        }
+        c.arg(exe).args(args);
+        std::os::unix::process::CommandExt::process_group(&mut c, 0);
+        c
+    };
     for (k, v) in env {
         match v {
             Some(v) => {
@@ -255,18 +308,59 @@ pub fn spawn_new_console(
     c.spawn()
 }
 
-/// Find `claude.exe` the way a shell would (PATH), then the native install location.
-pub fn find_claude() -> Option<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let p = dir.join("claude.exe");
-            if p.is_file() {
-                return Some(p);
-            }
-        }
+/// Terminal emulators tried, in order, for a new console window on Linux.
+#[cfg(not(windows))]
+const TERMINALS: &[&str] = &[
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "xterm",
+];
+
+/// This platform's file name for a program (`claude` -> `claude.exe` on Windows).
+pub fn exe_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
     }
-    let p = crate::env::home_dir().join(".local").join("bin").join("claude.exe");
-    p.is_file().then_some(p)
+}
+
+/// Find a program on PATH the way a shell would.
+pub fn which(name: &str) -> Option<std::path::PathBuf> {
+    let file = if name.contains('.') {
+        name.to_string()
+    } else {
+        exe_name(name)
+    };
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(&file))
+        .find(|p| is_executable(p))
+}
+
+fn is_executable(p: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
+}
+
+/// Find Claude Code the way a shell would (PATH), then the native install location.
+pub fn find_claude() -> Option<std::path::PathBuf> {
+    which("claude").or_else(|| {
+        let p = crate::env::home_dir()
+            .join(".local")
+            .join("bin")
+            .join(exe_name("claude"));
+        is_executable(&p).then_some(p)
+    })
 }
 
 #[cfg(test)]
@@ -276,11 +370,10 @@ mod tests {
     fn self_is_alive() {
         assert!(is_alive(std::process::id()));
         assert!(!is_alive(0));
-        #[cfg(windows)]
         assert!(parent_pid(std::process::id()).is_some());
+        assert!(process_name(std::process::id()).is_some_and(|n| !n.is_empty()));
     }
 
-    #[cfg(windows)]
     #[test]
     fn own_start_time_is_in_the_past() {
         let now = std::time::SystemTime::now()

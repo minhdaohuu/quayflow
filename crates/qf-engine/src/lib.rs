@@ -54,42 +54,27 @@ pub fn take_instance_lock(dd: &DataDir) -> Result<Option<InstanceLock>, String> 
     }
 }
 
-/// Single-instance lock (non-Windows fallback): a file created with CREATE_NEW holding our
-/// PID. A lock left by a dead process is replaced; an empty lock younger than a few seconds
-/// is still being written by another engine and counts as held.
+/// Single-instance lock (Unix): an advisory `flock` on `engine.lock`, held for the engine's
+/// lifetime. The kernel drops it when the process ends, crashed or not.
 #[cfg(not(windows))]
 pub fn take_instance_lock(dd: &DataDir) -> Result<Option<InstanceLock>, String> {
-    for _ in 0..3 {
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(dd.engine_lock())
-        {
-            Ok(mut f) => {
-                f.write_all(std::process::id().to_string().as_bytes())
-                    .map_err(|e| e.to_string())?;
-                return Ok(Some(InstanceLock { _file: f }));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let holder: Option<u32> = std::fs::read_to_string(dd.engine_lock())
-                    .ok()
-                    .and_then(|t| t.trim().parse().ok());
-                let young = std::fs::metadata(dd.engine_lock())
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|m| m.elapsed().ok())
-                    .is_some_and(|age| age < Duration::from_secs(5));
-                match holder {
-                    None if young => return Ok(None),
-                    Some(h) if h != std::process::id() && qf_adapter::process::is_alive(h) => return Ok(None),
-                    _ => {}
-                }
-                let _ = std::fs::remove_file(dd.engine_lock());
-            }
-            Err(e) => return Err(e.to_string()),
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dd.engine_lock())
+        .map_err(|e| e.to_string())?;
+    match f.try_lock() {
+        Ok(()) => {
+            f.set_len(0).map_err(|e| e.to_string())?;
+            f.write_all(std::process::id().to_string().as_bytes())
+                .map_err(|e| e.to_string())?;
+            Ok(Some(InstanceLock { _file: f }))
         }
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.to_string()),
     }
-    Ok(None)
 }
 
 pub fn release_instance_lock(dd: &DataDir, lock: InstanceLock) {

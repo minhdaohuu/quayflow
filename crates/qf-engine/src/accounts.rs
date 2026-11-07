@@ -505,7 +505,7 @@ impl Engine {
                     message = Some(format!("could not open a sign-in window ({e}); run the command shown"));
                 }
             }
-            None => message = Some("claude.exe was not found; run the command shown in a terminal".into()),
+            None => message = Some("Claude Code (claude) was not found; run the command shown in a terminal".into()),
         }
         if message.is_some() {
             state = "waiting".into();

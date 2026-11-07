@@ -53,6 +53,16 @@ fn junction_target(link: &Path) -> Option<PathBuf> {
     std::fs::read_link(link).ok()
 }
 
+/// Remove a folder link itself, never what it points to: a junction is removed as a
+/// folder on Windows, a symbolic link as a file on Unix.
+fn remove_link(p: &Path) -> std::io::Result<()> {
+    if cfg!(windows) {
+        std::fs::remove_dir(p)
+    } else {
+        std::fs::remove_file(p)
+    }
+}
+
 fn is_link_dir(p: &Path) -> bool {
     std::fs::symlink_metadata(p)
         .map(|m| m.file_type().is_symlink())
@@ -282,14 +292,14 @@ pub fn delete(lane: &Env) -> std::io::Result<()> {
     for d in LINKED_DIRS {
         let p = lane.config_dir.join(d);
         if is_link_dir(&p) {
-            std::fs::remove_dir(&p)?;
+            remove_link(&p)?;
         }
     }
     if let Ok(projects) = std::fs::read_dir(lane.projects_dir()) {
         for p in projects.flatten() {
             let m = p.path().join("memory");
             if is_link_dir(&m) {
-                std::fs::remove_dir(&m)?;
+                remove_link(&m)?;
             }
         }
     }

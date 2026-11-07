@@ -44,11 +44,23 @@ fn source(name: String, parsed: Result<Value, String>) -> Source {
     }
 }
 
+/// Where Claude Code reads managed (enterprise) settings on this platform.
 fn managed_dir() -> PathBuf {
-    let pf = std::env::var_os("ProgramFiles")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("C:\\Program Files"));
-    pf.join("ClaudeCode")
+    #[cfg(windows)]
+    {
+        let pf = std::env::var_os("ProgramFiles")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\Program Files"));
+        pf.join("ClaudeCode")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("/Library/Application Support/ClaudeCode")
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        PathBuf::from("/etc/claude-code")
+    }
 }
 
 /// The raw registry policy values: (label, `Settings` value or why it is unreadable).

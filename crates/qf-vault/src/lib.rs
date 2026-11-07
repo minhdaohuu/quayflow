@@ -1,9 +1,14 @@
 //! Credential vault (FR-21).
 //!
-//! Each registered account's login (`claudeAiOauth` + `oauthAccount`) is sealed with
-//! Windows DPAPI at current-user scope plus Quayflow entropy, with UI prompts forbidden,
-//! and stored as base64 text in `vault\<account-id>.dpapi` (the same format the PoC wrote).
-//! There is no plaintext fallback: if sealing fails, nothing is stored.
+//! Each registered account's login (`claudeAiOauth` + `oauthAccount`) is stored as base64
+//! text in `vault/<account-id>.<EXT>`.
+//!
+//! - Windows: sealed with DPAPI at current-user scope plus Quayflow entropy, with UI
+//!   prompts forbidden (`.dpapi`, the same format the PoC wrote). If sealing fails,
+//!   nothing is stored.
+//! - Linux: protected by the file system only, like Claude Code's own
+//!   `~/.claude/.credentials.json` there: the file is readable by its owner only (`0600`,
+//!   in a `0700` folder). It is not encrypted (`.login`).
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -14,6 +19,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const ENTROPY: &[u8] = b"quayflow-vault-v1";
+
+/// The vault file extension on this platform.
+pub const EXT: &str = if cfg!(windows) { "dpapi" } else { "login" };
 
 /// A Claude login: the two account-specific entries Quayflow swaps.
 /// Debug output never shows the contents.
@@ -224,6 +232,28 @@ impl Protector for Dpapi {
     }
 }
 
+/// Linux: no encryption; the file system restricts the vault to its owner (see the module
+/// documentation). `atomic_write` creates every vault file `0600`.
+pub struct OwnerOnly;
+
+impl Protector for OwnerOnly {
+    fn protect(&self, plain: &[u8]) -> Result<Vec<u8>, VaultError> {
+        Ok(plain.to_vec())
+    }
+    fn unprotect(&self, sealed: &[u8]) -> Result<Vec<u8>, VaultError> {
+        Ok(sealed.to_vec())
+    }
+}
+
+/// This platform's protector.
+pub fn default_protector() -> Box<dyn Protector> {
+    if cfg!(windows) {
+        Box::new(Dpapi)
+    } else {
+        Box::new(OwnerOnly)
+    }
+}
+
 /// Write a file by temp + rename, retrying sharing violations.
 ///
 /// The temp name is unique per call (process id + counter), so concurrent writers of the
@@ -239,7 +269,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let written = fs::File::create(&tmp).and_then(|mut f| {
+    let written = create_like(&tmp, path).and_then(|mut f| {
         f.write_all(bytes)?;
         f.sync_all()
     });
@@ -263,6 +293,47 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
 }
 
+/// Create the temp file for `target`. On Unix it gets the target's own permissions, or
+/// owner-only (`0600`) for a new file, so a login file never becomes readable by others;
+/// the folder of a new file is made owner-only as well when Quayflow creates it.
+fn create_like(tmp: &Path, target: &Path) -> std::io::Result<fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mode = fs::metadata(target)
+            .map(|m| m.permissions().mode() & 0o7777)
+            .unwrap_or(0o600);
+        let f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(tmp)?;
+        // `mode` above is masked by the umask; set the exact bits explicitly.
+        f.set_permissions(fs::Permissions::from_mode(mode))?;
+        Ok(f)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = target;
+        fs::File::create(tmp)
+    }
+}
+
+/// Make a folder Quayflow owns readable by its owner only (Unix; nothing on Windows, where
+/// the profile folder is already private to the user).
+pub fn restrict_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
 pub fn is_sharing_violation(e: &std::io::Error) -> bool {
     // ERROR_ACCESS_DENIED 5, ERROR_SHARING_VIOLATION 32, ERROR_LOCK_VIOLATION 33
     matches!(e.raw_os_error(), Some(5) | Some(32) | Some(33)) || e.kind() == std::io::ErrorKind::PermissionDenied
@@ -277,7 +348,7 @@ impl Vault {
     pub fn new(dir: PathBuf) -> Self {
         Vault {
             dir,
-            protector: Box::new(Dpapi),
+            protector: default_protector(),
         }
     }
 
@@ -290,7 +361,7 @@ impl Vault {
     }
 
     fn path(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.dpapi"))
+        self.dir.join(format!("{id}.{EXT}"))
     }
 
     pub fn seal(&self, login: &Login) -> Result<String, VaultError> {
@@ -340,7 +411,7 @@ impl Vault {
     /// Store a sealed backup (unknown live login before a manual switch). Returns the file.
     pub fn backup(&self, backups: &Path, tag: &str, login: &Login) -> Result<PathBuf, VaultError> {
         let text = self.seal(login)?;
-        let path = backups.join(format!("{tag}-{}.dpapi", qf_model::time::now_ms()));
+        let path = backups.join(format!("{tag}-{}.{EXT}", qf_model::time::now_ms()));
         atomic_write(&path, text.as_bytes())?;
         Ok(path)
     }
@@ -437,7 +508,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let v = Vault::with_protector(dir.path().to_path_buf(), Box::new(Fake));
         v.store("abc123", &login()).unwrap();
-        let raw = fs::read_to_string(dir.path().join("abc123.dpapi")).unwrap();
+        let raw = fs::read_to_string(dir.path().join(format!("abc123.{EXT}"))).unwrap();
         assert!(!raw.contains("SECRET"));
         assert_eq!(v.load("abc123").unwrap(), login());
         assert!(!format!("{:?}", login()).contains("SECRET"));
@@ -569,5 +640,23 @@ mod tests {
         assert_eq!(org.name, "org");
         assert!(!org.was_plaintext);
         assert!(found[1].as_ref().unwrap().was_plaintext);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn files_are_owner_only_and_keep_an_existing_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let v = Vault::new(dir.path().to_path_buf());
+        v.store("abc123", &login()).unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir.path().join("abc123.login")), 0o600);
+        assert_eq!(v.load("abc123").unwrap(), login());
+        // A file with its own mode keeps it when replaced (Claude's .claude.json, say).
+        let other = dir.path().join("shared.json");
+        fs::write(&other, "{}").unwrap();
+        fs::set_permissions(&other, fs::Permissions::from_mode(0o640)).unwrap();
+        atomic_write(&other, b"{\"a\":1}").unwrap();
+        assert_eq!(mode(&other), 0o640);
     }
 }

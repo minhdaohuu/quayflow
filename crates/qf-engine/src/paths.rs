@@ -1,6 +1,26 @@
-//! The data folder `%LOCALAPPDATA%\Quayflow` (override with `QUAYFLOW_HOME` for tests).
+//! The data folder: `%LOCALAPPDATA%\Quayflow` on Windows, `$XDG_DATA_HOME/quayflow`
+//! (`~/.local/share/quayflow`) on Linux. `QUAYFLOW_HOME` overrides it (tests).
 
 use std::path::{Path, PathBuf};
+
+/// The data folder the installer installs into on this platform.
+pub fn default_root() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| qf_adapter::env::home_dir().join("AppData").join("Local"))
+            .join("Quayflow")
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| qf_adapter::env::home_dir().join(".local").join("share"))
+            .join("quayflow")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DataDir {
@@ -12,12 +32,7 @@ impl DataDir {
         if let Some(h) = std::env::var_os("QUAYFLOW_HOME").filter(|v| !v.is_empty()) {
             return DataDir { root: PathBuf::from(h) };
         }
-        let base = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| qf_adapter::env::home_dir().join("AppData").join("Local"));
-        DataDir {
-            root: base.join("Quayflow"),
-        }
+        DataDir { root: default_root() }
     }
 
     pub fn at(root: &Path) -> DataDir {
@@ -38,7 +53,8 @@ impl DataDir {
         ] {
             std::fs::create_dir_all(d)?;
         }
-        Ok(())
+        // Logins, logs and the API token live here: owner-only on Linux.
+        qf_vault::restrict_dir(&self.root)
     }
 
     pub fn config(&self) -> PathBuf {

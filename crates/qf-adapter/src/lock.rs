@@ -148,16 +148,22 @@ fn age(path: &Path) -> Option<Duration> {
 }
 
 pub fn touch_dir(path: &Path) -> std::io::Result<()> {
+    set_dir_mtime(path, SystemTime::now())
+}
+
+/// Set a directory's modification time (the lock's heartbeat).
+pub fn set_dir_mtime(path: &Path, t: SystemTime) -> std::io::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true);
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
         // FILE_FLAG_BACKUP_SEMANTICS opens a directory handle.
-        opts.custom_flags(0x0200_0000);
+        opts.write(true).custom_flags(0x0200_0000);
     }
-    let f = opts.open(path)?;
-    f.set_modified(SystemTime::now())
+    // A directory opens read-only on Unix; its owner may still set its times.
+    #[cfg(not(windows))]
+    opts.read(true);
+    opts.open(path)?.set_modified(t)
 }
 
 /// Remove a lock directory whose holder is dead, without ever deleting a live lock.
@@ -336,27 +342,13 @@ mod tests {
         std::fs::create_dir_all(&e.config_dir).unwrap();
         std::fs::create_dir(e.config_lock()).unwrap();
         let old = SystemTime::now() - Duration::from_secs(30);
-        let mut o = std::fs::OpenOptions::new();
-        o.write(true);
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            o.custom_flags(0x0200_0000);
-        }
-        o.open(e.config_lock()).unwrap().set_modified(old).unwrap();
+        set_dir_mtime(&e.config_lock(), old).unwrap();
         let held = acquire_env(&e, Duration::from_millis(600)).unwrap();
         drop(held);
     }
 
     fn set_mtime(p: &Path, t: SystemTime) {
-        let mut o = std::fs::OpenOptions::new();
-        o.write(true);
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            o.custom_flags(0x0200_0000);
-        }
-        o.open(p).unwrap().set_modified(t).unwrap();
+        set_dir_mtime(p, t).unwrap();
     }
 
     fn leftovers(dir: &Path) -> Vec<String> {

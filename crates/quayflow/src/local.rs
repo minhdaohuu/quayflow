@@ -138,9 +138,62 @@ pub fn set_startup(on: bool) -> Result<(), String> {
     }
 }
 
+/// Linux: a systemd user unit that runs `quayflow start` when the user's session manager
+/// starts (a desktop or SSH sign-in; with `loginctl enable-linger`, at boot).
 #[cfg(not(windows))]
-pub fn set_startup(_on: bool) -> Result<(), String> {
-    Err("startup entries are Windows-only".into())
+pub fn set_startup(on: bool) -> Result<(), String> {
+    let unit_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| qf_adapter::env::home_dir().join(".config"))
+        .join("systemd")
+        .join("user");
+    let unit = unit_dir.join(STARTUP_UNIT);
+    let systemctl = |args: &[&str]| -> Result<(), String> {
+        let o = std::process::Command::new("systemctl")
+            .arg("--user")
+            .args(args)
+            .output()
+            .map_err(|e| format!("systemctl: {e}"))?;
+        if o.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&o.stderr).trim().to_string())
+        }
+    };
+    if on {
+        if qf_adapter::process::which("systemctl").is_none() {
+            return Err(
+                "no systemd user session here; add `quayflow start --if-consented` to your shell profile instead"
+                    .into(),
+            );
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        qf_vault::atomic_write(&unit, startup_unit(&exe).as_bytes()).map_err(|e| e.to_string())?;
+        systemctl(&["daemon-reload"])?;
+        systemctl(&["enable", STARTUP_UNIT])
+    } else {
+        if !unit.exists() {
+            return Ok(());
+        }
+        let _ = systemctl(&["disable", STARTUP_UNIT]);
+        std::fs::remove_file(&unit).map_err(|e| e.to_string())?;
+        let _ = systemctl(&["daemon-reload"]);
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+const STARTUP_UNIT: &str = "quayflow.service";
+
+/// The systemd user unit that starts the engine at sign-in. `start` returns once the engine
+/// runs on its own; the unit then stays active until the engine is stopped.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn startup_unit(exe: &Path) -> String {
+    format!(
+        "[Unit]\nDescription=Quayflow engine (Claude account switching)\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=\"{}\" start\n\n[Install]\nWantedBy=default.target\n",
+        exe.display()
+    )
 }
 
 /// The user's Documents folder (honors OneDrive redirection).
@@ -159,6 +212,7 @@ pub fn documents_dir() -> PathBuf {
     qf_adapter::env::home_dir().join("Documents")
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn expand_env(s: &str) -> String {
     let mut out = String::new();
     let mut rest = s;
@@ -493,7 +547,7 @@ pub fn handoff_resume(dd: &DataDir, session: &str, to: &str, wait_pid: Option<u3
         }
     }
     let Some(claude) = qf_adapter::process::find_claude() else {
-        eprintln!("claude.exe not found on PATH");
+        eprintln!("Claude Code (claude) not found on PATH");
         return 1;
     };
     let mut c = std::process::Command::new(claude);
@@ -552,11 +606,7 @@ pub fn verify_against(sums: &[(String, String)], file: &Path) -> Result<(), Stri
 }
 
 fn have(cmd: &str) -> bool {
-    qf_adapter::process::hidden("where.exe")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    qf_adapter::process::which(cmd).is_some()
 }
 
 fn gh_signed_in() -> bool {
@@ -637,32 +687,60 @@ fn download(assets: &[&str], dest: &Path, tag: &str, gh_ready: bool) -> Result<(
     Ok(())
 }
 
-pub const PROGRAM_FILES: [&str; 2] = ["quayflow.exe", "quayflow-bg.exe"];
+/// The release assets this platform installs, and their names in the program folder.
+#[cfg(windows)]
+pub const PROGRAMS: &[(&str, &str)] = &[("quayflow.exe", "quayflow.exe"), ("quayflow-bg.exe", "quayflow-bg.exe")];
+#[cfg(all(not(windows), target_arch = "x86_64"))]
+pub const PROGRAMS: &[(&str, &str)] = &[("quayflow-linux-x86_64", "quayflow")];
+#[cfg(all(not(windows), not(target_arch = "x86_64")))]
+pub const PROGRAMS: &[(&str, &str)] = &[];
 
-/// Arguments for the release's `install.ps1` in update mode: no consent prompt, no PATH change,
+/// The release's installer for this platform.
+pub const INSTALLER: &str = if cfg!(windows) { "install.ps1" } else { "install.sh" };
+
+/// Arguments for the release's installer in update mode: no consent prompt, no PATH change,
 /// consents left as they are. A local `source` is installed engine-only (the Mod is not moved).
-pub fn installer_args(script: &Path, tag: Option<&str>, source: Option<&Path>, skip_attestation: bool) -> Vec<String> {
-    let mut v: Vec<String> = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+/// `posix` selects `install.sh`'s options (`--update`), else `install.ps1`'s (`-Update`).
+pub fn installer_args(
+    script: &Path,
+    tag: Option<&str>,
+    source: Option<&Path>,
+    skip_attestation: bool,
+    posix: bool,
+) -> Vec<String> {
+    let opt = |win: &str, sh: &str| if posix { sh.to_string() } else { win.to_string() };
+    let mut v: Vec<String> = if posix {
+        vec![]
+    } else {
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    };
     v.push(script.display().to_string());
-    v.push("-Update".into());
+    v.push(opt("-Update", "--update"));
     if let Some(t) = tag {
-        v.extend(["-Version".into(), t.to_string()]);
+        v.extend([opt("-Version", "--version"), t.to_string()]);
     }
     if let Some(s) = source {
-        v.extend(["-Source".into(), s.display().to_string(), "-NoPlugin".into()]);
+        v.extend([
+            opt("-Source", "--source"),
+            s.display().to_string(),
+            opt("-NoPlugin", "--no-plugin"),
+        ]);
     }
     if skip_attestation {
-        v.push("-SkipAttestation".into());
+        v.push(opt("-SkipAttestation", "--skip-attestation"));
     }
     v
 }
 
-/// The folder the installer installs into (`%LOCALAPPDATA%\Quayflow`).
+/// The folder the installer installs into on this platform.
 fn installer_root() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Quayflow"))
+    if cfg!(windows) && std::env::var_os("LOCALAPPDATA").is_none() {
+        return None;
+    }
+    Some(qf_engine::paths::default_root())
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -696,7 +774,7 @@ pub fn update(
                 return Err(format!(
                 "quayflow update installs into {}, but this command uses {} (QUAYFLOW_HOME); run the installer instead",
                 r.map(|r| r.display().to_string())
-                    .unwrap_or_else(|| "%LOCALAPPDATA%\\Quayflow".into()),
+                    .unwrap_or_else(|| "the default data folder".into()),
                 dd.root.display()
             ))
             }
@@ -706,13 +784,15 @@ pub fn update(
     let gh_ready = gh_installed && gh_signed_in();
     // Same rule as the installer: refuse before downloading anything.
     if !check_only && !skip_attestation && !gh_ready {
+        let install_gh = if cfg!(windows) {
+            "  winget install --id GitHub.cli -e\n  gh auth login"
+        } else {
+            "  sudo apt install gh   (or see https://cli.github.com)\n  gh auth login"
+        };
         let (why, fix) = if gh_installed {
             ("the GitHub CLI is not signed in", "  gh auth login")
         } else {
-            (
-                "the GitHub CLI (gh) is not installed",
-                "  winget install --id GitHub.cli -e\n  gh auth login",
-            )
+            ("the GitHub CLI (gh) is not installed", install_gh)
         };
         return Err(format!(
             "REFUSED: the build-provenance attestation cannot be verified because {why}. Nothing was installed.\nThe attestation proves the programs were built by this repository's release workflow. To check it, run:\n{fix}\nthen open a new terminal and run quayflow update again.\nOr update with the SHA-256 check alone (it proves the files match the release's SHA256SUMS, not who built them): quayflow update --skip-attestation"
@@ -725,9 +805,12 @@ pub fn update(
     };
     let tmp = dd.root.join("update");
     let _ = std::fs::remove_dir_all(&tmp);
+    if PROGRAMS.is_empty() {
+        return Err("no Quayflow release is built for this platform".into());
+    }
     let mut wanted = vec!["SHA256SUMS"];
     if !check_only {
-        wanted.push("install.ps1");
+        wanted.push(INSTALLER);
     }
     let fetched = match (source, tag.as_deref()) {
         (Some(s), _) => std::fs::create_dir_all(&tmp).map_err(|e| e.to_string()).and_then(|_| {
@@ -755,9 +838,9 @@ fn hand_off(
 ) -> Result<String, String> {
     let sums = parse_sums(&std::fs::read_to_string(tmp.join("SHA256SUMS")).map_err(|e| e.to_string())?);
     let bin = dd.bin();
-    let same = PROGRAM_FILES.iter().all(|a| {
-        let listed = sums.iter().find(|(_, n)| n == a).map(|(h, _)| h.clone());
-        matches!((listed, sha256_file(&bin.join(a))), (Some(x), Ok(y)) if x == y)
+    let same = PROGRAMS.iter().all(|(asset, installed)| {
+        let listed = sums.iter().find(|(_, n)| n == asset).map(|(h, _)| h.clone());
+        matches!((listed, sha256_file(&bin.join(installed))), (Some(x), Ok(y)) if x == y)
     });
     let shown = tag.unwrap_or("the local build");
     // A local source is always installed: that is how a build is tested.
@@ -773,10 +856,15 @@ fn hand_off(
             )
         });
     }
-    let script = tmp.join("install.ps1");
+    let script = tmp.join(INSTALLER);
     verify_against(&sums, &script)?;
     let text = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
-    if !text.contains("[switch]$Update") {
+    let update_mode = if cfg!(windows) {
+        "[switch]$Update"
+    } else {
+        "quayflow-installer: update-mode"
+    };
+    if !text.contains(update_mode) {
         return Err(format!(
             "the installer of {shown} has no update mode (releases before v0.1.4); run that release's installer directly (docs/user-guide.md, Install)"
         ));
@@ -794,10 +882,16 @@ fn hand_off(
             return Err("a switch is in progress; try again in a minute".into());
         }
     }
-    let shell = if have("pwsh") { "pwsh" } else { "powershell" };
+    let shell = if !cfg!(windows) {
+        "sh"
+    } else if have("pwsh") {
+        "pwsh"
+    } else {
+        "powershell"
+    };
     // The installer talks to the person directly (progress, warnings): its output is not captured.
     let status = std::process::Command::new(shell)
-        .args(installer_args(&script, tag, source, skip_attestation))
+        .args(installer_args(&script, tag, source, skip_attestation, !cfg!(windows)))
         .status()
         .map_err(|e| format!("could not run the installer with {shell}: {e}"))?;
     if status.success() {
@@ -814,6 +908,7 @@ fn hand_off(
 
 /// `raw` (the user PATH as stored) without the entries naming `dir`, or None when no entry does.
 /// Compares case-insensitively, ignoring trailing slashes, in both raw (`%VAR%`) and expanded form.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn path_without_entry(raw: &str, dir: &Path, expand: impl Fn(&str) -> String) -> Option<String> {
     let norm = |s: &str| s.trim().replace('/', "\\").trim_end_matches('\\').to_lowercase();
     let d = dir.to_string_lossy();
@@ -901,9 +996,15 @@ fn remove_from_user_path(dir: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Linux: the installer links `~/.local/bin/quayflow` to the program; remove that link
+/// when it points into `dir`.
 #[cfg(not(windows))]
-fn remove_from_user_path(_dir: &Path) -> Result<bool, String> {
-    Ok(false)
+fn remove_from_user_path(dir: &Path) -> Result<bool, String> {
+    let link = qf_adapter::env::home_dir().join(".local").join("bin").join("quayflow");
+    match std::fs::read_link(&link) {
+        Ok(target) if target.starts_with(dir) => std::fs::remove_file(&link).map(|_| true).map_err(|e| e.to_string()),
+        _ => Ok(false),
+    }
 }
 
 /// Lane names (folders under `lanes\`).
@@ -1095,6 +1196,7 @@ pub fn uninstall(dd: &DataDir, delete: DeleteChoice) -> Result<Vec<String>, Stri
 
 /// The `cmd.exe` command line that deletes `bin` after this process has exited. Passed verbatim
 /// (Rust's argument quoting would turn the inner quotes into \" which cmd.exe does not understand).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn cleanup_command_line(bin: &Path) -> String {
     format!("/d /c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"", bin.display())
 }
@@ -1312,7 +1414,7 @@ mod tests {
     #[test]
     fn update_hands_off_to_the_installer_in_update_mode() {
         let s = Path::new(r"C:\q\update\install.ps1");
-        let a = installer_args(s, Some("v0.1.4"), None, false);
+        let a = installer_args(s, Some("v0.1.4"), None, false, false);
         assert_eq!(
             a,
             [
@@ -1327,7 +1429,7 @@ mod tests {
             ]
         );
         // A local build: engine only, the Mod stays where it is.
-        let a = installer_args(s, None, Some(Path::new(r"C:\dist")), true);
+        let a = installer_args(s, None, Some(Path::new(r"C:\dist")), true, false);
         assert!(a.ends_with(&[
             "-Update".to_string(),
             "-Source".into(),
@@ -1336,6 +1438,30 @@ mod tests {
             "-SkipAttestation".into()
         ]));
         assert!(!a.iter().any(|x| x == "-Version" || x == "-Yes" || x == "-Startup"));
+        // install.sh takes the same choices as long options, run by `sh`.
+        let a = installer_args(Path::new("/q/update/install.sh"), Some("v0.1.5"), None, true, true);
+        assert_eq!(
+            a,
+            [
+                "/q/update/install.sh",
+                "--update",
+                "--version",
+                "v0.1.5",
+                "--skip-attestation"
+            ]
+        );
+        let a = installer_args(Path::new("install.sh"), None, Some(Path::new("/dist")), false, true);
+        assert_eq!(a, ["install.sh", "--update", "--source", "/dist", "--no-plugin"]);
+    }
+
+    #[test]
+    fn the_startup_unit_runs_quayflow_start() {
+        let u = startup_unit(Path::new("/home/u/.local/share/quayflow/bin/quayflow"));
+        assert!(
+            u.contains("ExecStart=\"/home/u/.local/share/quayflow/bin/quayflow\" start\n"),
+            "{u}"
+        );
+        assert!(u.contains("WantedBy=default.target"));
     }
 
     #[test]

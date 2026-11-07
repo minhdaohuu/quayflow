@@ -13,8 +13,11 @@ pub struct Env {
 }
 
 pub fn home_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+    home.filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
@@ -87,20 +90,16 @@ mod tests {
     use super::*;
     #[test]
     fn paths() {
-        let e = Env::default_at(Path::new("C:\\Users\\u"));
-        assert_eq!(
-            e.credentials(),
-            PathBuf::from("C:\\Users\\u\\.claude\\.credentials.json")
-        );
-        assert_eq!(e.legacy_lock(), PathBuf::from("C:\\Users\\u\\.claude.lock"));
-        assert_eq!(e.config_lock(), PathBuf::from("C:\\Users\\u\\.claude.json.lock"));
-        assert_eq!(
-            e.refresh_lock(),
-            PathBuf::from("C:\\Users\\u\\.claude\\.oauth_refresh.lock")
-        );
-        let l = Env::at(EnvId("work".into()), PathBuf::from("D:\\lanes\\work"));
-        assert_eq!(l.claude_json, PathBuf::from("D:\\lanes\\work\\.claude.json"));
-        assert_eq!(l.legacy_lock(), PathBuf::from("D:\\lanes\\work.lock"));
+        let home = Path::new("home").join("u");
+        let e = Env::default_at(&home);
+        assert_eq!(e.credentials(), home.join(".claude").join(".credentials.json"));
+        assert_eq!(e.legacy_lock(), home.join(".claude.lock"));
+        assert_eq!(e.config_lock(), home.join(".claude.json.lock"));
+        assert_eq!(e.refresh_lock(), home.join(".claude").join(".oauth_refresh.lock"));
+        let lanes = Path::new("data").join("lanes");
+        let l = Env::at(EnvId("work".into()), lanes.join("work"));
+        assert_eq!(l.claude_json, lanes.join("work").join(".claude.json"));
+        assert_eq!(l.legacy_lock(), lanes.join("work.lock"));
         assert!(l.selector().is_some());
     }
 }

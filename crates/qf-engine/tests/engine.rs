@@ -137,7 +137,7 @@ fn register_requires_consent_and_group() {
     assert_eq!(live(&w.env).as_deref(), Some("uuid-a"));
     assert_eq!(e.lock().config.groups[0].mode, Mode::Suggest);
     // Vault holds no plaintext.
-    let vault_text = std::fs::read_to_string(w.dd.vault().join(format!("{}.dpapi", id("uuid-a")))).unwrap();
+    let vault_text = std::fs::read_to_string(w.dd.vault().join(format!("{}.{}", id("uuid-a"), qf_vault::EXT))).unwrap();
     assert!(!vault_text.contains("sk-ant"));
 }
 
@@ -861,7 +861,7 @@ fn poc_migration_keeps_plaintext_until_the_import_is_saved() {
     std::fs::create_dir_all(poc.join("org")).unwrap();
     let plain = poc.join("org").join("login.json");
     std::fs::write(&plain, poc_login(w._dir.path(), "uuid-org", "O1", "team")).unwrap();
-    let vault_file = w.dd.vault().join(format!("{}.dpapi", id("uuid-org")));
+    let vault_file = w.dd.vault().join(format!("{}.{}", id("uuid-org"), qf_vault::EXT));
     // Mixing identities needs the disclosure: nothing is stored and the PoC login stays.
     let err = e.migrate_poc_from(&poc, "Default", false).unwrap_err();
     assert_eq!(err.code, "needs_disclosure");
@@ -1041,7 +1041,7 @@ fn vault_error_clears_when_the_copy_loads_again() {
     e.watch();
     assert_eq!(e.lock().config.account(&org).unwrap().health, Health::Ok);
     // A copy that really cannot be read keeps the mark.
-    std::fs::write(w.dd.vault().join(format!("{personal}.dpapi")), "garbage").unwrap();
+    std::fs::write(w.dd.vault().join(format!("{personal}.{}", qf_vault::EXT)), "garbage").unwrap();
     e.lock().config.account_mut(&personal).unwrap().health = Health::VaultError;
     e.tick();
     assert_eq!(e.lock().config.account(&personal).unwrap().health, Health::VaultError);
@@ -1233,7 +1233,7 @@ fn failed_capture_of_the_outgoing_login_stops_the_switch() {
     let e = engine_with_accounts(&w);
     // Claude refreshed org's token; its protected copy cannot be read or replaced.
     login_files(&w.env, "uuid-org", "O2", "team");
-    let path = w.dd.vault().join(format!("{}.dpapi", id("uuid-org")));
+    let path = w.dd.vault().join(format!("{}.{}", id("uuid-org"), qf_vault::EXT));
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     let t = e
