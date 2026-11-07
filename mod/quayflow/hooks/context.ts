@@ -39,6 +39,10 @@ export const Q = {
   requestCounter: 0,
   /** When this session (or this module instance, after a reload) started: older engine events are history. */
   startedAt: 0,
+  /** True once the terminal drew the prompt hint: the everyday status goes in its tail. */
+  footer: false,
+  /** The text this session adds after the prompt hint (the everyday status line). */
+  hint: undefined as string | undefined,
   /** The terminal's width as the last `/quay` saw it; the status line is budgeted to it. */
   columns: undefined as number | undefined,
   /** The `statusLineUsage` option: whether the status line shows usage figures. */

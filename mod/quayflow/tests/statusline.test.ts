@@ -4,7 +4,7 @@
 // Run: claude plugin test mod/quayflow
 import { describe, expect, test } from 'claude-code/testing'
 
-import { clock, statusLine } from '../hooks/format'
+import { clock, statusLine, statusParts } from '../hooks/format'
 import type { StatusOptions } from '../hooks/format'
 import type { EnvView, QuayLink, StateView } from '../types'
 import { STATE } from './fixtures'
@@ -140,6 +140,17 @@ describe('status line: one tail by priority', () => {
       expect(line(s)).toBe(want)
     })
   }
+
+  test('only a line that needs the person is urgent (pinned); the everyday line is quiet', () => {
+    const urgent = new Set([
+      'mixed login files', 'in-place switching off', 'an error notice beats the suggestion', 'unknown login', 'signed out',
+      'another switcher', 'paused by you', 'suggestion', 'managed-login override ON', 'a warning notice',
+    ])
+    for (const [name, s] of cases) expect([name, statusParts(ON, s).urgent]).toEqual([name, urgent.has(name)])
+    expect(statusParts({ on: false, reason: 'unreachable' }, undefined).urgent).toBe(true)
+    expect(statusParts({ on: false, reason: 'connecting', message: 'starting the engine' }, undefined).urgent).toBe(false)
+    expect(statusParts(ON, { ...STATE, onboarded: false }).urgent).toBe(true)
+  })
 
   test('no fact is said twice', () => {
     const text = line(unknown) ?? ''

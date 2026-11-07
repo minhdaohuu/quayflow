@@ -6,7 +6,7 @@ import type { EngineInterface } from 'claude-code'
 import type { EngineEvent, EventsResponse, StateView } from '../types'
 import { Q, errorText, pause, seedAnnounced, setSnapshot, takeUnannounced, uiLog, uiStatus, uiToast } from './context'
 import { EngineError, call, establish, fetchState, hasCode, markUnreachable } from './engine'
-import { announcements, eventAnnouncements, seedAnnouncements, statusLine } from './format'
+import { announcements, eventAnnouncements, seedAnnouncements, statusParts } from './format'
 import { showUsageFigures } from './hostline'
 
 let generation = 0
@@ -17,11 +17,26 @@ export function ensureWatcher($: EngineInterface): void {
   if (generation === 0 && !Q.headless) startWatcher($)
 }
 
-/** Draws the status line from the link and the last snapshot. */
+/**
+ * Draws the status line from the link and the last snapshot. Where the terminal draws
+ * the prompt hint, the everyday line goes quietly after it; a line that needs the person
+ * (and every line elsewhere) is the pinned status.
+ */
 export async function paintStatus($: EngineInterface): Promise<void> {
   if (Q.headless) return
   const showUsage = Q.link.on ? await showUsageFigures($).catch(() => true) : true
-  uiStatus($, statusLine(Q.link, Q.link.on ? Q.state : undefined, { width: Q.columns, showUsage, model: Q.model }))
+  const p = statusParts(Q.link, Q.link.on ? Q.state : undefined, { width: Q.columns, showUsage, model: Q.model })
+  const quiet = Q.footer && !p.urgent ? p.text : undefined
+  uiStatus($, quiet ? undefined : p.text)
+  setHint($, quiet)
+}
+
+function setHint($: EngineInterface, text: string | undefined): void {
+  if (Q.hint === text) return
+  Q.hint = text
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {}
 }
 
 /**

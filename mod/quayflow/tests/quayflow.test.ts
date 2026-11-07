@@ -294,6 +294,35 @@ describe('interactive sessions', () => {
     expect(w.routes()).toContain('/v1/events')
   })
 
+  test('the everyday status line goes quietly after the prompt hint; one that needs the person stays pinned', async ($, on) => {
+    const calm = JSON.parse(JSON.stringify(STATE)) as typeof STATE
+    for (const e of calm.envs) (e as { suggestion: unknown }).suggestion = null
+    let state: unknown = calm
+    let events: unknown[] = []
+    const w = world(on, { routes: { '/v1/state': () => state, '/v1/events': () => ({ seq: STATE.seq + events.length, events }) } })
+    // The engine's own hint line: its text, then the tail a plugin added.
+    on('ui.render', { component: 'PromptHint' }, (_$, e) => {
+      const p = e.props as { hint: string; tail?: string }
+      return { type: 'Text', children: [`${p.hint}${p.tail ?? ''}`] } as never
+    })
+    await start($, w, true)
+    const pinned = () => w.ui.filter(u => u.kind === 'ui.status').pop()?.text
+    // Before the terminal draws its prompt hint, the line is pinned as before.
+    expect(pinned()).toMatch(/^Quayflow · work · Suggest/)
+    const hint = await $.ui.mount({ plugin: 'quayflow', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } })
+    await w.clock.settle()
+    expect(pinned()).toBeUndefined()
+    expect(JSON.stringify(await hint.drawn())).toContain('? for shortcuts  Quayflow · work · Suggest · Home account · 5h 91% · 7d 40%')
+    // A suggestion to accept needs the person: pinned again, and gone from the hint.
+    state = STATE
+    events = [{ seq: STATE.seq + 1, ts: 1_799_999_960_000, kind: 'usage', env: 'default' }]
+    await w.clock.advance(31_000)
+    await w.clock.settle()
+    expect(pinned()).toBe('Quayflow · work · Suggest · 5h 91% · 7d 40% | personal suggested')
+    expect(JSON.stringify(await hint.drawn())).not.toContain('Quayflow')
+    await hint.unmount()
+  })
+
   test('a session opened before setup notices the engine once it runs, without starting it', async ($, on) => {
     const w = world(on, { down: true, start: 'no_consent' })
     await start($, w, true)

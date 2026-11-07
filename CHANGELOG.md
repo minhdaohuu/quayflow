@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The repository is public. Releases from v0.1.5 on carry build-provenance attestations, so the installer's default checks pass with a signed-in GitHub CLI; v0.1.0 to v0.1.4 stay unattested and need `-SkipAttestation`. The documentation no longer describes a private pilot.
 - When the GitHub CLI is missing or signed out, the installer and `quayflow update` say how to install it and sign in (`winget install --id GitHub.cli -e`, `gh auth login`), and what `-SkipAttestation` gives up.
 - The README, user guide and installer say to use only accounts that are yours to use.
+- The Quayflow status line no longer looks like a warning all the time. In the terminal, the everyday line (usage, home or away, a pin, a switch under way) is drawn dim at the end of the hint line under the prompt; only a line that needs you (a suggestion to accept, a sign-in, a paused automation, a problem, the engine off) is pinned, where Claude Code draws it as a warning.
 - An update from a local build says the Mod was left as it is, instead of "Skipped the Claude Code plugin (-NoPlugin)".
 
 ## [0.1.4] - 2026-11-07

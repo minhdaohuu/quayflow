@@ -359,27 +359,29 @@ export function statusTail(s: StateView, env: EnvView, showUsage = true, model?:
 }
 
 /** The tail in its forms, fullest first (see `fit`); empty when nothing needs saying. */
-function statusTails(s: StateView, env: EnvView, showUsage: boolean, model: string | undefined): string[] {
+function statusTails(s: StateView, env: EnvView, showUsage: boolean, model: string | undefined, flag: { urgent: boolean } = { urgent: false }): string[] {
   const one = (t: string | undefined): string[] => (t ? [t] : [])
+  // Something the person must act on: drawn as a pinned status, not as the quiet footer.
+  const act = (t: string | undefined): string[] => ((flag.urgent = true), one(t))
   const kinds = new Set(env.notices.filter(n => n.persistent && n.level !== 'info').map(n => n.kind))
   const paused = env.pausedReason ?? ''
   const live = env.live
   const liveAccount = live.known ? account(s, live.account) : undefined
 
   // 1. Errors: Quayflow cannot act safely here until something is fixed.
-  if (/inconsistent/i.test(paused)) return one('mixed login files: switch to an account to repair')
-  if (!env.inPlace.allowed || kinds.has('incompatible_version')) return one('in-place switching off for this Claude version')
-  if (kinds.has('adoption_mismatch')) return one('a session did not adopt the switch: /quay')
-  if (/interrupted switch/i.test(paused)) return one('interrupted switch: check the login, then /quay resume')
+  if (/inconsistent/i.test(paused)) return act('mixed login files: switch to an account to repair')
+  if (!env.inPlace.allowed || kinds.has('incompatible_version')) return act('in-place switching off for this Claude version')
+  if (kinds.has('adoption_mismatch')) return act('a session did not adopt the switch: /quay')
+  if (/interrupted switch/i.test(paused)) return act('interrupted switch: check the login, then /quay resume')
   for (const n of env.notices) {
-    if (n.persistent && n.level === 'error') return one(clause(n.text))
+    if (n.persistent && n.level === 'error') return act(clause(n.text))
   }
 
   // 2. The live login itself: not one Quayflow knows, or none at all.
-  if (live.signedOut) return one('sign in to Claude (/login)')
-  if (!live.known) return one('not registered: /quay register')
-  if (kinds.has('other_switcher')) return one('another switcher may be active')
-  if (env.automationPaused) return one(/by you/i.test(paused) || kinds.has('paused') ? 'automation paused (/quay resume)' : 'automation paused')
+  if (live.signedOut) return act('sign in to Claude (/login)')
+  if (!live.known) return act('not registered: /quay register')
+  if (kinds.has('other_switcher')) return act('another switcher may be active')
+  if (env.automationPaused) return act(/by you/i.test(paused) || kinds.has('paused') ? 'automation paused (/quay resume)' : 'automation paused')
 
   // 3. A switch in flight, or one this session has not adopted yet.
   const t = env.transition
@@ -395,6 +397,7 @@ function statusTails(s: StateView, env: EnvView, showUsage: boolean, model: stri
   const sg = env.suggestion
   if (sg) {
     const to = `${label(s, sg.to)} suggested`
+    flag.urgent = true
     return [...figures.map(f => `${f} | ${to}`), to]
   }
 
@@ -405,13 +408,13 @@ function statusTails(s: StateView, env: EnvView, showUsage: boolean, model: stri
   }
 
   // 6. The managed-login override: persistent, never a passing toast (S56).
-  if (s.dOrg.enabled || kinds.has('d_org_enabled')) return one('managed-login override ON')
+  if (s.dOrg.enabled || kinds.has('d_org_enabled')) return act('managed-login override ON')
 
   // 7. Other warnings (a set-aside account, a vault problem).
   for (const n of env.notices) {
     if (!n.persistent || n.level === 'info') continue
     if (['d_org_enabled', 'incompatible_version', 'unknown_login', 'other_switcher', 'paused', 'suggestion', 'adoption_mismatch'].includes(n.kind)) continue
-    return one(clause(n.text))
+    return act(clause(n.text))
   }
 
   // 8. Stale usage: the figures are not current enough to act on.
@@ -431,19 +434,29 @@ function statusTails(s: StateView, env: EnvView, showUsage: boolean, model: stri
 
 /** `Quayflow · <Account> · <Mode> · <tail>` (FR-07, design C01); undefined draws nothing. */
 export function statusLine(link: QuayLink, s: StateView | undefined, opts: StatusOptions = {}): string | undefined {
+  return statusParts(link, s, opts).text
+}
+
+/**
+ * The status line and whether it needs the person (an error, a sign-in, a suggestion
+ * to accept, the engine off): those are pinned; the everyday line is drawn quietly.
+ */
+export function statusParts(link: QuayLink, s: StateView | undefined, opts: StatusOptions = {}): { text: string | undefined; urgent: boolean } {
   const width = Math.max(40, Math.floor(opts.width ?? 80))
   const short = (line: string | undefined): string | undefined => {
     if (!line || line.length <= width) return line
     const [a, b, ...rest] = line.split(DOT)
     return fit(`${a}${DOT}${b}`, [rest.join(DOT)], width)
   }
-  if (!link.on) return short(offLine(link))
-  if (!s) return undefined
-  if (!s.onboarded) return short('Quayflow · not set up · finish setup in /quay')
+  if (!link.on) return { text: short(offLine(link)), urgent: link.reason !== 'connecting' }
+  if (!s) return { text: undefined, urgent: false }
+  if (!s.onboarded) return { text: short('Quayflow · not set up · finish setup in /quay'), urgent: true }
   const env = myEnv(s)
-  if (!env) return 'Quayflow · no environment'
+  if (!env) return { text: 'Quayflow · no environment', urgent: true }
   const head = `Quayflow${DOT}${accountSlot(s, env)}${DOT}${modeWord(env.mode)}`
-  return fit(head, statusTails(s, env, opts.showUsage ?? true, opts.model), width)
+  const flag = { urgent: false }
+  const text = fit(head, statusTails(s, env, opts.showUsage ?? true, opts.model, flag), width)
+  return { text, urgent: flag.urgent }
 }
 
 // ---------------------------------------------------------------- transcript

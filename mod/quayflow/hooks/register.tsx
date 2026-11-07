@@ -96,6 +96,15 @@ export const register: Register = (on, options) => {
     return { text }
   }).catch(() => ({ text: `Quayflow could not run that command.\n${HELP}` }))
 
+  // The everyday status line, dim after the prompt hint (the terminal draws `tail`).
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    if (Q.headless || e.surface !== 'terminal') return next(e)
+    if (!Q.footer) {
+      Q.footer = true
+      void paintStatus($).catch(() => {})
+    }
+    return Q.hint ? next({ ...e, props: { ...e.props, tail: `  ${Q.hint}` } }) : next(e)
+  })
   on('ui.render', { component: 'Pane', requestId: 'quay' }, async ($, e) => {
     // A pane left on "connecting" with no handshake under way starts one; a pane that
     // shows "off" while this module is linked (another session's values) is repainted.

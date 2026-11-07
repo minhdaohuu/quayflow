@@ -149,6 +149,8 @@ In interactive sessions Quayflow keeps one line under the prompt:
 Quayflow · <account> · <mode> · <status>
 ```
 
+In the terminal, the everyday line (usage, home or away, a pin, a switch under way) is drawn dim at the end of the hint line under the prompt. A line that needs you is pinned as a status of its own, which Claude Code draws as a warning: a suggestion to accept, a sign-in or registration needed, automation paused, another switcher, a problem notice, setup not finished, or the engine off. Other surfaces show every line as a pinned status.
+
 `<account>` is the live account of this session's environment (`Unknown login` or `Signed out` when there is no registered one), `<mode>` is Suggest, Manual or Automatic. `<status>` is the single most important thing to know right now, in this order:
 
 | Priority | Example `<status>` | Meaning |
