@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-07
+
+Headless jobs: `quayflow last` explains what Quayflow did for a `claude -p` run and when to run again. Tested with real logins and a real usage limit (42 headless checks).
+
 ### Added
 - `quayflow last --session <id> [--json]`: what Quayflow did for one Claude session, for headless jobs: `recovered`, `all_exhausted` (switched to the account available soonest), `not_recovered` with the reason, or `no_limit`; the limit that was hit and its reset; and `availableAt`, the earliest time worth running again. Reads the journal, so it works with the engine stopped; exit code 3 when nothing is recorded. Recovery decisions now record the account that failed and, when every account is at its limit, when the soonest one is available.
 - User guide: "Headless jobs (`claude -p`)": setup, what a job sees in each case, running again after a limit, and how interactive sessions are affected.
@@ -87,7 +91,8 @@ First release: a private pilot for Windows 10/11 x64 (Quayflow targets every pla
 - Release assets are not attested while the repository is private; install with `-SkipAttestation`.
 - An idle account's access token expires, so it is not observed until it is used again (see `docs/known-limits.md`).
 
-[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/minhdaohuu/quayflow/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/minhdaohuu/quayflow/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/minhdaohuu/quayflow/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/minhdaohuu/quayflow/releases/tag/v0.1.0

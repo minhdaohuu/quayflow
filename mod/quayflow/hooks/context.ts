@@ -6,7 +6,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { QuayCacheEntry, QuayDisclosure, QuayFlash, QuayForm, QuayLink, QuayReport, QuaySignin, QuayView, SigninStatus, StateView } from '../types'
 
-export const MOD_VERSION = '0.1.2'
+export const MOD_VERSION = '0.1.3'
 export const PROTOCOL = 1
 export const PANE_ID = 'quay'
 
