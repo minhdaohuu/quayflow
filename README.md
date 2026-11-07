@@ -22,7 +22,7 @@ whether you are at the keyboard or a `claude -p` job is running on its own.
 > [!IMPORTANT]
 > **You are responsible for complying with your provider's terms and your organization's rules**, including rules about which accounts may process your organization's work. Quayflow is an independent open-source project and is **not affiliated with or endorsed by Anthropic**.
 
-**Status:** v0.1.4, private pilot. Quayflow targets every platform Claude Code runs on; **Windows is the first release (MVP)**, with macOS and Linux to follow. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts; see [acceptance results](docs/acceptance.md) for what is proven and what is still open.
+**Status:** v0.1.4, public pilot. Quayflow targets every platform Claude Code runs on; **Windows is the first release (MVP)**, with macOS and Linux to follow. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts; see [acceptance results](docs/acceptance.md) for what is proven and what is still open.
 
 ## What and why
 
@@ -259,7 +259,7 @@ Windows 10/11 x64 with Claude Code installed. No administrator rights. In PowerS
 irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1 | iex
 ```
 
-The installer shows what it will do and asks for consent. It verifies `quayflow.exe` against the release's `SHA256SUMS`, and its GitHub build-provenance attestation from the release workflow, and refuses on a mismatch. Verifying the attestation needs the GitHub CLI, signed in; without it the installer refuses unless you pass `-SkipAttestation`. It then installs to `%LOCALAPPDATA%\Quayflow\bin` and adds the Mod to Claude Code from the same release. Running it again upgrades.
+The installer shows what it will do and asks for consent. It verifies `quayflow.exe` against the release's `SHA256SUMS`, and its GitHub build-provenance attestation from the release workflow, and refuses on a mismatch. Verifying the attestation needs the [GitHub CLI](https://cli.github.com/), signed in (`gh auth login`); without it the installer refuses unless you pass `-SkipAttestation`, which leaves the hash check alone. Releases from v0.1.5 on are attested; v0.1.0 to v0.1.4 were built while the repository was private and are not attested. It then installs to `%LOCALAPPDATA%\Quayflow\bin` and adds the Mod to Claude Code from the same release. Running it again upgrades.
 
 <details>
 <summary><b>Safer: download, verify, read, then run</b></summary>
@@ -313,7 +313,7 @@ Everything is also available from the command line: `quayflow status`, `quayflow
 - **A switch moves every session of an environment** (by default `~/.claude`), each at its next request. Use lanes to keep a session on a different account.
 - **Saved logins** are encrypted with Windows DPAPI for your user. This does not protect against malware running as you. Claude refreshes the live login and Quayflow saves the result; Quayflow refreshes only an idle account's saved copy so its usage stays readable. Logins never go into logs, reports or the Mod, and there is no telemetry.
 - **Organization-managed login enforcement is respected.** The managed-login override setting is recorded but has no bypass path in this build. See [Security notes](docs/security.md#managed-login-enforcement-and-the-override-setting).
-- **Releases are not Authenticode-signed.** They are reproducible and hashed (`SHA256SUMS`); build-provenance attestations follow once the repository is public. Smart App Control and signed-only company policies may block them. See [Verifying a release](docs/verify-release.md).
+- **Releases are not Authenticode-signed.** They are reproducible, hashed (`SHA256SUMS`) and, from v0.1.5 on, carry build-provenance attestations. Smart App Control and signed-only company policies may block them. See [Verifying a release](docs/verify-release.md).
 - **Idle accounts need a working saved login.** Quayflow refreshes an idle account's saved copy when its token expires. If the sign-in service refuses it, that account needs a new sign-in before it can be used again.
 - **Prompt cache is per account.** The first request after a switch reprocesses the conversation.
 
@@ -365,9 +365,9 @@ Without Visual Studio Build Tools, set `$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-p
 
 ## Roadmap
 
-- **v0.1 (now, MVP):** Windows 10/11 x64 private pilot. Switching, real usage-limit recovery and headless jobs are proven with real accounts; the remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
+- **v0.1 (now, MVP):** Windows 10/11 x64 public pilot. Switching, real usage-limit recovery and headless jobs are proven with real accounts; the remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
 - **Next:** lanes for unattended jobs, with their own mode, so background jobs can switch without moving your interactive sessions.
-- **Later:** macOS and Linux, each with the platform's own credential protection (Keychain, Secret Service) and shell integration; public release with build attestations.
+- **Later:** macOS and Linux, each with the platform's own credential protection (Keychain, Secret Service) and shell integration; Authenticode signing.
 
 Have a use case that is not covered? [Open an issue](https://github.com/minhdaohuu/quayflow/issues/new/choose).
 

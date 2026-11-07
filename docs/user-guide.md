@@ -40,12 +40,12 @@ It does not read, copy or change any Claude login. Running Claude sessions load 
 | `-Yes` | Accept the consent text without a prompt (it is still printed) |
 | `-Source <folder>` | Install from local files (`quayflow.exe`, `quayflow-bg.exe`, `SHA256SUMS`). The Mod is then added from the repository holding that folder, or from `-MarketplaceSource` |
 | `-MarketplaceSource <source>` | Add the Mod from this plugin marketplace source instead (a local repository path, `owner/repo` or `owner/repo#tag`) |
-| `-SkipAttestation` | Skip `gh attestation verify` (builds you made yourself, private pilot releases, or no GitHub CLI). Without it, files whose attestation cannot be verified are refused. Hashes are still checked |
+| `-SkipAttestation` | Skip `gh attestation verify` (builds you made yourself, releases before v0.1.5, or no GitHub CLI). Without it, files whose attestation cannot be verified are refused. Hashes are still checked |
 | `-Uninstall [-DeleteData]` | Remove Quayflow (see [Uninstall](#uninstall)) |
 
 With `irm | iex` you cannot pass options. Use `& ([scriptblock]::Create((irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1))) -Startup` instead. Plain `irm | iex` therefore needs the GitHub CLI signed in; without it, pass `-SkipAttestation` this way to rely on the hash check alone.
 
-**Private pilot.** While the repository is private, sign in to the GitHub CLI first (`gh auth login`, then `gh auth setup-git` so Claude Code can clone the marketplace). The installer then downloads through `gh`. GitHub does not issue artifact attestations for private repositories, so pilot releases are hash-verified only: add `-SkipAttestation`. If you have no GitHub SSH key, set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` before installing.
+**GitHub CLI.** Install the [GitHub CLI](https://cli.github.com/) and sign in (`gh auth login`) before installing, so the installer can verify the attestations. Releases from v0.1.5 on are attested; v0.1.0 to v0.1.4 were built while the repository was private and are not attested, so they install only with `-SkipAttestation`. If Claude Code cannot clone the marketplace and you have no GitHub SSH key, set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` before installing.
 
 ## First use
 
@@ -319,7 +319,7 @@ quayflow update --check   # is a newer release available?
 quayflow update           # install it with the release's own installer and all its checks
 ```
 
-`quayflow update` downloads the release's `install.ps1`, checks it against the release's `SHA256SUMS`, and runs it in update mode. The installer then makes every check of a first install: the SHA-256 hashes, the build-provenance attestation of the release workflow for that tag and commit, and the Mod's source commit. The attestation check needs the GitHub CLI, signed in; without it the update is refused, unless you add `--skip-attestation` to accept the hashes alone (needed while the repository is private).
+`quayflow update` downloads the release's `install.ps1`, checks it against the release's `SHA256SUMS`, and runs it in update mode. The installer then makes every check of a first install: the SHA-256 hashes, the build-provenance attestation of the release workflow for that tag and commit, and the Mod's source commit. The attestation check needs the GitHub CLI, signed in; without it the update is refused, unless you add `--skip-attestation` to accept the hashes alone (needed for releases before v0.1.5).
 
 An update never runs in the middle of a switch. It stops the engine, replaces the programs, refreshes the PowerShell prompt hook module if you installed it, moves the Mod to the same release, and restarts the engine if it was running. Your consents, PATH and startup setting are kept. A Mod installed from a local folder (a development checkout) is left as it is, with a note. `quayflow update --source <folder>` installs a local release folder (`SHA256SUMS`, `install.ps1` and the programs) and leaves the Mod as it is. Re-running the installer also upgrades. Restart Claude sessions to load the new Mod.
 
@@ -346,8 +346,8 @@ The same account used on several machines shares one allowance and one usage-rea
 | Status line says the engine is not running | `quayflow start`. If you stopped it on purpose, the Mod does not restart it |
 | "update needed: incompatible with engine" in the status line | The Mod and engine versions do not match. Run `quayflow update`. Meanwhile Claude works normally without switching |
 | Installer: `REFUSED: hash mismatch` | The download is not the published file. Do not bypass it. Download again; if it repeats, report it |
-| Installer: attestation failed | The file was not built by this repository's release workflow. Do not install it. For a pilot release from a private repository, see [Install](#install) |
-| `claude plugin marketplace add` fails | Private repository: `gh auth login` then `gh auth setup-git`; without an SSH key set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` |
+| Installer: attestation failed | The file was not built by this repository's release workflow. Do not install it. Releases before v0.1.5 are not attested; see [Install](#install) |
+| `claude plugin marketplace add` fails | Without a GitHub SSH key set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1`, then run the installer again |
 | Windows blocks `quayflow.exe` (SmartScreen, Smart App Control, company policy) or antivirus flags it | See [Verifying a release](verify-release.md#windows-protections-and-quayflow) |
 | `/quay` shows "Connecting to the engine…" | Wait a few seconds: the Mod is shaking hands, or starting the engine. If it stays, run `quayflow status`, then `/quay start` |
 | `/quay` says "unknown option" | A mistyped option is refused, never ignored. Use the suggested one (`--approve`, `--accept-disclosure`, `--idle-wait`, `--save`) |

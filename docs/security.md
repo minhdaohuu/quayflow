@@ -84,9 +84,9 @@ The PowerShell hook acts only on a claim file named for its own shell's process 
 
 ## Release integrity
 
-Releases are reproducible and hashed (attestations once the repository is public), but **not Authenticode-signed** in v0.1. See [Verifying a release](verify-release.md).
+Releases are reproducible, hashed and, from v0.1.5 on, attested, but **not Authenticode-signed** in v0.1. See [Verifying a release](verify-release.md).
 
-The installer always checks the SHA-256 hashes. It also requires a build-provenance attestation made by this repository's release workflow (`.github/workflows/release.yml`) for the release tag and commit, verified with a signed-in GitHub CLI; if it cannot verify one, it refuses to install, unless you pass `-SkipAttestation`, which leaves the hash check as the only protection. Private pilot releases are not attested and need that switch. The Mod is added from the release tag and refused if the checkout is not at the commit the release records in `SOURCE_COMMIT`; the gaps that remain are in [Known limits](known-limits.md#distribution).
+The installer always checks the SHA-256 hashes. It also requires a build-provenance attestation made by this repository's release workflow (`.github/workflows/release.yml`) for the release tag and commit, verified with a signed-in GitHub CLI; if it cannot verify one, it refuses to install, unless you pass `-SkipAttestation`, which leaves the hash check as the only protection. v0.1.0 to v0.1.4 were built while the repository was private and are not attested and need that switch. The Mod is added from the release tag and refused if the checkout is not at the commit the release records in `SOURCE_COMMIT`; the gaps that remain are in [Known limits](known-limits.md#distribution).
 
 `quayflow update` downloads the release's `install.ps1`, checks it against `SHA256SUMS`, and runs it, so an update makes the installer's full checks. Like the installer, it refuses when the attestation cannot be verified, unless `--skip-attestation` is given.
 

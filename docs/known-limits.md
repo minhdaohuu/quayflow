@@ -1,6 +1,6 @@
 # Known limits of Quayflow v0.1
 
-Quayflow v0.1 (currently v0.1.3) is a private-pilot release. This page lists what it does not do, what depends on undocumented Claude Code behavior, and what has not yet been confirmed. Requirement references (FR-xx, AC-xx) are to [requirements.md](requirements.md) and [acceptance.md](acceptance.md).
+Quayflow v0.1 (currently v0.1.4) is a pilot release. This page lists what it does not do, what depends on undocumented Claude Code behavior, and what has not yet been confirmed. Requirement references (FR-xx, AC-xx) are to [requirements.md](requirements.md) and [acceptance.md](acceptance.md).
 
 ## Platform and scope
 
@@ -48,10 +48,9 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 ## Distribution
 
 - **Not Authenticode-signed.** Smart App Control (On) will most likely block Quayflow. AppLocker and WDAC policies that allow only signed software, or only approved paths, will block it. SmartScreen may warn about a browser download, and antivirus tools may flag it. See [Verifying a release](verify-release.md#windows-protections-and-quayflow).
-- **Private pilot releases are not attested.** GitHub issues artifact attestations only for public repositories (or GitHub Enterprise Cloud). Until the repository is public, releases are hash-verified and reproducible only. The installer refuses files it cannot verify an attestation for (including when the GitHub CLI is missing or signed out), so pilot users install with `-SkipAttestation`.
+- **Early releases are not attested.** v0.1.0 to v0.1.4 were built while the repository was private and are not attested: they are hash-verified and reproducible only, and install only with `-SkipAttestation`. Releases from v0.1.5 on are attested. The installer refuses files it cannot verify an attestation for, including when the GitHub CLI is missing or signed out.
 - **The Mod comes from a git tag.** Claude Code adds a marketplace by tag, not by commit (`owner/repo#<commit>` is not accepted). The installer checks that the checkout is at the commit recorded in the release's `SOURCE_COMMIT` before installing the plugin, and refuses otherwise. Two gaps remain: releases made before `SOURCE_COMMIT` existed (v0.1.0) are installed without that check, with a warning; and a later marketplace update in Claude Code (`claude plugin marketplace update`, or an automatic one) fetches the tag again without this check, so a tag moved after installation can be picked up then. With `-SkipAttestation`, `SOURCE_COMMIT` is trusted as far as the release's `SHA256SUMS` is.
 - **Replacing the Mod resets its saved options.** A marketplace cannot be re-added from a new source while it exists, so an upgrade removes it first; Claude Code then deletes the plugin's saved options and data. If the new source fails, the installer (which `quayflow update` runs) re-adds the previous one, but the options are not restored.
-- **Mod from a private repository** needs git credentials that Claude Code can use without prompting (`gh auth setup-git`, or an SSH key in `ssh-agent`).
 - **Matched pair.** The Mod and engine must be from compatible versions. On a mismatch, switching and recovery are disabled until you update, and Claude itself keeps working.
 
 ## PowerShell integration
@@ -74,7 +73,7 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 
 ## Not yet confirmed (v0.1 release conditions)
 
-These were not confirmed as of v0.1.3 (2026-11-07). Each is required before v0.1 leaves the pilot ([release conditions](requirements.md#release-conditions-for-v01)):
+These were not confirmed as of v0.1.4 (2026-11-07). Each is required before v0.1 leaves the pilot ([release conditions](requirements.md#release-conditions-for-v01)):
 
 - Claude's own in-process usage-limit wait adopting a login switched during the wait (AC-23). A job that fails when every account is exhausted is not affected: a fresh `claude -p` uses the login that is live when it starts.
 - Claude reading and writing correctly through lane links on the release build. It passed on a local build on 2026-11-03 (AC-12).

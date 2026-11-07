@@ -14,7 +14,7 @@ Every Quayflow release publishes these assets:
 Each asset is built by this repository's release workflow (`.github/workflows/release.yml`) and has three integrity properties:
 
 1. **Published hash.** `SHA256SUMS` lists the SHA-256 of every other asset. The installer and `quayflow update` refuse a file whose hash does not match.
-2. **Build provenance.** A GitHub artifact attestation, signed through GitHub's Sigstore integration, records that the file was built by this repository's workflow from a specific commit and tag. Not available while the repository is private (see below).
+2. **Build provenance.** A GitHub artifact attestation, signed through GitHub's Sigstore integration, records that the file was built by this repository's workflow from a specific commit and tag. Releases from v0.1.5 on (see below).
 3. **Reproducible build.** The workflow builds the same commit twice, in separate jobs and directories, and fails if the two executables differ. The toolchain is pinned in `rust-toolchain.toml`, dependencies are locked with `Cargo.lock`, paths are remapped, `/Brepro` makes the PE header deterministic, and `SOURCE_DATE_EPOCH` is set from the tag's commit.
 
 The installer checks (1) always, and (2) unless you pass `-SkipAttestation`: it refuses to install when the GitHub CLI is missing or signed out, or when an executable (or `SOURCE_COMMIT`) has no attestation from this repository's `.github/workflows/release.yml` for the release tag and commit. It also checks that the Mod it adds from the release tag is at the commit in `SOURCE_COMMIT`.
@@ -56,7 +56,7 @@ git ls-remote https://github.com/minhdaohuu/quayflow "refs/tags/$v^{}" "refs/tag
 
 Each must end with `Verification succeeded`. `--signer-workflow` accepts only an attestation made by the release workflow (not by any other workflow of the repository), and `--source-ref` / `--source-digest` tie it to the release tag and its commit. For v0.1.0, which has no `SOURCE_COMMIT`, leave out `--source-digest`.
 
-**Private repository.** GitHub issues artifact attestations only for public repositories, or for private ones on GitHub Enterprise Cloud. While Quayflow's repository is private, pilot releases are not attested. Their release notes say so, and only the hash check applies. The installer refuses them unless you pass `-SkipAttestation`.
+**Releases before v0.1.5.** GitHub issues artifact attestations only for public repositories. v0.1.0 to v0.1.4 were built while the repository was private and are not attested. Their release notes say so, and only the hash check applies. The installer refuses them unless you pass `-SkipAttestation`.
 
 ## Rebuild it yourself
 
@@ -81,7 +81,7 @@ The workflow proves that two builds on GitHub's Windows runner are identical. A 
 
 Quayflow v0.1 executables are **not Authenticode-signed**. This is common for open-source tools. A code-signing certificate costs money and needs a verified legal entity. The integrity properties above give a stronger link between the binary and its source: an Authenticode signature identifies who signed a file, but not what source it was built from. Signing can be added later, for example through SignPath's free program for open-source projects, without other changes.
 
-`quayflow status` and the `/quay` pane show the build's version, its SHA-256, and how to verify it ("not code-signed; verify with the release's SHA256SUMS"). While the repository is private releases are not attested; check the hash as above.
+`quayflow status` and the `/quay` pane show the build's version, its SHA-256, and how to verify it ("not code-signed; verify with the release's SHA256SUMS"). For releases before v0.1.5, which are not attested, check the hash as above.
 
 ## Windows protections and Quayflow
 

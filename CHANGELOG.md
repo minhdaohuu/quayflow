@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- The repository is public. Releases from v0.1.5 on carry build-provenance attestations, so the installer's default checks pass with a signed-in GitHub CLI; v0.1.0 to v0.1.4 stay unattested and need `-SkipAttestation`. The documentation no longer describes a private pilot.
+
 ## [0.1.4] - 2026-11-07
 
 `quayflow update` runs the release's own installer, with all its checks; wording fixes; documentation reviewed against the code.
