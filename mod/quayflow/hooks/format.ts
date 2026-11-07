@@ -211,7 +211,7 @@ export function linkOffText(link: QuayLink): string {
     case 'unreachable':
       return 'engine not running; Claude works as usual'
     case 'not_installed':
-      return 'engine not installed (%LOCALAPPDATA%\\Quayflow\\bin\\quayflow.exe)'
+      return 'engine not installed (run the Quayflow installer)'
     case 'no_consent':
       return 'not set up: run /quay to review consent and start'
     case 'stopped_by_user':

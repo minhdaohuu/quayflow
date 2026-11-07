@@ -38,6 +38,8 @@ export type Answers = {
   simLimit?: string
   /** Other files the plugin may read, by Windows path. */
   files?: Record<string, string>
+  /** A Linux computer: HOME instead of LOCALAPPDATA, `~/.local/share/quayflow`, `/` paths. */
+  linux?: boolean
 }
 
 /** The engine's refusal: HTTP 409 with its machine code (`needs_disclosure`, `needs_approval`). */
@@ -47,6 +49,8 @@ export function refuse(code: string, error: string): Reply {
 
 const LOCALAPPDATA = 'C:\\Users\\t\\AppData\\Local'
 export const ENGINE_EXE = `${LOCALAPPDATA}\\Quayflow\\bin\\quayflow.exe`
+const LINUX_ROOT = '/home/t/.local/share/quayflow'
+export const LINUX_ENGINE_EXE = `${LINUX_ROOT}/bin/quayflow`
 /** The account uuid the profile endpoint reports for the session's credential. */
 export const PROFILE_UUID = '00000000-0000-0000-0000-000000000001'
 
@@ -62,9 +66,11 @@ export function world(on: On, a: Answers = {}) {
   let refused = 0
   let down = !!a.down
   let simLimit = a.simLimit
-  const SIM_FILE = `${LOCALAPPDATA}\\Quayflow\\simulate-limit.json`
+  const root = a.linux ? LINUX_ROOT : `${LOCALAPPDATA}\\Quayflow`
+  const sep = a.linux ? '/' : '\\'
+  const SIM_FILE = `${root}${sep}simulate-limit.json`
 
-  mock.env(on, { LOCALAPPDATA, ...a.env })
+  mock.env(on, a.linux ? { HOME: '/home/t', ...a.env } : { LOCALAPPDATA, ...a.env })
   const clock = mock.clock(on, { now: 1_800_000_000_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.end', () => ({ sessionId }))
@@ -77,12 +83,18 @@ export function world(on: On, a: Answers = {}) {
   on('session.authorize', () => ({ value: { handle: 'opaque-handle', kind: 'bearer' } }))
   on('command.register', () => ({ value: { command: 'quay' } }))
 
+  // The host hands a path over in its own form: a Windows host turns /home/t/... into
+  // C:\home\t\..., a Linux host may resolve C:\Users\... under its working folder. Compare the
+  // paths with `/` separators and without a drive, by suffix.
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
+  const same = (got: string, want: string) => norm(got).endsWith(norm(want))
   on('fs.read', (_$, e) => {
-    if ((!down || a.staleConn) && e.path === `${LOCALAPPDATA}\\Quayflow\\engine.json`) {
+    if ((!down || a.staleConn) && same(e.path, `${root}${sep}engine.json`)) {
       return { value: JSON.stringify({ port: 47123, token: 'tok', pid: 9, protocol: 1 }) }
     }
-    if (simLimit !== undefined && e.path === SIM_FILE) return { value: simLimit }
-    const file = a.files?.[e.path.replace(/\//g, '\\')]
+    if (simLimit !== undefined && same(e.path, SIM_FILE)) return { value: simLimit }
+    const key = Object.keys(a.files ?? {}).find(k => same(e.path, k))
+    const file = key === undefined ? undefined : a.files?.[key]
     if (file !== undefined) return { value: file }
     return { deny: 'ENOENT: no such file' }
   })
@@ -90,9 +102,10 @@ export function world(on: On, a: Answers = {}) {
   on('fs.write', () => ({ value: undefined }))
   on('process.run', async (_$, e) => {
     runs.push([...e.argv])
-    if (/cmd(\.exe)?$/i.test(e.argv[0] ?? '')) {
-      // `cmd /d /c move /y <file> <taken>` renames the file: only the first taker succeeds.
-      if (e.argv.includes('move')) {
+    if (/cmd(\.exe)?$/i.test(e.argv[0] ?? '') || e.argv[0] === 'mv' || e.argv[0] === 'rm') {
+      // `cmd /d /c move /y <file> <taken>` or `mv <file> <taken>` renames the file: only the
+      // first taker succeeds.
+      if (e.argv.includes('move') || e.argv[0] === 'mv') {
         const ok = simLimit !== undefined && e.argv.includes(SIM_FILE)
         if (ok) simLimit = undefined
         return { value: { exitCode: ok ? 0 : 1, stdout: '', stderr: ok ? '' : 'The system cannot find the file specified.' } as never }

@@ -1,6 +1,6 @@
 # Quayflow v0.1 technical specification
 
-> Scope: this specification describes the Windows MVP as of v0.1.4. Quayflow targets all platforms Claude Code runs on; platform-specific parts (DPAPI vault, Windows paths and locks, PowerShell integration, installer) are isolated so that macOS and Linux can provide their own. See [requirements.md](requirements.md#platform-scope).
+> Scope: this specification describes v0.1 on Windows x64 and Linux x86_64 as of v0.1.4. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated so that macOS can provide its own. See [requirements.md](requirements.md#platform-scope).
 
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
@@ -12,7 +12,27 @@ Companion to [requirements.md](requirements.md). This file holds the engineering
 | Background launcher | `crates/quayflow` (bin `quayflow-bg`) | `%LOCALAPPDATA%\Quayflow\bin\quayflow-bg.exe` (windows subsystem; used by the sign-in startup entry so no console appears) |
 | Mod | `mod/quayflow` | plugin `quayflow` from marketplace `quayflow` (this repository, `.claude-plugin/marketplace.json` at the root) |
 | PowerShell integration | `shell/Quayflow.psm1` (embedded in `quayflow.exe`) | written to `%LOCALAPPDATA%\Quayflow\shell\Quayflow.psm1` by `quayflow shell install` |
-| Installer | `installer/install.ps1` | GitHub Release asset |
+| Installer | `installer/install.ps1`, `installer/install.sh` | GitHub Release assets |
+
+## 1a. Linux
+
+| Topic | Linux |
+|---|---|
+| Program | Release asset `quayflow-linux-x86_64`, installed as `~/.local/share/quayflow/bin/quayflow` and linked as `~/.local/bin/quayflow`; no `quayflow-bg` (no console window to hide) |
+| Data folder | `$XDG_DATA_HOME/quayflow`, default `~/.local/share/quayflow`, made `0700` (`qf_engine::paths::default_root`) |
+| Vault | `vault/<account-id>.login`: base64 of `{"oauth": ..., "account": ...}`, no encryption, `0600` (`qf_vault::OwnerOnly`) |
+| File writes | `qf_vault::atomic_write` creates the temp file with the target's mode, or `0600` for a new file |
+| Single instance | `flock` on `engine.lock` (`File::try_lock`) |
+| Process facts | `/proc/<pid>/stat` (parent, start time from `btime` + start ticks), `/proc/<pid>/comm` |
+| Engine start | `quayflow start` spawns `quayflow serve` in its own process group |
+| Claude's locks | The same `mkdir` directory locks; a lock's mtime is set through a read-only directory handle |
+| Lanes | Folder links are symbolic links (junctions on Windows); shared files are hard links |
+| Managed settings | `/etc/claude-code` (`managed-settings.json`, `managed-settings.d`) |
+| Sign-in startup | systemd user unit `~/.config/systemd/user/quayflow.service` (`Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=<program> start`) |
+| New console | First of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `xterm` with `DISPLAY` or `WAYLAND_DISPLAY`; otherwise the caller shows the command |
+| Shell integration | None yet (the prompt hook is PowerShell) |
+| Mod | Finds the engine through `$XDG_DATA_HOME` or `$HOME` when `LOCALAPPDATA` is not set (`hooks/engine.ts` `layout`) |
+| Installer, update | `install.sh` (POSIX `sh`); `quayflow update` runs `sh install.sh --update ...` |
 
 ## 2. Data folder `%LOCALAPPDATA%\Quayflow`
 
@@ -22,7 +42,7 @@ Tests can move the whole folder with `QUAYFLOW_HOME`.
 |---|---|
 | `bin\` | `quayflow.exe` and `quayflow-bg.exe` as installed |
 | `shell\` | `Quayflow.psm1` written by `quayflow shell install` |
-| `update\` | Temporary download folder of `quayflow update` (`SHA256SUMS`, `install.ps1`); removed after each run |
+| `update\` | Temporary download folder of `quayflow update` (`SHA256SUMS`, `install.ps1` or `install.sh`); removed after each run |
 | `config.json` | `qf_model::Config` (accounts metadata, groups, projects, tuning, consents, managed-login override setting). No credentials |
 | `vault\<account-id>.dpapi` | Base64 of a DPAPI blob (CurrentUser, entropy `quayflow-vault-v1`, `CRYPTPROTECT_UI_FORBIDDEN`) of `{"oauth": <claudeAiOauth>, "account": <oauthAccount>}` |
 | `backups\unknown-<hash>-<ts>.dpapi` | Protected backup of an unknown live login taken before a manual switch |

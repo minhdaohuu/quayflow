@@ -4,9 +4,12 @@ Quayflow v0.1 (currently v0.1.4) is a pilot release. This page lists what it doe
 
 ## Platform and scope
 
-- **Windows first.** Quayflow targets all platforms Claude Code runs on; v0.1 (the MVP) supports Windows 10/11 x64 only. macOS and Linux follow, with their own credential protection and shell integration (see [requirements.md](requirements.md#platform-scope)).
+- **Windows x64 and Linux x86_64.** Quayflow targets all platforms Claude Code runs on; v0.1 supports Windows 10/11 x64 and, from v0.1.5, Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later). macOS and Linux arm64 are not built yet (see [requirements.md](requirements.md#platform-scope)).
+- **Linux vault is not encrypted.** Saved logins are owner-only files (`0600` in a `0700` folder), as Claude Code keeps its own login on Linux; any program running as you, or root, can read them. An encrypted vault through the desktop keyring (Secret Service) is planned; it is not used now because unattended jobs on a server often have no unlocked keyring.
+- **Linux: no same-terminal Replace.** The prompt hook is PowerShell only. Open New Session needs a desktop terminal; over SSH, Quayflow prints the command to run.
+- **Linux: real-login acceptance pending.** The engine, installer and Mod pass their automated suites on Linux (CI and an Ubuntu 24.04 machine); switching with real accounts on Linux has not been run yet (see [acceptance.md](acceptance.md)).
 - **Subscription logins only** (claude.ai sign-in). Quayflow never moves a session to API-key or other billing.
-- **One Windows user.** The engine, vault and settings are per user. Nothing is shared between users or machines.
+- **One user.** The engine, vault and settings are per user. Nothing is shared between users or machines.
 - **No telemetry, no cloud component.** Every decision is made locally, from usage readings taken on this machine.
 
 ## Depends on undocumented behavior
@@ -68,7 +71,7 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 
 ## Security boundaries
 
-- The DPAPI vault does not protect against malware running as your Windows user. Such software can also read Claude's own login file. See [Security notes](security.md#the-vault-dpapi).
+- Neither vault (DPAPI on Windows, owner-only files on Linux) protects against malware running as your user. Such software can also read Claude's own login file. See [Security notes](security.md#the-vault-dpapi).
 - Any program running as your user can call the engine's loopback API.
 
 ## Not yet confirmed (v0.1 release conditions)

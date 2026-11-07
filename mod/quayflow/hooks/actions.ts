@@ -26,7 +26,7 @@ import type {
   SwitchResponse,
 } from '../types'
 import { Q, requestId } from './context'
-import { call, dataDir } from './engine'
+import { call, engineExe } from './engine'
 import { label, myEnv, sessionName, transitionWords } from './format'
 import { refresh } from './watcher'
 
@@ -263,7 +263,7 @@ export function actConsent($: EngineInterface, name: 'promptHook' | 'liveCanary'
  * It loads in PowerShell windows opened afterwards; nothing else in the shell changes.
  */
 export async function actShellInstall($: EngineInterface): Promise<{ ok: boolean; text: string }> {
-  const exe = `${await dataDir($)}\\bin\\quayflow.exe`
+  const exe = await engineExe($)
   const r = await $.process.run([exe, 'shell', 'install'], { timeoutMs: 30_000 })
   const text = `${r.stdout}\n${r.stderr}`.trim()
   await refresh($).catch(() => undefined)

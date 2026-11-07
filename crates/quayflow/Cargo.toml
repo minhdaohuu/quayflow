@@ -1,6 +1,6 @@
 [package]
 name = "quayflow"
-description = "Quayflow engine and command line: account groups, usage-aware switching and recovery for Claude Code on Windows"
+description = "Quayflow engine and command line: account groups, usage-aware switching and recovery for Claude Code"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

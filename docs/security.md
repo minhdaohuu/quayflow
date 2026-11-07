@@ -36,9 +36,9 @@ In v0.1 the confirmation, display and journal hooks exist, but the bypass itself
 | Engine, network | Two provider endpoints with each saved account's access token: usage (`/api/oauth/usage`) and profile (`/api/oauth/profile`) on `api.anthropic.com`; the token service (`platform.claude.com/v1/oauth/token`) with an idle account's saved refresh token, only to refresh that saved copy; GitHub Releases for `quayflow update` | Nothing else. No telemetry |
 | Mod (Claude Code plugin) | Per-request results, the session's own rate-limit information, and the identity its request used (an opaque handle and a profile lookup, hashed) | Calls to the engine's loopback API only. It never receives a credential |
 | PowerShell integration (opt-in) | Its own claim file `handoff\claims\<pid>.json` | Your two PowerShell profiles (a marked block), `CLAUDE_CONFIG_DIR` only for the resumed process |
-| Installer | Release assets, Claude plugin lists | `%LOCALAPPDATA%\Quayflow\bin`, user PATH, Claude plugin and marketplace registration |
+| Installer | Release assets, Claude plugin lists | `%LOCALAPPDATA%\Quayflow\bin`, user PATH, Claude plugin and marketplace registration (Linux, `install.sh`: `~/.local/share/quayflow/bin`, the link `~/.local/bin/quayflow`, a systemd user unit with `--startup`) |
 
-The engine calls Windows APIs directly (DPAPI, file locks, process control). It does not run PowerShell or other shells, opens no console windows, and runs as your user without administrator rights. Model requests are always made by the unmodified Claude client.
+The engine calls the operating system directly (Windows: DPAPI, file locks, process control; Linux: `/proc`, `flock`, file modes). It does not run PowerShell or other shells, opens no console windows, and runs as your user without administrator rights. Model requests are always made by the unmodified Claude client.
 
 ## The vault (DPAPI)
 
@@ -56,6 +56,14 @@ What it does **not** protect against:
 - **Anyone who has your Windows password**, or an administrator who can act as you or reset your password in a way that keeps DPAPI keys.
 
 If DPAPI fails, Quayflow refuses to store or switch. It never falls back to plaintext. Proof-of-concept plaintext entries are sealed on first read (`quayflow migrate-poc`, with consent) and never written back as plaintext.
+
+## The vault on Linux
+
+On Linux each saved login is a file `~/.local/share/quayflow/vault/<account-id>.login`, readable and writable by your user only (`0600`), in a data folder only you can open (`0700`). It is **not encrypted**. This is the same protection Claude Code gives its own login on Linux (`~/.claude/.credentials.json`, `0600`), so the vault adds no weaker copy than the one Claude already keeps.
+
+It protects against other (non-root) users of the machine. It does not protect against malware running as you, root, or an offline copy of the disk (use disk encryption for that). An encrypted vault through the desktop keyring (Secret Service) is planned; it is not used now because unattended jobs on a server usually have no unlocked keyring, and a vault that fails when nobody is signed in would break them.
+
+Every file Quayflow writes on Linux keeps the permissions of the file it replaces, or is created `0600`. A switch therefore never leaves Claude's `.credentials.json` readable by others.
 
 ## Tokens and refresh
 

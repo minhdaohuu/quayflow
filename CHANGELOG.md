@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- Linux (x86_64; glibc 2.35 and OpenSSL 3 or newer, such as Ubuntu 22.04, Debian 12, Fedora 36 and later). Install with `curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh`; `install.sh` makes the same checks as `install.ps1` (hashes, attestation, the Mod's source commit) and takes the same choices as long options. The program goes to `~/.local/share/quayflow/bin`, linked as `~/.local/bin/quayflow`; `--startup` adds a systemd user unit; `quayflow update` hands off to `install.sh --update`. Saved logins are owner-only files (`0600`), not encrypted, the same protection Claude Code gives its own login on Linux. Same-terminal Replace is not available on Linux yet; Open New Session uses the desktop's terminal.
+- Releases carry `quayflow-linux-x86_64` and `install.sh`, built twice and compared like the Windows programs.
+- `quayflow shell refresh` rewrites an installed PowerShell prompt hook module from the running version.
+
 ### Changed
 - The repository is public. Releases from v0.1.5 on carry build-provenance attestations, so the installer's default checks pass with a signed-in GitHub CLI; v0.1.0 to v0.1.4 stay unattested and need `-SkipAttestation`. The documentation no longer describes a private pilot.
 - When the GitHub CLI is missing or signed out, the installer and `quayflow update` say how to install it and sign in (`winget install --id GitHub.cli -e`, `gh auth login`), and what `-SkipAttestation` gives up.

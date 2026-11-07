@@ -1,6 +1,6 @@
 [package]
 name = "qf-vault"
-description = "Quayflow credential vault: Windows DPAPI (CurrentUser + entropy), sealed per-account files"
+description = "Quayflow credential vault: per-account files, sealed with DPAPI on Windows, owner-only on Linux"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

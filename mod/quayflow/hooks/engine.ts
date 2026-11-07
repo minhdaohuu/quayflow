@@ -1,4 +1,4 @@
-// The loopback link to quayflow.exe: connection file, authenticated calls,
+// The loopback link to the engine (quayflow): connection file, authenticated calls,
 // handshake (FR-20) and on-demand start (FR-19). Every failure here fails
 // open: the caller gets an error or `off`, Claude keeps working unchanged.
 import type { EngineInterface } from 'claude-code'
@@ -22,10 +22,38 @@ export function hasCode(err: unknown, code: string): err is EngineError {
   return err instanceof EngineError && err.code === code
 }
 
+/** Where the engine lives on this computer: its data folder, path separator and program name. */
+export type Layout = { root: string; sep: '\\' | '/'; exe: string }
+
+/**
+ * Windows: `%LOCALAPPDATA%\Quayflow`, `quayflow.exe`. Linux: `$XDG_DATA_HOME/quayflow`
+ * (`~/.local/share/quayflow`), `quayflow`. As the engine and the installers choose it.
+ */
+export async function layout($: EngineInterface): Promise<Layout> {
+  const trim = (p: string) => p.replace(/[\\/]+$/, '')
+  const local = await $.env.get('LOCALAPPDATA').catch(() => undefined)
+  if (local) return { root: `${trim(local)}\\Quayflow`, sep: '\\', exe: 'quayflow.exe' }
+  const xdg = await $.env.get('XDG_DATA_HOME').catch(() => undefined)
+  if (xdg) return { root: `${trim(xdg)}/quayflow`, sep: '/', exe: 'quayflow' }
+  const home = await $.env.get('HOME').catch(() => undefined)
+  if (home) return { root: `${trim(home)}/.local/share/quayflow`, sep: '/', exe: 'quayflow' }
+  throw new EngineError('neither LOCALAPPDATA nor HOME is set', 'unreachable')
+}
+
 export async function dataDir($: EngineInterface): Promise<string> {
-  const local = await $.env.get('LOCALAPPDATA')
-  if (!local) throw new EngineError('LOCALAPPDATA is not set', 'unreachable')
-  return `${local.replace(/[\\/]+$/, '')}\\Quayflow`
+  return (await layout($)).root
+}
+
+/** A path inside the data folder, joined with this platform's separator. */
+export async function dataPath($: EngineInterface, ...parts: string[]): Promise<string> {
+  const l = await layout($)
+  return [l.root, ...parts].join(l.sep)
+}
+
+/** The engine program (`bin/quayflow`, `bin\quayflow.exe`). */
+export async function engineExe($: EngineInterface): Promise<string> {
+  const l = await layout($)
+  return [l.root, 'bin', l.exe].join(l.sep)
 }
 
 /** Races `p` against a session timer; the timer is cancelled once `p` settles. */
@@ -58,7 +86,7 @@ export function withTimeout<T>($: EngineInterface, p: Promise<T>, ms: number, wh
 }
 
 async function readConn($: EngineInterface): Promise<Conn> {
-  const file = `${await dataDir($)}\\engine.json`
+  const file = await dataPath($, 'engine.json')
   let parsed: Partial<Conn>
   try {
     parsed = JSON.parse(await $.fs.read(file)) as Partial<Conn>
@@ -158,9 +186,9 @@ async function tryHello($: EngineInterface, timeoutMs = 5_000): Promise<HelloOut
   }
 }
 
-/** Runs `quayflow.exe start [--if-consented]` and reads its one JSON line. */
+/** Runs `quayflow start [--if-consented]` and reads its one JSON line. */
 export async function runStart($: EngineInterface, ifConsented: boolean): Promise<{ state: StartState | 'not_installed'; detail?: string }> {
-  const exe = `${await dataDir($)}\\bin\\quayflow.exe`
+  const exe = await engineExe($)
   if (!(await $.fs.exists(exe).catch(() => false))) return { state: 'not_installed' }
   try {
     const argv = ifConsented ? [exe, 'start', '--if-consented'] : [exe, 'start']

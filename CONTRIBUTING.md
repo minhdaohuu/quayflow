@@ -15,14 +15,14 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 |---|---|
 | `crates/qf-model` | Shared types and the loopback API v1 schema |
 | `crates/qf-policy` | Pure decision logic (eligibility, ranking, pin, return home, recovery target) |
-| `crates/qf-vault` | DPAPI vault |
+| `crates/qf-vault` | Vault of saved logins (DPAPI on Windows, owner-only files on Linux) |
 | `crates/qf-adapter` | Everything that knows Claude's on-disk layout: locks, login swap, sessions, policy, canary, lanes, history |
 | `crates/qf-provider` | Usage and profile endpoints, idle-account token refresh, poll schedule and backoff |
 | `crates/qf-engine` | The daemon: state, transitions, adoption, recovery, journal, HTTP API |
 | `crates/quayflow` | The `quayflow.exe` CLI (including `quayflow last`) and the `quayflow-bg.exe` launcher |
 | `mod/quayflow` | The Claude Code Mod (TypeScript) |
 | `shell/` | Opt-in PowerShell prompt hook and its self-test |
-| `installer/` | `install.ps1` and its sandbox test |
+| `installer/` | `install.ps1`, `install.sh` and their sandbox tests |
 | `tests/e2e` | Fake-environment smoke, CLI and simulation tests; owner-run real-login scenarios (`real-switching.ps1`, `real-lanes.ps1`, `real-headless.ps1`) |
 | `tests/sim` | Loopback fake of the usage, profile and token API used by the simulation test |
 | `docs/` | Requirements, technical spec, user guide, security notes, known limits, release verification, acceptance |
@@ -30,9 +30,9 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 
 ## Development setup
 
-Quayflow targets all platforms Claude Code runs on; Windows is the first release (MVP). Keep platform-specific code (vault, paths and locks, shell integration, installer) behind its module boundary so the policy, engine and Mod stay shared. See [Platform scope](docs/requirements.md#platform-scope).
+Quayflow targets all platforms Claude Code runs on; it ships for Windows x64 and Linux x86_64, macOS is next. Keep platform-specific code (vault, paths and locks, shell integration, installer) behind its module boundary so the policy, engine and Mod stay shared. See [Platform scope](docs/requirements.md#platform-scope).
 
-- Windows 10/11 for the first release, Rust 1.98 (pinned in `rust-toolchain.toml`), Node 20+ for the Mod (CI uses Node 24), Claude Code 2.1.316 or later, PowerShell 7 and Windows PowerShell 5.1 for the shell and installer tests.
+- Windows 10/11 or Linux (Ubuntu 22.04 or later), Rust 1.98 (pinned in `rust-toolchain.toml`), Node 20+ for the Mod (CI uses Node 24), Claude Code 2.1.316 or later, PowerShell 7 and Windows PowerShell 5.1 for the shell and installer tests.
 - With Visual Studio Build Tools: `cargo build`. Without them, use the GNU toolchain locally: `$env:RUSTUP_TOOLCHAIN = "1.98.0-x86_64-pc-windows-gnu"` (releases are always built with MSVC in CI).
 
 ```powershell
@@ -43,6 +43,9 @@ pwsh -File tests/e2e/smoke-fake-env.ps1        # real quayflow.exe against a fak
 pwsh -File tests/e2e/cli-fake-env.ps1          # CLI behavior and error paths, fake environment
 pwsh -File tests/e2e/sim-usage.ps1            # scripted usage from a fake usage API (needs Python 3)
 pwsh -File shell/test-Quayflow.ps1            # prompt hook, PowerShell 7 and 5.1
+# On Linux:
+sh installer/test-install.sh                   # install.sh in a sandbox
+sh tests/e2e/smoke-linux.sh                    # real program, fake environment: install, engine, update, uninstall
 pwsh -File installer/test-install.ps1         # installer in a sandbox, PowerShell 7 and 5.1
 claude plugin validate --strict .
 claude plugin validate --strict mod/quayflow

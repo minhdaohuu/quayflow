@@ -13,7 +13,7 @@ whether you are at the keyboard or a `claude -p` job is running on its own.
 [![CI](https://github.com/minhdaohuu/quayflow/actions/workflows/ci.yml/badge.svg)](https://github.com/minhdaohuu/quayflow/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/minhdaohuu/quayflow?include_prereleases&sort=semver)](https://github.com/minhdaohuu/quayflow/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D4)
+![Platforms: Windows and Linux](https://img.shields.io/badge/platforms-Windows%20x64%20%C2%B7%20Linux%20x86__64-0078D4)
 
 [See it in action](#see-it-in-action) · [Headless jobs](#headless-jobs-too) · [Features](#features) · [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start) · [Documentation](#documentation) · [Roadmap](#roadmap)
 
@@ -22,7 +22,7 @@ whether you are at the keyboard or a `claude -p` job is running on its own.
 > [!IMPORTANT]
 > **You are responsible for complying with your provider's terms and your organization's rules**, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is an independent open-source project and is **not affiliated with or endorsed by Anthropic**.
 
-**Status:** v0.1.4, public pilot. Quayflow targets every platform Claude Code runs on; **Windows is the first release (MVP)**, with macOS and Linux to follow. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts; see [acceptance results](docs/acceptance.md) for what is proven and what is still open.
+**Status:** v0.1.4, public pilot. Quayflow targets every platform Claude Code runs on: **Windows x64 and Linux x86_64 now** (Linux from v0.1.5), macOS next. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts; see [acceptance results](docs/acceptance.md) for what is proven and what is still open.
 
 ## What and why
 
@@ -253,13 +253,21 @@ In Suggest mode the switch is only suggested; in Manual mode nothing is switched
 
 ## Install
 
-Windows 10/11 x64 with Claude Code installed. No administrator rights. In PowerShell:
+Claude Code installed; no administrator rights.
+
+**Windows 10/11 x64**, in PowerShell:
 
 ```powershell
 irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1 | iex
 ```
 
-The installer shows what it will do and asks for consent. It verifies `quayflow.exe` against the release's `SHA256SUMS`, and its GitHub build-provenance attestation from the release workflow, and refuses on a mismatch. Verifying the attestation needs the [GitHub CLI](https://cli.github.com/), signed in (`gh auth login`); without it the installer refuses unless you pass `-SkipAttestation`, which leaves the hash check alone. Releases from v0.1.5 on are attested; v0.1.0 to v0.1.4 were built while the repository was private and are not attested. It then installs to `%LOCALAPPDATA%\Quayflow\bin` and adds the Mod to Claude Code from the same release. Running it again upgrades.
+**Linux x86_64** (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later), from v0.1.5:
+
+```sh
+curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh
+```
+
+The installer shows what it will do and asks for consent. It verifies the program against the release's `SHA256SUMS`, and its GitHub build-provenance attestation from the release workflow, and refuses on a mismatch. Verifying the attestation needs the [GitHub CLI](https://cli.github.com/), signed in (`gh auth login`); without it the installer refuses unless you pass `-SkipAttestation`, which leaves the hash check alone. Releases from v0.1.5 on are attested; v0.1.0 to v0.1.4 were built while the repository was private and are not attested. It then installs to `%LOCALAPPDATA%\Quayflow\bin` (Linux: `~/.local/share/quayflow/bin`, linked as `~/.local/bin/quayflow`) and adds the Mod to Claude Code from the same release. Running it again upgrades. On Linux, `install.sh --help` lists the same options as long options (`--version`, `--startup`, `--skip-attestation`, ...).
 
 <details>
 <summary><b>Safer: download, verify, read, then run</b></summary>
@@ -311,7 +319,7 @@ Everything is also available from the command line: `quayflow status`, `quayflow
 
 - **Terms and organization rules are your responsibility.** Quayflow is not affiliated with or endorsed by Anthropic.
 - **A switch moves every session of an environment** (by default `~/.claude`), each at its next request. Use lanes to keep a session on a different account.
-- **Saved logins** are encrypted with Windows DPAPI for your user. This does not protect against malware running as you. Claude refreshes the live login and Quayflow saves the result; Quayflow refreshes only an idle account's saved copy so its usage stays readable. Logins never go into logs, reports or the Mod, and there is no telemetry.
+- **Saved logins** are encrypted with Windows DPAPI for your user. On Linux they are owner-only files (`0600`), not encrypted, the same protection Claude Code gives its own login there. Neither protects against malware running as you. Claude refreshes the live login and Quayflow saves the result; Quayflow refreshes only an idle account's saved copy so its usage stays readable. Logins never go into logs, reports or the Mod, and there is no telemetry.
 - **Organization-managed login enforcement is respected.** The managed-login override setting is recorded but has no bypass path in this build. See [Security notes](docs/security.md#managed-login-enforcement-and-the-override-setting).
 - **Releases are not Authenticode-signed.** They are reproducible, hashed (`SHA256SUMS`) and, from v0.1.5 on, carry build-provenance attestations. Smart App Control and signed-only company policies may block them. See [Verifying a release](docs/verify-release.md).
 - **Idle accounts need a working saved login.** Quayflow refreshes an idle account's saved copy when its token expires. If the sign-in service refuses it, that account needs a new sign-in before it can be used again.
@@ -365,9 +373,9 @@ Without Visual Studio Build Tools, set `$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-p
 
 ## Roadmap
 
-- **v0.1 (now, MVP):** Windows 10/11 x64 public pilot. Switching, real usage-limit recovery and headless jobs are proven with real accounts; the remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
+- **v0.1 (now, MVP):** Windows x64 and Linux x86_64 public pilot. Switching, real usage-limit recovery and headless jobs are proven with real accounts; the remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
 - **Next:** lanes for unattended jobs, with their own mode, so background jobs can switch without moving your interactive sessions.
-- **Later:** macOS and Linux, each with the platform's own credential protection (Keychain, Secret Service) and shell integration; Authenticode signing.
+- **Later:** macOS (Keychain); an encrypted Linux vault through the desktop keyring where one runs; same-terminal Replace for bash and zsh; Authenticode signing.
 
 Have a use case that is not covered? [Open an issue](https://github.com/minhdaohuu/quayflow/issues/new/choose).
 

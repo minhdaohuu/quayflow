@@ -4,7 +4,7 @@ The functional requirements Quayflow v0.1 is built and tested against. Code comm
 
 ## Platform scope
 
-Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. Windows 10/11 x64 is the first release (the v0.1 MVP), so the requirements below name Windows mechanisms (DPAPI, PowerShell, `%LOCALAPPDATA%`). Later platforms meet the same requirements with their own equivalents: OS credential protection for the vault, the platform's shell for same-terminal replacement and the platform's per-user data folder. New code should keep platform-specific parts behind the existing module boundaries (vault, adapter paths and locks, shell integration, installer) so that the policy, engine and Mod stay shared.
+Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. v0.1 ships for Windows 10/11 x64 and Linux x86_64; the requirements below name Windows mechanisms (DPAPI, PowerShell, `%LOCALAPPDATA%`). Linux meets them with owner-only files for the vault (as Claude Code stores its own login there), `~/.local/share/quayflow`, a systemd user unit and `install.sh`; same-terminal replacement is not available on Linux yet. Later platforms meet the same requirements with their own equivalents: OS credential protection for the vault, the platform's shell for same-terminal replacement and the platform's per-user data folder. New code should keep platform-specific parts behind the existing module boundaries (vault, adapter paths and locks, shell integration, installer) so that the policy, engine and Mod stay shared.
 
 ## Onboarding and accounts
 
@@ -61,7 +61,7 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. W
 |---|---|
 | FR-19 | One engine per Windows user, started on demand after consent, no visible windows, intentional stop respected, crash reconciliation without replay; matched engine and Mod updates; uninstall leaves the current login working. |
 | FR-20 | Loopback API with a per-run token and a versioned handshake (current and previous protocol); an incompatible pair disables switching and recovery. Detect another tool switching the same login. |
-| FR-21 | Credentials sealed with Windows DPAPI (current user plus application entropy); captures Claude's refreshes of live logins; refreshes only the saved copy of an idle account (held by the vault alone); no plaintext fallback. |
+| FR-21 | Credentials sealed with Windows DPAPI (current user plus application entropy); on Linux, owner-only files with the same protection as Claude Code's own login file; captures Claude's refreshes of live logins; refreshes only the saved copy of an idle account (held by the vault alone); no plaintext fallback. |
 | FR-22 | Sanitized local logs (7 days, size cap) and a durable journal; no tokens, prompts, responses, emails or labels in records. |
 | FR-23 | Support reports are local and shared only by the user; no telemetry. |
 | FR-24 | Per-version compatibility: a static check of each Claude version, every real switch verified, the oldest running version governs; failures turn in-place switching off for that version. |

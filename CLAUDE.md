@@ -1,6 +1,6 @@
 # Quayflow: working notes for Claude
 
-Quayflow switches a Claude Code environment between the user's approved Claude accounts in place: running sessions continue on the new account at their next request. It watches usage, suggests or makes switches, recovers a request that hit a usage limit (one switch, one retry), and is built for unattended `claude -p` jobs. Windows is the first release; the project targets every platform Claude Code runs on (never call it Windows-only).
+Quayflow switches a Claude Code environment between the user's approved Claude accounts in place: running sessions continue on the new account at their next request. It watches usage, suggests or makes switches, recovers a request that hit a usage limit (one switch, one retry), and is built for unattended `claude -p` jobs. It ships for Windows x64 and Linux x86_64; macOS is next (never call it Windows-only).
 
 Read `CHANGELOG.md` first for what changed recently; it is kept accurate.
 
@@ -11,13 +11,13 @@ Read `CHANGELOG.md` first for what changed recently; it is kept accurate.
 | `crates/qf-model` | Shared types: config (`Tuning` defaults), API v1 request/response structs, time helpers |
 | `crates/qf-policy` | Pure decisions: eligibility and its explanations, proactive switch, recovery target, effective mode |
 | `crates/qf-provider` | Usage and profile API, poll `Schedule` (backoff, slow pace after a 429), idle-token refresh |
-| `crates/qf-vault` | DPAPI vault of saved logins |
+| `crates/qf-vault` | Vault of saved logins: DPAPI on Windows, owner-only files on Linux (`OwnerOnly`); `atomic_write` keeps file modes |
 | `crates/qf-adapter` | Claude environment files: read/write login under Claude's own locks |
 | `crates/qf-engine` | The engine: state, observe loop, transitions (switches), recovery, journal, HTTP API (`http.rs` routes) |
 | `crates/quayflow` | CLI `quayflow.exe` (`main.rs` HELP lists every command) and `quayflow-bg.exe`; `last.rs` = `quayflow last` |
 | `mod/quayflow/hooks` | The Mod (Claude Code plugin, TypeScript): `register.tsx` hooks, `step.ts` request hook and recovery, `engine.ts` link/handshake, `watcher.ts` event long-poll and status line, `commands.ts` `/quay`, `pane.tsx`/`flows.tsx`/`review.tsx` the pane, `ui.tsx` design kit, `chart.ts` Raster graphics |
 | `shell/Quayflow.psm1` | PowerShell prompt hook for same-terminal Replace |
-| `installer/install.ps1` | Installer (hash + attestation checks, Mod install); `test-install.ps1` |
+| `installer/install.ps1`, `install.sh` | Installers (hash + attestation checks, Mod install, `-Update`/`--update` for `quayflow update`); `test-install.ps1`, `test-install.sh` |
 | `tests/e2e` | Fake-environment suites (CI) and owner-run real-login scripts |
 | `docs/` | User guide, tech spec, requirements, acceptance, security, known limits, verify-release |
 
@@ -52,6 +52,8 @@ claude plugin test mod/quayflow           # tests in mod/quayflow/tests, harness
 ```
 
 Fake-environment end-to-end (safe anywhere, run in CI): `pwsh -File tests/e2e/smoke-fake-env.ps1`, `cli-fake-env.ps1`, `sim-usage.ps1` (fake usage API `tests/sim/fake_api.py`, `QUAYFLOW_SIM_API`). Also `shell/test-Quayflow.ps1` and `installer/test-install.ps1`.
+
+Linux (CI job `linux`, or a Linux machine): `cargo clippy`/`cargo test` as above, `sh installer/test-install.sh`, `sh tests/e2e/smoke-linux.sh target/debug/quayflow`, `shellcheck -S warning installer/*.sh tests/e2e/*.sh`, `claude plugin test mod/quayflow`. Platform code is behind `cfg(windows)` / `cfg(not(windows))`: Linux paths and facts are in `qf-adapter` (`process.rs`, `env.rs`, `lock.rs`, `lanes.rs`, `policy.rs`), `qf-engine/src/paths.rs`, `qf-vault` and `quayflow/src/local.rs`; the Mod picks the layout in `hooks/engine.ts` (`layout`).
 
 Real-login scripts (`tests/e2e/real-*.ps1`) switch the user's live login. Never run them; give the user the command and read the results they paste.
 

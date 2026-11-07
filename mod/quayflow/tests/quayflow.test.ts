@@ -6,7 +6,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { pathCovers } from '../hooks/format'
 import { errorKindOf, isFailedRequest } from '../hooks/step'
 import { STATE, failed, ok } from './fixtures'
-import { ENGINE_EXE, PROFILE_UUID, STEP, quay, refuse, start, step, world } from './harness'
+import { ENGINE_EXE, LINUX_ENGINE_EXE, PROFILE_UUID, STEP, quay, refuse, start, step, world } from './harness'
 
 async function hash12(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
@@ -115,6 +115,31 @@ describe('request hook', () => {
     expect(r.answer).toBe('done')
     expect(requests).toBe(2)
     expect(w.bodies('/v1/step').map(b => b.ok)).toEqual([false, true])
+  })
+
+  test('Linux: the engine is found in ~/.local/share/quayflow and the simulated limit is taken with mv', async ($, on) => {
+    const w = world(on, { linux: true, simLimit: '{"atStep":0}', env: { QUAYFLOW_SIM_LIMIT: '1' }, recover: { retry: false, why: 'test' } })
+    let requests = 0
+    on('turn.step', async function* (_$, e) {
+      requests += 1
+      return ok(e)
+    })
+    await start($, w, false)
+    // The connection file was read from the Linux data folder: the handshake happened.
+    expect(w.routes()).toContain('/v1/hello')
+    await step($)
+    expect(requests).toBe(0)
+    const taken = w.runs.filter(r => r[0] === 'mv')
+    expect(taken).toHaveLength(1)
+    expect(taken[0]?.[1]).toBe('/home/t/.local/share/quayflow/simulate-limit.json')
+    expect(w.runs.some(r => /cmd/i.test(r[0] ?? ''))).toBe(false)
+  })
+
+  test('Linux: no engine runs bin/quayflow start --if-consented', async ($, on) => {
+    const w = world(on, { linux: true, down: true, start: 'no_consent' })
+    await start($, w, false)
+    await w.clock.settle()
+    expect(w.runs).toEqual([[LINUX_ENGINE_EXE, 'start', '--if-consented']])
   })
 
   test('simulate-limit.json is ignored unless QUAYFLOW_SIM_LIMIT=1', async ($, on) => {

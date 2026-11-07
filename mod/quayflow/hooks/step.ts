@@ -6,7 +6,7 @@ import type { EngineInterface, StreamNext, TurnStepChunk, TurnStepInput, TurnSte
 
 import type { FailureShape, RecoverRequest, RecoverResponse, SessionRateLimitWire, StepReport, StepResponse } from '../types'
 import { Q, errorText, uiLog } from './context'
-import { call, dataDir, linkReady, markUnreachable } from './engine'
+import { call, dataPath, layout, linkReady, markUnreachable } from './engine'
 import { liveAccountHash } from './identity'
 
 type StepEvent = Pick<TurnStepInput, 'turnId' | 'index' | 'model' | 'agentId'>
@@ -57,7 +57,7 @@ async function rateLimits($: EngineInterface): Promise<SessionRateLimitWire[]> {
 
 /**
  * Test hook, off unless `QUAYFLOW_SIM_LIMIT=1` is set for the Claude process:
- * `%LOCALAPPDATA%\Quayflow\simulate-limit.json` `{"atStep": n}` answers the
+ * `simulate-limit.json` in the data folder, `{"atStep": n}`, answers the
  * first main-agent request with index >= n as failed, without sending it, once.
  * The file is taken by an atomic rename, so of several sessions only one fires.
  */
@@ -66,7 +66,7 @@ async function takeSimulatedLimit($: EngineInterface, e: StepEvent): Promise<boo
   if ((await $.env.get('QUAYFLOW_SIM_LIMIT').catch(() => undefined)) !== '1') return false
   let file: string
   try {
-    file = `${await dataDir($)}\\simulate-limit.json`
+    file = await dataPath($, 'simulate-limit.json')
   } catch {
     return false
   }
@@ -77,12 +77,16 @@ async function takeSimulatedLimit($: EngineInterface, e: StepEvent): Promise<boo
     return false
   }
   if (typeof sim.atStep !== 'number' || e.index < sim.atStep) return false
-  // The plugin file API has no rename: `move` (MoveFileEx) succeeds for exactly one taker.
-  const cmd = (await $.env.get('ComSpec').catch(() => undefined)) || 'cmd.exe'
+  // The plugin file API has no rename: `move` (MoveFileEx) or `mv` (rename) succeeds for
+  // exactly one taker.
   const taken = `${file}.${Q.sessionId.replace(/[^0-9A-Za-z-]/g, '')}-${e.index}.taken`
-  const moved = await $.process.run([cmd, '/d', '/c', 'move', '/y', file, taken], { timeoutMs: 5_000 }).catch(() => undefined)
+  const windows = (await layout($)).sep === '\\'
+  const cmd = windows ? (await $.env.get('ComSpec').catch(() => undefined)) || 'cmd.exe' : ''
+  const move = windows ? [cmd, '/d', '/c', 'move', '/y', file, taken] : ['mv', file, taken]
+  const moved = await $.process.run(move, { timeoutMs: 5_000 }).catch(() => undefined)
   if (moved?.exitCode !== 0) return false
-  await $.process.run([cmd, '/d', '/c', 'del', '/q', taken], { timeoutMs: 5_000 }).catch(() => undefined)
+  const del = windows ? [cmd, '/d', '/c', 'del', '/q', taken] : ['rm', '-f', taken]
+  await $.process.run(del, { timeoutMs: 5_000 }).catch(() => undefined)
   return true
 }
 

@@ -4,9 +4,11 @@ Every Quayflow release publishes these assets:
 
 | Asset | What it is |
 |---|---|
-| `quayflow.exe` | Engine and command-line tool |
-| `quayflow-bg.exe` | Windowless launcher used by the sign-in startup entry |
-| `install.ps1` | Installer |
+| `quayflow.exe` | Engine and command-line tool (Windows x64) |
+| `quayflow-bg.exe` | Windowless launcher used by the sign-in startup entry (Windows) |
+| `quayflow-linux-x86_64` | Engine and command-line tool (Linux x86_64; from v0.1.5) |
+| `install.ps1` | Installer (Windows) |
+| `install.sh` | Installer (Linux; from v0.1.5) |
 | `Quayflow.psm1` | PowerShell integration (also embedded in `quayflow.exe`) |
 | `SOURCE_COMMIT` | The commit the release was built from (releases after v0.1.0) |
 | `SHA256SUMS` | SHA-256 hash of each asset above, in `sha256sum` format |

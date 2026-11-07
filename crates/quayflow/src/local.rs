@@ -1109,10 +1109,11 @@ pub fn uninstall(dd: &DataDir, delete: DeleteChoice) -> Result<Vec<String>, Stri
         notes.push(format!("prompt hook NOT removed: {p}"));
     }
     match remove_from_user_path(&dd.bin()) {
-        Ok(true) => notes.push(format!(
+        Ok(true) if cfg!(windows) => notes.push(format!(
             "{} removed from your user PATH (new terminals)",
             dd.bin().display()
         )),
+        Ok(true) => notes.push("~/.local/bin/quayflow link removed".into()),
         Ok(false) => {}
         Err(e) => notes.push(format!("user PATH: {e}")),
     }
