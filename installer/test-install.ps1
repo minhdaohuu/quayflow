@@ -271,7 +271,7 @@ public static class Program {
             # when the release workflow's attestation verifies.
             Remove-Item $bin -Recurse -Force -ErrorAction SilentlyContinue
             $r = RunWith $noGhBin @('-Source', $assets, '-NoPlugin')
-            Assert ($r.Code -ne 0 -and $r.Out -match 'REFUSED: the build-provenance attestation cannot be verified because the GitHub CLI \(gh\) is not installed' -and $r.Out -match '-SkipAttestation') 'no gh: refused, and told how to skip explicitly' $r.Out
+            Assert ($r.Code -ne 0 -and $r.Out -match 'REFUSED: the build-provenance attestation cannot be verified because the GitHub CLI \(gh\) is not installed' -and $r.Out -match '-SkipAttestation' -and $r.Out -match 'winget install --id GitHub.cli' -and $r.Out -match 'gh auth login') 'no gh: refused, told how to install gh and how to skip explicitly' $r.Out
             Assert (-not (Test-Path (Join-Path $bin 'quayflow.exe'))) 'no gh: nothing installed'
             $env:QF_FAKE_GH_AUTH = 'fail'
             $r = RunWith $fakeBin @('-Source', $assets, '-NoPlugin')

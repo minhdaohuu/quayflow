@@ -20,7 +20,7 @@ whether you are at the keyboard or a `claude -p` job is running on its own.
 </div>
 
 > [!IMPORTANT]
-> **You are responsible for complying with your provider's terms and your organization's rules**, including rules about which accounts may process your organization's work. Quayflow is an independent open-source project and is **not affiliated with or endorsed by Anthropic**.
+> **You are responsible for complying with your provider's terms and your organization's rules**, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is an independent open-source project and is **not affiliated with or endorsed by Anthropic**.
 
 **Status:** v0.1.4, public pilot. Quayflow targets every platform Claude Code runs on; **Windows is the first release (MVP)**, with macOS and Linux to follow. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts; see [acceptance results](docs/acceptance.md) for what is proven and what is still open.
 

@@ -706,13 +706,16 @@ pub fn update(
     let gh_ready = gh_installed && gh_signed_in();
     // Same rule as the installer: refuse before downloading anything.
     if !check_only && !skip_attestation && !gh_ready {
-        let why = if gh_installed {
-            "the GitHub CLI is not signed in (run `gh auth login`)"
+        let (why, fix) = if gh_installed {
+            ("the GitHub CLI is not signed in", "  gh auth login")
         } else {
-            "the GitHub CLI (gh) is not installed"
+            (
+                "the GitHub CLI (gh) is not installed",
+                "  winget install --id GitHub.cli -e\n  gh auth login",
+            )
         };
         return Err(format!(
-            "REFUSED: the build-provenance attestation cannot be verified because {why}. Nothing was installed. Install and sign in to the GitHub CLI and run this again, or accept the SHA-256 check alone with --skip-attestation"
+            "REFUSED: the build-provenance attestation cannot be verified because {why}. Nothing was installed.\nThe attestation proves the programs were built by this repository's release workflow. To check it, run:\n{fix}\nthen open a new terminal and run quayflow update again.\nOr update with the SHA-256 check alone (it proves the files match the release's SHA256SUMS, not who built them): quayflow update --skip-attestation"
         ));
     }
     let tag = match (source, version) {

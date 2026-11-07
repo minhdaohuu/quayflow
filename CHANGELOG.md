@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 - The repository is public. Releases from v0.1.5 on carry build-provenance attestations, so the installer's default checks pass with a signed-in GitHub CLI; v0.1.0 to v0.1.4 stay unattested and need `-SkipAttestation`. The documentation no longer describes a private pilot.
+- When the GitHub CLI is missing or signed out, the installer and `quayflow update` say how to install it and sign in (`winget install --id GitHub.cli -e`, `gh auth login`), and what `-SkipAttestation` gives up.
+- The README, user guide and installer say to use only accounts that are yours to use.
+- An update from a local build says the Mod was left as it is, instead of "Skipped the Claude Code plugin (-NoPlugin)".
 
 ## [0.1.4] - 2026-11-07
 

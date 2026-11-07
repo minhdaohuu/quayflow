@@ -152,7 +152,7 @@ try {
         $o = Qf update --source $rel --skip-attestation
         $binNew = Join-Path $env:QUAYFLOW_HOME 'bin\quayflow.exe'
         Check 'update installs a local release through install.ps1' ($script:code -eq 0 -and $o -match 'Updating Quayflow' -and $o -match 'updated to the local build' -and (Test-Path $binNew) -and (Get-FileHash $binNew).Hash -eq (Get-FileHash $Exe).Hash) "$($script:code) $o"
-        Check 'update: no consent text, Mod left alone' ($o -notmatch 'not affiliated with' -and $o -match 'Skipped the Claude Code plugin') $o
+        Check 'update: no consent text, Mod left alone' ($o -notmatch 'not affiliated with' -and $o -match 'The Mod was left as it is') $o
         Check 'update refreshed the installed shell module' ((Get-Content -Raw (Join-Path $env:QUAYFLOW_HOME 'shell\Quayflow.psm1')) -match 'function') ''
         Check 'update left no download folder' (-not (Test-Path (Join-Path $env:QUAYFLOW_HOME 'update'))) ''
     } finally { $env:LOCALAPPDATA = $savedLad; $env:QUAYFLOW_HOME = $savedHome }

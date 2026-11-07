@@ -368,7 +368,10 @@ Modes (per group):
 Your responsibility:
   You are responsible for complying with your provider's terms and your
   organization's rules, including rules on which accounts may process your
-  organization's work. Quayflow is not affiliated with or endorsed by Anthropic.
+  organization's work. Use only accounts that are yours to use. Quayflow does
+  not make sharing accounts, or getting around a provider's limits, allowed
+  where its terms forbid it. Quayflow is not affiliated with or endorsed by
+  Anthropic.
 
 "@
     if (-not $Yes) {
@@ -395,8 +398,12 @@ Your responsibility:
     if (-not $SkipAttestation -and -not $ghReady) {
         $why = 'the GitHub CLI (gh) is not installed'
         if ($gh) { $why = "the GitHub CLI is not signed in (run 'gh auth login')" }
+        $fix = "    winget install --id GitHub.cli -e`n    gh auth login`n"
+        if ($gh) { $fix = "    gh auth login`n" }
         throw ("REFUSED: the build-provenance attestation cannot be verified because $why. Nothing was installed.`n" +
-            "Install and sign in to the GitHub CLI and run this again, or accept the SHA-256 check alone by adding -SkipAttestation:`n" +
+            "The attestation proves the programs were built by this repository's release workflow. To check it, run:`n" +
+            $fix + "then open a new terminal and run the installer again.`n" +
+            "Or install with the SHA-256 check alone (it proves the files match this release's SHA256SUMS, not who built them) by adding -SkipAttestation:`n" +
             "    & ([scriptblock]::Create((irm https://github.com/$Repo/releases/latest/download/install.ps1))) -SkipAttestation")
     }
 
@@ -557,7 +564,8 @@ Your responsibility:
         # it too), and the installer reports the failure and exits with an error at the end.
         $modError = $null
         if ($NoPlugin) {
-            Write-Warn 'Skipped the Claude Code plugin (-NoPlugin).'
+            if ($Update) { Write-Info 'The Mod was left as it is (local build).' }
+            else { Write-Warn 'Skipped the Claude Code plugin (-NoPlugin).' }
         } elseif (-not $claude) {
             Write-Warn 'Claude Code (claude) was not found on PATH. Install it, then run this installer again to add the Mod.'
         } else {

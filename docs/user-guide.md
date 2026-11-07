@@ -2,7 +2,7 @@
 
 Quayflow v0.1.4. This guide covers installing, setting up accounts and groups, how switching behaves, and how to remove Quayflow. Quayflow targets every platform Claude Code runs on; Windows is the first release, so paths and shells below are the Windows ones.
 
-> **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Quayflow is not affiliated with or endorsed by Anthropic.
+> **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is not affiliated with or endorsed by Anthropic.
 
 Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Headless jobs](#headless-jobs-claude--p) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Engine control](#engine-control) · [Update](#update) · [Uninstall](#uninstall) · [Several machines](#using-an-account-on-several-machines) · [Troubleshooting](#troubleshooting) · [Testing](#testing-your-setup) · [Files](#files-and-folders)
 
