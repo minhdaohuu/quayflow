@@ -988,7 +988,40 @@ pub fn busy_lanes(dd: &DataDir) -> Vec<String> {
         .collect()
 }
 
-pub fn uninstall(dd: &DataDir, delete_data: bool) -> Result<Vec<String>, String> {
+/// What `quayflow uninstall` deletes besides the program, startup entry and prompt hook.
+/// Each choice is separate and off by default; `all` (`--delete-data`) is both plus
+/// settings, lanes and the other Quayflow data.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeleteChoice {
+    /// The protected vault copies of registered logins (and leftover sign-in copies).
+    pub vault: bool,
+    /// Routine logs and saved support reports (and the journal, unless a record is unresolved).
+    pub logs: bool,
+    pub all: bool,
+}
+
+impl DeleteChoice {
+    pub fn from_flags(delete_vault: bool, delete_logs: bool, delete_data: bool) -> Self {
+        DeleteChoice {
+            vault: delete_vault || delete_data,
+            logs: delete_logs || delete_data,
+            all: delete_data,
+        }
+    }
+}
+
+/// Whether the journal holds a transition that was requested and never resolved.
+fn unresolved_journal(dd: &DataDir) -> bool {
+    let journal = qf_engine::journal::Journal::new(dd.journal());
+    let all = journal.read_all();
+    all.iter().any(|r| r["event"] == "transition.requested")
+        && !all
+            .iter()
+            .any(|r| r["event"] == "transition.reconciled" || r["event"] == "transition.written")
+}
+
+pub fn uninstall(dd: &DataDir, delete: DeleteChoice) -> Result<Vec<String>, String> {
+    let delete_data = delete.all;
     if delete_data {
         let busy = busy_lanes(dd);
         if !busy.is_empty() {
@@ -1044,13 +1077,8 @@ pub fn uninstall(dd: &DataDir, delete_data: bool) -> Result<Vec<String>, String>
         Err(e) => notes.push(format!("user PATH: {e}")),
     }
     notes.push("Claude's current login is left as it is: your active account keeps working".into());
+    let unresolved = unresolved_journal(dd);
     if delete_data {
-        let journal = qf_engine::journal::Journal::new(dd.journal());
-        let unresolved = journal.read_all().iter().any(|r| r["event"] == "transition.requested")
-            && !journal
-                .read_all()
-                .iter()
-                .any(|r| r["event"] == "transition.reconciled" || r["event"] == "transition.written");
         for p in [
             dd.vault(),
             dd.logs(),
@@ -1082,8 +1110,33 @@ pub fn uninstall(dd: &DataDir, delete_data: bool) -> Result<Vec<String>, String>
             dd.backups().display()
         ));
     } else {
+        if delete.vault {
+            let _ = std::fs::remove_dir_all(dd.vault());
+            let _ = std::fs::remove_dir_all(dd.signin_dir());
+            notes.push(format!(
+                "vault deleted (the protected copies of your registered logins); protected backups of unknown logins are kept in {}",
+                dd.backups().display()
+            ));
+        } else {
+            notes.push(format!("vault kept in {}", dd.vault().display()));
+        }
+        if delete.logs {
+            let _ = std::fs::remove_dir_all(dd.logs());
+            let _ = std::fs::remove_dir_all(dd.reports());
+            if unresolved {
+                notes.push(format!(
+                    "logs and support reports deleted; kept {} (unresolved recovery record)",
+                    dd.journal().display()
+                ));
+            } else {
+                let _ = std::fs::remove_file(dd.journal());
+                notes.push("logs, journal and support reports deleted".into());
+            }
+        } else {
+            notes.push(format!("logs kept in {}", dd.logs().display()));
+        }
         notes.push(format!(
-            "vault and logs kept in {} (quayflow uninstall --delete-data removes them)",
+            "settings and lanes kept in {} (quayflow uninstall --delete-data removes everything)",
             dd.root.display()
         ));
     }
@@ -1128,6 +1181,18 @@ fn spawn_cleanup(bin: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uninstall_deletions_are_separate_choices() {
+        assert_eq!(DeleteChoice::from_flags(false, false, false), DeleteChoice::default());
+        let v = DeleteChoice::from_flags(true, false, false);
+        assert!(v.vault && !v.logs && !v.all);
+        let l = DeleteChoice::from_flags(false, true, false);
+        assert!(!l.vault && l.logs && !l.all);
+        // --delete-data stays the full deletion: both choices and the rest.
+        let d = DeleteChoice::from_flags(false, false, true);
+        assert!(d.vault && d.logs && d.all);
+    }
 
     #[test]
     fn profile_block_round_trip_preserves_user_content() {

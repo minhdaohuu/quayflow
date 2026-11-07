@@ -4,9 +4,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
-import type { QuayDisclosure, QuayFlash, QuayForm, QuayLink, QuayReport, QuaySignin, QuayView, SigninStatus, StateView } from '../types'
+import type { QuayCacheEntry, QuayDisclosure, QuayFlash, QuayForm, QuayLink, QuayReport, QuaySignin, QuayView, SigninStatus, StateView } from '../types'
 
-export const MOD_VERSION = '0.1.1'
+export const MOD_VERSION = '0.1.2'
 export const PROTOCOL = 1
 export const PANE_ID = 'quay'
 
@@ -32,10 +32,23 @@ export const Q = {
   linkTicket: 0,
   /** The newest ticket handed out when the link last turned on. */
   linkOnTicket: 0,
+  /** `establish` attempts still running: a pane showing "connecting" with none starts one. */
+  linkAttempts: 0,
   state: undefined as StateView | undefined,
   seq: 0,
   requestCounter: 0,
+  /** When this session (or this module instance, after a reload) started: older engine events are history. */
+  startedAt: 0,
+  /** The terminal's width as the last `/quay` saw it; the status line is budgeted to it. */
+  columns: undefined as number | undefined,
+  /** The `statusLineUsage` option: whether the status line shows usage figures. */
+  usageDisplay: 'auto' as UsageDisplay,
+  /** The model of this session's last main-thread request, for the per-model weekly window. */
+  model: undefined as string | undefined,
 }
+
+/** `auto`: hide the usage % when Claude Code's own status line already shows the limits. */
+export type UsageDisplay = 'auto' | 'show' | 'hide'
 
 const linkAtom = atom({ plugin: 'quayflow', key: 'link' } as const, { on: false, reason: 'connecting' })
 const snapshotAtom = atom({ plugin: 'quayflow', key: 'snapshot' } as const, null, { shape: 'state-v1' })
@@ -46,6 +59,7 @@ const signinAtom = atom({ plugin: 'quayflow', key: 'signin' } as const, null)
 const disclosureAtom = atom({ plugin: 'quayflow', key: 'disclosure' } as const, null)
 const reportAtom = atom({ plugin: 'quayflow', key: 'report' } as const, null)
 const announcedAtom = atom({ plugin: 'quayflow', key: 'announced' } as const, [])
+const cacheAtom = atom({ plugin: 'quayflow', key: 'cache' } as const, {})
 
 /** A request id for a mutating call: a repeat returns the first response (tech-spec §6). */
 export function requestId(): string {
@@ -74,6 +88,12 @@ export function uiToast($: EngineInterface, text: string): void {
   try {
     $.ui.toast(text)
   } catch {}
+}
+
+/** The link the pane last drew (it survives a reload of this module; `Q.link` does not). */
+export async function shownLink($: EngineInterface): Promise<QuayLink | undefined> {
+  if (Q.headless) return undefined
+  return read($, linkAtom).catch(() => undefined)
 }
 
 export async function setLink($: EngineInterface, link: QuayLink): Promise<void> {
@@ -131,16 +151,26 @@ export async function setReport($: EngineInterface, value: QuayReport | null): P
   await update($, reportAtom, () => value).catch(() => {})
 }
 
-/** Marks ids as already announced (no transcript line for them). */
-export async function seedAnnounced($: EngineInterface, ids: string[]): Promise<void> {
-  await update($, announcedAtom, list => [...new Set([...list, ...ids])].slice(-500)).catch(() => {})
+/** Stores an engine read for a review screen in its slot (one entry per slot). */
+export async function setCacheEntry($: EngineInterface, slot: string, entry: QuayCacheEntry | null): Promise<void> {
+  await update($, cacheAtom, c => {
+    const next = { ...c }
+    if (entry) next[slot] = entry
+    else delete next[slot]
+    return next
+  }).catch(() => {})
 }
 
-/** Of `ids`, those not announced yet; they are marked announced as they are returned. */
+/** Marks ids as already announced (no transcript line for them). */
+export async function seedAnnounced($: EngineInterface, ids: string[]): Promise<void> {
+  await update($, announcedAtom, list => [...new Set([...list, ...ids])].slice(-1000)).catch(() => {})
+}
+
+/** Of `ids`, those not announced yet (suggestions, notices, engine events by sequence); they are marked announced as they are returned. */
 export async function takeUnannounced($: EngineInterface, ids: string[]): Promise<string[]> {
   const seen = new Set(await read($, announcedAtom).catch(() => [] as string[]))
   const fresh = ids.filter(id => !seen.has(id))
-  if (fresh.length) await update($, announcedAtom, list => [...list, ...fresh].slice(-500)).catch(() => {})
+  if (fresh.length) await update($, announcedAtom, list => [...list, ...fresh].slice(-1000)).catch(() => {})
   return fresh
 }
 
@@ -153,6 +183,7 @@ export type PaneState = {
   signin: QuaySignin | null
   disclosure: QuayDisclosure | null
   report: QuayReport | null
+  cache: Record<string, QuayCacheEntry>
 }
 
 /** Every value the pane draws from; read while drawing, so a write redraws it. */
@@ -166,6 +197,7 @@ export async function readPaneState($: EngineInterface): Promise<PaneState> {
     signin: await read($, signinAtom),
     disclosure: await read($, disclosureAtom),
     report: await read($, reportAtom),
+    cache: await read($, cacheAtom),
   }
 }
 

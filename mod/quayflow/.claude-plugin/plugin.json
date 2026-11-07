@@ -1,9 +1,18 @@
 {
   "name": "quayflow",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Quayflow: account usage, suggestions, switching and usage-limit recovery inside Claude Code (/quay), backed by the local Quayflow engine.",
   "author": { "name": "Minh Dao Huu", "url": "https://github.com/minhdaohuu" },
   "homepage": "https://github.com/minhdaohuu/quayflow",
   "license": "MIT",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "statusLineUsage": {
+      "type": "string",
+      "title": "Status line usage figures",
+      "description": "auto: leave the usage % out of Quayflow's status line when your Claude Code status line already shows the 5-hour / 7-day limits; show: always show it; hide: never show it.",
+      "options": ["auto", "show", "hide"],
+      "default": "auto"
+    }
+  }
 }

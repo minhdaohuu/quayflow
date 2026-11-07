@@ -50,11 +50,11 @@ Lanes and sessions
 Maintenance
   canary [--live]              version check (static); --live runs the synthetic adoption job
   policy [--json]              managed login enforcement per environment
-  report                       local support report for review
+  report [--preview]           local support report for review (--preview: print, save nothing)
   migrate-poc [--group G] [--accept-disclosure]
   consent <engine-start|signin-startup|credential-storage|terms|prompt-hook|live-canary> <on|off>
   update [--check] [--version vX.Y.Z] [--skip-attestation]
-  uninstall [--delete-data] [--yes]
+  uninstall [--delete-vault] [--delete-logs] [--delete-data] [--yes]
   version
 ";
 
@@ -545,6 +545,16 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
             }
             Err(e) => fail(e),
         },
+        "report" if a.has("preview") => match connect(dd).and_then(|c| c.post("/v1/report/preview", json!({}))) {
+            Ok(v) => {
+                outln!(
+                    "{}\n\nNothing was saved. Run quayflow report to save it locally for sharing.",
+                    v["text"].as_str().unwrap_or("")
+                );
+                0
+            }
+            Err(e) => fail(e),
+        },
         "report" => {
             match connect(dd).and_then(|c| c.post("/v1/report", json!({}))) {
                 Ok(v) => {
@@ -597,7 +607,9 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
             }
         }
         "uninstall" => {
-            let delete_data = a.has("delete-data");
+            let delete =
+                local::DeleteChoice::from_flags(a.has("delete-vault"), a.has("delete-logs"), a.has("delete-data"));
+            let delete_data = delete.all;
             if delete_data {
                 let busy = local::busy_lanes(dd);
                 if !busy.is_empty() {
@@ -623,12 +635,22 @@ Your default Claude folder and its current login are not touched. Continue?",
                     dd.lanes().display()
                 )
             } else {
-                "Uninstall Quayflow (vault, lanes and logs are kept)?".to_string()
+                format!(
+                    "Uninstall Quayflow from this Windows user?
+  Removed: the Mod, the startup entry, the prompt hook and the engine
+  Left as it is: Claude's live login and its conversation history
+  Protected vault copies: {}
+  Routine logs and reports: {}
+  Settings and lanes: kept
+Continue?",
+                    if delete.vault { "DELETED" } else { "kept" },
+                    if delete.logs { "DELETED" } else { "kept" }
+                )
             };
             if !a.has("yes") && !ask_yes(&question) {
                 return 1;
             }
-            match local::uninstall(dd, delete_data) {
+            match local::uninstall(dd, delete) {
                 Ok(notes) => {
                     for n in notes {
                         outln!("- {n}");
@@ -803,7 +825,8 @@ fn onboard(dd: &DataDir) -> i32 {
 - The Mod (inside Claude) shows status and asks the engine to act. The engine (quayflow.exe,
   one per Windows user, no window) observes usage, decides, and swaps Claude's login in place.
 - Logins are stored locally in a vault protected by Windows (DPAPI, your user account).
-  Quayflow never refreshes tokens and never sends them anywhere except Anthropic's own endpoints.
+  Claude refreshes the live login; Quayflow refreshes only the saved copy of an idle account
+  (so its usage stays readable) and sends tokens nowhere except Anthropic's own endpoints.
 - A switch moves every session that uses the same Claude login, at each one's next request.
 - Suggest mode is the default. Unattended headless jobs (claude -p) only switch in Automatic mode,
   which you enable per group.

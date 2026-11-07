@@ -159,6 +159,11 @@ pub struct EnvView {
     pub automation_paused: bool,
     #[serde(default)]
     pub paused_reason: Option<String>,
+    /// What pauses automation: "user" (/quay pause), "hold" (an unresolved switch; resume
+    /// lifts it), "repair" (inconsistent login files; a switch repairs them), "signed_out",
+    /// "unknown_login", "other_switcher", "incompatible". Only "user" and "hold" end on resume.
+    #[serde(default)]
+    pub paused_by: Option<String>,
     pub notices: Vec<Notice>,
 }
 
@@ -500,6 +505,137 @@ pub struct HandoffResponse {
 pub struct ReportResponse {
     pub path: String,
     pub preview: String,
+}
+
+/// A support report built for review and not saved yet (`POST /v1/report/preview`).
+/// `POST /v1/report/save` with the same `id` saves exactly this text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportPreview {
+    pub id: String,
+    /// The whole sanitized report, as it would be saved.
+    pub text: String,
+}
+
+/// One account in the "Why this account?" explanation of an environment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateView {
+    pub account: AccountId,
+    /// "live" | "eligible" | "excluded" | "unknown" (no fresh observation: never read as 0%).
+    pub status: String,
+    pub reason: String,
+    /// Binding window for the session's model, from the latest observation (any age).
+    #[serde(default)]
+    pub pct: Option<f64>,
+    #[serde(default)]
+    pub window: Option<String>,
+    #[serde(default)]
+    pub age_s: Option<i64>,
+    pub fresh: bool,
+    /// Latest reset among the windows at or above the hard limit (when the account is
+    /// exhausted and every such reset is known).
+    #[serde(default)]
+    pub available_at: Option<i64>,
+    /// At or above the hard limit in a window that applies.
+    pub exhausted: bool,
+    /// Usage endpoint state: why the last poll failed, the backoff and the next scheduled check.
+    #[serde(default)]
+    pub endpoint_note: Option<String>,
+    #[serde(default)]
+    pub backoff_s: Option<i64>,
+    #[serde(default)]
+    pub next_check_at: Option<i64>,
+}
+
+/// `GET /v1/explain`: the inputs of the proactive decision for one environment, as the
+/// engine sees them now. Read-only; it never changes a decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplainView {
+    pub env: EnvId,
+    pub mode: Mode,
+    pub governing_groups: Vec<String>,
+    pub threshold: f64,
+    pub margin: f64,
+    pub cooldown_s: u64,
+    /// Seconds left of the proactive cooldown after the last switch (0 when elapsed).
+    pub cooldown_left_s: i64,
+    pub hard_limit_pct: f64,
+    #[serde(default)]
+    pub live: Option<AccountId>,
+    /// The Preferred (home) account of every governing group, when they agree.
+    #[serde(default)]
+    pub home: Option<AccountId>,
+    /// "none" | "home" (live is home) | "ready" | "deferred_pin" | "deferred_cooldown" | "away".
+    pub home_state: String,
+    pub home_detail: String,
+    pub pinned: bool,
+    /// Every eligible account and the live one are at or above the hard limit.
+    pub all_exhausted: bool,
+    /// The account recovery would pick when all are exhausted (soonest available).
+    #[serde(default)]
+    pub soonest: Option<AccountId>,
+    pub decision: String,
+    pub candidates: Vec<CandidateView>,
+}
+
+/// `GET /v1/identity`: the full identity of a login, for local review only (never stored
+/// by the engine, never logged, never in a report).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityView {
+    pub account: AccountId,
+    pub kind: AccountKind,
+    #[serde(default)]
+    pub subscription: Option<String>,
+    /// E-mail address or display name from the local login record.
+    #[serde(default)]
+    pub display: Option<String>,
+    #[serde(default)]
+    pub org_name: Option<String>,
+}
+
+/// `GET /v1/handoff/check`: what a full-history move would do, named before it is committed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffCheck {
+    pub to_env: EnvId,
+    /// The destination's registered login (none: it cannot receive a session yet).
+    #[serde(default)]
+    pub to_login: Option<AccountId>,
+    /// The session is running (same-terminal replacement needs a running session).
+    pub running: bool,
+    /// Name of the shell the session runs in, when it can be told.
+    #[serde(default)]
+    pub shell: Option<String>,
+    /// The shell is PowerShell 7 or Windows PowerShell 5.1.
+    pub shell_supported: bool,
+    /// The prompt hook was installed (`quayflow shell install`).
+    pub prompt_hook: bool,
+    /// Why the move cannot be made now, if it cannot.
+    #[serde(default)]
+    pub blocked: Option<String>,
+}
+
+/// `GET /v1/operations`: recent transitions with their sanitized journal trail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationView {
+    pub id: String,
+    pub ts: i64,
+    #[serde(default)]
+    pub env: Option<String>,
+    #[serde(default)]
+    pub how: Option<String>,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    /// Last recorded stage ("requested", "applying", "written", "ended: failed", ...).
+    pub stage: String,
+    /// Journal records of this operation (opaque ids and sanitized reasons only).
+    pub records: Vec<serde_json::Value>,
 }
 
 #[cfg(test)]

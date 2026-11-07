@@ -99,7 +99,7 @@ impl Engine {
                     if blocker.is_some() {
                         r.code = "conflict";
                         r.message.push_str(
-                            ". Move the blocking session into a lane (Replace Session) so the others can switch.",
+                            ". Move the blocking session into a lane with full history (/quay > Session actions, from that session) so the others can switch.",
                         );
                     }
                     r.blocked_by = blocker.map(Box::new);
@@ -112,7 +112,7 @@ impl Engine {
                 return Err(Refusal::new(
                     "refused",
                     format!(
-                        "in-place switching is disabled here: {}. Use Replace Session into a lane instead.",
+                        "in-place switching is disabled here: {}. Continue in a lane with full history instead (/quay > Session actions).",
                         st.in_place.reason
                     ),
                 ));
@@ -310,6 +310,29 @@ impl Engine {
             self.set_state(&mut inner, env, tid, TransitionState::Applying, None);
         }
         let _cred = self.cred_lock.lock().unwrap_or_else(|e| e.into_inner());
+        // Read the saved login again under the credential lock: an idle-account refresh may
+        // have rotated its tokens since it was first read, and only the newest copy is valid.
+        let target = match self.vault.load(to.as_str()) {
+            Ok(l) if l.account_hash().as_deref() == Some(to.as_str()) => l,
+            Ok(_) => {
+                drop(_cred);
+                return self.end(
+                    env,
+                    tid,
+                    TransitionState::Failed,
+                    "protected copy holds a different identity".into(),
+                );
+            }
+            Err(e) => {
+                drop(_cred);
+                return self.end(
+                    env,
+                    tid,
+                    TransitionState::Failed,
+                    format!("protected copy unreadable: {e}"),
+                );
+            }
+        };
         let me = self.clone();
         let (env_id, tid_s) = (env.clone(), tid.to_string());
         // Mixed files must be rewritten even when the account record already names the
@@ -621,7 +644,7 @@ impl Engine {
                 self.save_compat(&rec);
             }
             let text = format!(
-                "This session's request did not use {} after the switch. In-place switching is disabled for this Claude version; use Replace Session to continue on the intended account.",
+                "This session's request did not use {} after the switch. In-place switching is disabled for this Claude version; review the full-history fallback in /quay (Session actions) to continue on the intended account.",
                 inner.config.label(&dest)
             );
             self.emit(&mut inner, "notice", Some(&env), &text);

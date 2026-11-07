@@ -26,7 +26,16 @@ describe('handshake and engine start', () => {
     expect(r.stopReason).toBeNull()
     expect(requests).toBe(1)
     expect(w.routes()).toEqual(['/v1/hello'])
-    expect(w.bodies('/v1/hello')[0]).toEqual({ protocol: 1, modVersion: '0.1.1', sessionId: 'S1', headless: true, claudeVersion: '2.1.316' })
+    expect(w.bodies('/v1/hello')[0]).toEqual({ protocol: 1, modVersion: '0.1.2', sessionId: 'S1', headless: true, claudeVersion: '2.1.316' })
+  })
+
+  test('nothing listening: the engine is started at once, without retrying the handshake for seconds', async ($, on) => {
+    const w = world(on, { down: true, staleConn: true, start: 'no_consent' })
+    await start($, w, false)
+    await w.clock.settle()
+    expect(w.runs).toEqual([[ENGINE_EXE, 'start', '--if-consented']])
+    // One refused hello before the start (each refusal takes about 2 s on Windows), one after.
+    expect(w.refused()).toBe(2)
   })
 
   test('no engine: start runs once with --if-consented; no_consent is respected', async ($, on) => {
@@ -261,12 +270,23 @@ describe('headless runs', () => {
 })
 
 describe('interactive sessions', () => {
+  test('a resume in this process: the new session says hello under its id and is not left "connecting"', async ($, on) => {
+    const w = world(on)
+    await start($, w, true)
+    await w.clock.settle()
+    w.newSession('S2')
+    await $.session.end({ reason: 'resume' } as never)
+    await w.clock.advance(1_000)
+    await w.clock.settle()
+    expect(w.bodies('/v1/hello').map(b => b.sessionId)).toEqual(['S1', 'S2'])
+    expect(await quay($, 'status')).not.toContain('Quayflow is off')
+  })
+
   test('status line, and a suggestion announced once across polls', async ($, on) => {
     const w = world(on)
     await start($, w, true)
     const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
-    expect(status).toMatch(/^Quayflow · suggest · work 91% 5 h/)
-    expect(status).toContain('suggests personal · /quay accept')
+    expect(status).toBe('Quayflow · work · Suggest · 5h 91% · 7d 40% | personal suggested')
     await w.clock.advance(30_000)
     await w.clock.advance(30_000)
     expect(w.ui.filter(u => u.kind === 'ui.log' && /suggests "personal"/.test(u.text ?? ''))).toHaveLength(1)
@@ -285,7 +305,7 @@ describe('interactive sessions', () => {
     await w.clock.advance(31_000)
     await w.clock.settle()
     const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
-    expect(status).toMatch(/^Quayflow · suggest/)
+    expect(status).toMatch(/^Quayflow · work · Suggest/)
     // Only a handshake: the Mod never launched quayflow.exe for a sticky reason.
     expect(w.runs.length).toBe(starts)
   })
@@ -308,14 +328,14 @@ describe('interactive sessions', () => {
     expect(hellos).toBe(2)
     expect(w.runs).toEqual([])
     const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
-    expect(status).toMatch(/^Quayflow · suggest/)
+    expect(status).toMatch(/^Quayflow · work · Suggest/)
   })
 
   test('after a reconnect the status line is repainted "on"', async ($, on) => {
     const w = world(on)
     await start($, w, true)
     const last = () => w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
-    expect(last()).toMatch(/^Quayflow · suggest/)
+    expect(last()).toMatch(/^Quayflow · work · Suggest/)
     w.down()
     await w.clock.advance(10_000)
     await w.clock.settle()
@@ -323,7 +343,7 @@ describe('interactive sessions', () => {
     w.up()
     await w.clock.advance(60_000)
     await w.clock.settle()
-    expect(last()).toMatch(/^Quayflow · suggest/)
+    expect(last()).toMatch(/^Quayflow · work · Suggest/)
   })
 
   for (const [what, events] of [
@@ -342,7 +362,7 @@ describe('interactive sessions', () => {
       // The engine answered: the link stays on, and no handshake was repeated.
       expect(w.routes().filter(r => r === '/v1/hello')).toHaveLength(1)
       const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
-      expect(status).toMatch(/^Quayflow · suggest/)
+      expect(status).toMatch(/^Quayflow · work · Suggest/)
     })
   }
 
@@ -399,7 +419,7 @@ describe('interactive sessions', () => {
     helloOk = true
     expect(await quay($, 'status')).not.toContain('Quayflow is off')
     const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
-    expect(status).toMatch(/^Quayflow · suggest/)
+    expect(status).toMatch(/^Quayflow · work · Suggest/)
   })
 
   test('a failed start keeps the CLI\'s own words in the link message', async ($, on) => {

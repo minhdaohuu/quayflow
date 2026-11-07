@@ -594,6 +594,7 @@ impl Engine {
         label: Option<&str>,
         group: Option<&str>,
         accept: bool,
+        as_new: bool,
     ) -> Result<String, ApiErr> {
         let mut inner = self.lock();
         let s = inner
@@ -609,7 +610,10 @@ impl Engine {
         };
         let id_acc = identity.account.clone();
         let msg;
-        if let Some(expected) = &s.reauth {
+        // A reauthentication that returned a different identity never replaces the account
+        // being reauthenticated; with s_new it is registered as its own account instead.
+        let reauth = s.reauth.as_ref().filter(|_| !(as_new && identity.unexpected));
+        if let Some(expected) = reauth {
             if identity.unexpected {
                 return Err(ApiErr::refused(
                     "this sign-in is a different identity than the account being reauthenticated; nothing was replaced",

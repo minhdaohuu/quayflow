@@ -6,7 +6,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { Mode, StateView } from '../types'
 import { MOD_VERSION, Q, errorText, setView } from './context'
-import { establish, fetchState, hasCode } from './engine'
+import { awaitLink, establish, fetchState, hasCode } from './engine'
 import {
   account,
   adoptionWords,
@@ -25,8 +25,9 @@ import {
   when,
 } from './format'
 import { liveAccountHash } from './identity'
-import { actCanary, actMigratePoc, actPoll, actAccept, actAssign, actEngine, actGroupCreate, actGroupDelete, actHandoff, actIgnoreUnknown, actLaneCheck, actLaneCreate, actLaneDelete, actLanes, actMembers, actPreferred, actRank, actRegister, actReport, actSetDefault, actSetMode, actSwitchTo, actTuning, actUnassign, actUnpin, handoffOutcome, switchOutcome } from './actions'
-import { paintStatus, refresh } from './watcher'
+import { DORG_ON_TEXT } from './words'
+import { actReportPreview, actCanary, actMigratePoc, actPoll, actAccept, actAssign, actEngine, actGroupCreate, actGroupDelete, actHandoff, actIgnoreUnknown, actLaneCheck, actLaneCreate, actLaneDelete, actLanes, actMembers, actPreferred, actRank, actRegister, actReport, actSetDefault, actSetMode, actSwitchTo, actTuning, actUnassign, actUnpin, handoffOutcome, switchOutcome } from './actions'
+import { ensureWatcher, paintStatus, refresh } from './watcher'
 
 export const HELP = [
   '/quay                         open the Quayflow pane (interactive) or print status',
@@ -45,7 +46,7 @@ export const HELP = [
   '/quay lanes [create|delete|check <name>]',
   '/quay replace <lane>          move this session into a lane (same terminal, PowerShell hook)',
   '/quay open <lane>             open this session in a lane in a new window',
-  '/quay report                  build a local support report for review',
+  '/quay report [--save]         preview the local support report; --save saves it after review',
   '/quay whoami                  which account this session uses now',
   '/quay canary                  live version canary status',
   '/quay migrate-poc [group]     import the PoC vault (once)',
@@ -90,9 +91,7 @@ export function statusReport(s: StateView, now: number): string {
   const warnings = persistentWarnings(s, env)
   if (warnings.length) lines.push(`Warnings: ${warnings.join(' · ')}`)
   for (const n of env.notices) lines.push(`Notice (${n.level}): ${n.text}`)
-  if (s.dOrg.enabled) {
-    lines.push('Managed-login exception is ON: Quayflow may switch to accounts your organization\'s login policy would refuse. Turn it off in /quay > Settings.')
-  }
+  if (s.dOrg.enabled) lines.push(`${DORG_ON_TEXT} Turn it off in /quay > Settings.`)
   void now
   return lines.join('\n')
 }
@@ -132,6 +131,8 @@ async function needState($: EngineInterface): Promise<StateView> {
 }
 
 /** Runs one `/quay` subcommand and returns its text. Pane opening is handled by the caller. */
+const KNOWN_FLAGS = ['--approve', '--accept-disclosure', '--idle-wait', '--save']
+
 export async function runCommand($: EngineInterface, argsText: string): Promise<string> {
   const argv = parseArgs(argsText)
   const flags = new Set(argv.filter(a => a.startsWith('--')))
@@ -140,6 +141,12 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
   const rest = words.slice(1)
 
   if (verb === 'help' || verb === '?') return HELP
+  // A mistyped option is refused, never ignored: "--aprove" must not read as no approval.
+  const unknown = [...flags].filter(f => !KNOWN_FLAGS.includes(f))
+  if (unknown.length) {
+    const near = (f: string) => KNOWN_FLAGS.find(k => k[2] === f[2] && Math.abs(k.length - f.length) <= 2)
+    return unknown.map(f => `Quayflow: unknown option ${f}${near(f) ? ` (did you mean ${near(f)}?)` : ''}.`).join('\n')
+  }
 
   if (verb === 'start') {
     await establish($, { allowStart: true, explicit: true })
@@ -147,6 +154,9 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
     return Q.link.on ? `Quayflow engine is running (${Q.link.engineVersion ?? '?'}).` : `Quayflow: ${linkOffText(Q.link)}.`
   }
 
+  // A handshake under way (or one this module instance never started) is waited for
+  // before the session is reported as off.
+  if (!Q.link.on) await reconnect($)
   if (!Q.link.on) {
     await paintStatus($)
     return `Quayflow is off: ${linkOffText(Q.link)}${Q.link.message && Q.link.reason !== 'start_failed' ? ` (${Q.link.message})` : ''}. Claude works as usual.`
@@ -202,11 +212,11 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
       case 'pause':
       case 'resume': {
         const r = await actEngine($, verb)
-        return r.ok
-          ? verb === 'pause'
-            ? 'Quayflow: automatic switching and recovery are paused. Manual switches still work. /quay resume to resume.'
-            : 'Quayflow: automation resumed.'
-          : `Quayflow: ${r.message ?? 'refused'}.`
+        if (!r.ok) return `Quayflow: ${r.message ?? 'refused'}.`
+        if (verb === 'pause') return 'Quayflow: automatic switching and recovery are paused. Manual switches still work. /quay resume to resume.'
+        // Resume ends a pause by you or a hold; another cause keeps automation paused.
+        const after = Q.state ? myEnv(Q.state) : undefined
+        return after?.automationPaused ? `Quayflow: still paused: ${after.pausedReason ?? 'another cause'}. /quay shows its remedy.` : 'Quayflow: automation resumed.'
       }
       case 'register': {
         if (!rest.length && !Q.headless) return 'pane:register'
@@ -242,12 +252,22 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
       case 'open': {
         const lane = rest[0]
         if (!lane) return `usage: /quay ${verb} <lane>`
+        const what =
+          verb === 'open'
+            ? `Open this session in lane "${lane}" with its full history, in a new window? It continues there once this session ends; keep only one of the two working on the task.`
+            : `Replace this session with one in lane "${lane}" with its full history? After /exit, the PowerShell prompt hook resumes it in this terminal; other shells get the exact command.`
+        if (!Q.headless && !(await confirm($, what, verb === 'open' ? 'Open with full history' : 'Replace with full history'))) return 'Not moved: nothing was prepared. /quay > Session actions shows the full review.'
         const r = await actHandoff($, verb, lane)
         return handoffOutcome(verb, lane, r)
       }
       case 'report': {
-        const r = await actReport($)
-        return `Support report saved locally for your review (nothing is uploaded): ${r.path}\n\n${r.preview}`
+        // Saved only when asked after a review: the preview itself writes nothing.
+        if (flags.has('--save')) {
+          const r = await actReport($)
+          return `Support report saved locally (nothing is uploaded): ${r.path}\n\n${r.preview}`
+        }
+        const p = await actReportPreview($)
+        return `Support report preview (not saved; nothing is uploaded). Review it, then save with /quay report --save or in /quay > Activity:\n\n${p.text}`
       }
       case 'whoami': {
         const actual = await liveAccountHash($).catch(() => undefined)
@@ -409,9 +429,17 @@ async function laneCommand($: EngineInterface, rest: string[]): Promise<string> 
 }
 
 /** `/quay` with no arguments: interactive opens the pane, headless prints status. */
+/** Brings a "connecting" link up (never starts the engine), then draws and follows it. */
+export async function reconnect($: EngineInterface): Promise<void> {
+  if (!(await awaitLink($).catch(() => false))) return
+  await refresh($).catch(() => undefined)
+  ensureWatcher($)
+}
+
 export async function openPane($: EngineInterface, tab = 'overview', sub?: string): Promise<boolean> {
   if (Q.headless) return false
   await setView($, sub ? { tab, sub } : { tab })
+  if (!Q.link.on) void reconnect($)
   const r = await $.ui.open({ id: 'quay', title: 'Quayflow', focus: true }).catch(() => ({ isPlaced: false }))
   return r.isPlaced
 }

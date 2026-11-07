@@ -3,6 +3,7 @@
 pub mod accounts;
 pub mod core;
 pub mod http;
+pub mod inspect;
 pub mod journal;
 pub mod lanes_ops;
 pub mod paths;

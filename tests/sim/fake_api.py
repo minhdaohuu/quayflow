@@ -2,12 +2,14 @@
 
 Serves the two endpoints the Quayflow engine calls, keyed by the bearer token:
 
-    GET /api/oauth/usage     five_hour, seven_day and per-model windows
-    GET /api/oauth/profile   account and organization identity
+    GET  /api/oauth/usage    five_hour, seven_day and per-model windows
+    GET  /api/oauth/profile  account and organization identity
+    POST /v1/oauth/token     refresh-token grant, answered from the scripted refresh table
 
 Tests script it over loopback:
 
     POST /__sim/accounts     {"<access token>": {fields...}}   merge per-token state
+    POST /__sim/refresh      {"<refresh token>": {"access": ..., "refresh": ..., "status": 200}}
     GET  /__sim/log          request counts per token and path
     POST /__sim/reset-log
 
@@ -33,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 STATE: dict = {}
+REFRESH: dict = {}
 LOG: dict = {}
 LOCK = threading.Lock()
 
@@ -114,6 +117,29 @@ class Handler(BaseHTTPRequestHandler):
                 for tok, fields in body.items():
                     STATE.setdefault(tok, {}).update(fields)
             return self.send_json(200, {"ok": True})
+        if self.path == "/__sim/refresh":
+            with LOCK:
+                for rt, fields in body.items():
+                    REFRESH.setdefault(rt, {}).update(fields)
+            return self.send_json(200, {"ok": True})
+        if self.path == "/v1/oauth/token":
+            rt = body.get("refresh_token")
+            with LOCK:
+                LOG.setdefault(rt or "-", {}).setdefault(self.path, 0)
+                LOG[rt or "-"][self.path] += 1
+                entry = dict(REFRESH.get(rt) or {})
+                ok_shape = body.get("grant_type") == "refresh_token" and bool(body.get("client_id"))
+            if not entry or not ok_shape or entry.get("used"):
+                return self.send_json(400, {"error": "invalid_grant", "error_description": "Invalid refresh token"})
+            code = int(entry.get("status", 200))
+            if code != 200:
+                return self.send_json(code, {"error": "server_error"})
+            with LOCK:
+                # A rotated refresh token works once, as the real service does.
+                if entry.get("refresh", rt) != rt:
+                    REFRESH[rt]["used"] = True
+            return self.send_json(200, {"access_token": entry["access"], "refresh_token": entry.get("refresh", rt),
+                                        "expires_in": int(entry.get("expires_in", 28800)), "scope": body.get("scope", "")})
         if self.path == "/__sim/reset-log":
             with LOCK:
                 LOG.clear()

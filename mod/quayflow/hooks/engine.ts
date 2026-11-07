@@ -135,7 +135,8 @@ async function hello($: EngineInterface, timeoutMs: number): Promise<HelloRespon
   )
 }
 
-type HelloOutcome = { kind: 'on'; version: string } | { kind: 'incompatible'; message: string; version?: string } | { kind: 'unreachable'; message: string }
+/** `listening`: something answered or the wait ran out, so the engine may only be busy or starting. */
+type HelloOutcome = { kind: 'on'; version: string } | { kind: 'incompatible'; message: string; version?: string } | { kind: 'unreachable'; message: string; listening?: boolean }
 
 async function tryHello($: EngineInterface, timeoutMs = 5_000): Promise<HelloOutcome> {
   try {
@@ -150,7 +151,10 @@ async function tryHello($: EngineInterface, timeoutMs = 5_000): Promise<HelloOut
     return { kind: 'on', version: h.engineVersion }
   } catch (err) {
     if (err instanceof EngineError && err.code === 'incompatible') return { kind: 'incompatible', message: err.message }
-    return { kind: 'unreachable', message: errorText(err) }
+    // An answer (an error status) or a timeout: an engine may be there, busy or starting.
+    // A refused connection or no engine.json: nothing listens, and waiting will not help.
+    const listening = err instanceof EngineError && (err.code === 'timeout' || err.status > 0)
+    return { kind: 'unreachable', message: errorText(err), listening }
   }
 }
 
@@ -200,6 +204,15 @@ function offReason(state: StartState | 'not_installed'): QuayOffReason {
  * starts without `--if-consented` and retries after an earlier attempt.
  */
 export async function establish($: EngineInterface, options: { allowStart: boolean; explicit?: boolean } = { allowStart: true }): Promise<void> {
+  Q.linkAttempts += 1
+  try {
+    await attempt($, options)
+  } finally {
+    Q.linkAttempts -= 1
+  }
+}
+
+async function attempt($: EngineInterface, options: { allowStart: boolean; explicit?: boolean }): Promise<void> {
   const ticket = ++Q.linkTicket
   Q.lastLinkTry = Date.now()
   // The session's first handshake runs while Claude Code (and maybe the engine) is still
@@ -248,7 +261,9 @@ async function firstHello($: EngineInterface): Promise<HelloOutcome> {
   for (const attempt of FIRST_HELLO) {
     if (attempt.pauseMs) await pause($, attempt.pauseMs)
     outcome = await tryHello($, attempt.timeoutMs)
-    if (outcome.kind !== 'unreachable') return outcome
+    // Nothing listening (after a restart of the computer, say): start the engine now rather
+    // than retry for seconds; `start` finds an engine that is starting meanwhile.
+    if (outcome.kind !== 'unreachable' || !outcome.listening) return outcome
   }
   return outcome
 }
@@ -281,10 +296,34 @@ export async function linkReady($: EngineInterface, waitMs: number): Promise<boo
     await withTimeout($, Q.ready, waitMs, 'handshake').catch(() => {})
   }
   if (Q.link.on) return true
+  if (stuckConnecting()) {
+    await withTimeout($, establish($, { allowStart: false }), Math.max(waitMs, 3_000), 'reconnect').catch(() => {})
+    return Q.link.on
+  }
   const retryable = Q.link.reason === 'unreachable' || Q.link.reason === 'start_failed'
   if (retryable && Date.now() - Q.lastLinkTry > 15_000) {
     await withTimeout($, establish($, { allowStart: false }), Math.max(waitMs, 3_000), 'reconnect').catch(() => {})
   }
+  return Q.link.on
+}
+
+/**
+ * "Connecting" with no attempt running: this module instance was loaded without its
+ * session.start (a reload of some modules only), so nothing would ever connect it.
+ */
+export function stuckConnecting(): boolean {
+  return !Q.link.on && Q.link.reason === 'connecting' && Q.linkAttempts === 0
+}
+
+/**
+ * Waits for a handshake that is under way, or starts one when none is (never starts
+ * the engine): what a command or the pane does before it reports Quayflow as off.
+ */
+export async function awaitLink($: EngineInterface, waitMs = 8_000): Promise<boolean> {
+  if (Q.link.on) return true
+  if (Q.link.reason !== 'connecting') return false
+  if (stuckConnecting()) await withTimeout($, establish($, { allowStart: false }), waitMs, 'connect').catch(() => {})
+  else await withTimeout($, Q.ready, waitMs, 'handshake').catch(() => {})
   return Q.link.on
 }
 

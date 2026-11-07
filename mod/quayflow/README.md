@@ -41,7 +41,7 @@ What it does:
 
 | Path | Content |
 |---|---|
-| `.claude-plugin/plugin.json` | Manifest (`quayflow` 0.1.1), names the type contract |
+| `.claude-plugin/plugin.json` | Manifest (`quayflow` 0.1.2), names the type contract |
 | `hooks/hooks.json` | Names the hooks module `./register.tsx` |
 | `hooks/register.tsx` | Entry: `session.start`, `turn.step`, `command.run` (`/quay`), `ui.render` (pane `quay`) |
 | `hooks/context.ts` | Session context, `$.state` atoms (all reads and writes), headless UI gates |

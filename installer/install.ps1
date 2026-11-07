@@ -337,7 +337,8 @@ How your logins are handled:
   - Nothing is stored by this installer. When you register an account later
     (in Claude: /quay), Quayflow keeps a reusable copy of that login in a vault
     protected by Windows DPAPI for your user, on this machine only.
-  - Quayflow never refreshes tokens; Claude does, and Quayflow saves the result.
+  - Claude refreshes the live login and Quayflow saves the result. Quayflow
+    refreshes only the saved copy of an idle account, so its usage stays readable.
     Logins never go into logs, reports or the Mod. There is no telemetry.
 
 What a switch does:

@@ -139,6 +139,26 @@ impl EnvState {
         }
         None
     }
+
+    /// The cause behind [`EnvState::pause_reason`], as a machine word (same order). Only
+    /// "user" and "hold" end when automation is resumed.
+    pub fn pause_kind(&self, cfg: &Config) -> Option<&'static str> {
+        if cfg.automation_paused {
+            Some("user")
+        } else if self.hold.is_some() {
+            Some(if self.mixed.is_some() { "repair" } else { "hold" })
+        } else if self.signed_out {
+            Some("signed_out")
+        } else if self.unknown.is_some() {
+            Some("unknown_login")
+        } else if self.other_switcher {
+            Some("other_switcher")
+        } else if !self.in_place.allowed {
+            Some("incompatible")
+        } else {
+            None
+        }
+    }
 }
 
 /// Whose login an environment's files hold (see [`Engine::live_owner`]).
@@ -196,6 +216,8 @@ pub struct Inner {
     pub activity: VecDeque<ActivityItem>,
     /// Last model a session reported.
     pub session_model: HashMap<String, String>,
+    /// A support report built for review and not saved yet: (id, text).
+    pub pending_report: Option<(String, String)>,
 }
 
 pub struct Events {
@@ -307,6 +329,7 @@ impl Engine {
                 request_cache: VecDeque::new(),
                 activity: VecDeque::new(),
                 session_model: HashMap::new(),
+                pending_report: None,
             }),
             cred_lock: Mutex::new(()),
             events: Mutex::new(Events {
@@ -942,7 +965,7 @@ impl Engine {
                 .accounts
                 .iter()
                 .filter(|a| a.health != Health::RefreshRejected)
-                .filter(|a| force || inner.schedule.due(&a.id, now))
+                .filter(|a| (force && inner.schedule.may_force(&a.id, now)) || inner.schedule.due(&a.id, now))
                 .map(|a| {
                     let live_env = inner
                         .envs
@@ -970,13 +993,20 @@ impl Engine {
                 }
                 l
             });
-            let Some(login) = login else {
+            let Some(mut login) = login else {
                 let mut inner = self.lock();
                 if let Some(a) = inner.config.account_mut(&id) {
                     a.health = Health::VaultError;
                 }
                 continue;
             };
+            // An idle account's expired access token is refreshed in its saved copy, so its
+            // usage stays readable; a live one is Claude's to refresh.
+            if live_env.is_none() && needs_refresh(&login, now_ms()) {
+                if let Some(fresh) = self.refresh_idle(&id) {
+                    login = fresh;
+                }
+            }
             let token = login.access_token().unwrap_or_default().to_string();
             let r = qf_provider::fetch_usage(&id, &token, login.expires_at(), now_ms());
             let mut inner = self.lock();
@@ -1006,8 +1036,16 @@ impl Engine {
                     inner
                         .schedule
                         .on_error(&id, now_ms(), &e, t.live_poll_s, t.backoff_max_s);
+                    // A single 429 is the endpoint pacing a shared budget (handled by the
+                    // slower pace); only 429s in a row, or other errors, are warnings.
+                    let limited = matches!(e, ProviderError::Status { code: 429, .. });
+                    let level = if limited && !inner.schedule.repeated_limit(&id) {
+                        "info"
+                    } else {
+                        "warn"
+                    };
                     self.log.log(
-                        "warn",
+                        level,
                         "usage.error",
                         json!({"account": id, "error": e.to_string()}),
                         &[],
@@ -1019,6 +1057,99 @@ impl Engine {
         // Status lines and panes redraw from the state only when an event arrives.
         if observed {
             self.signal("usage");
+        }
+    }
+
+    /// Refreshes the saved login of an idle account whose access token has expired.
+    ///
+    /// Safe only when the vault holds the only copy of that refresh token (the service may
+    /// rotate it): under `cred_lock`, which every switch holds while it writes a login, the
+    /// files of every environment are read and the refresh is skipped when any of them holds
+    /// the same refresh token, or cannot be read. The new login is stored before it is used;
+    /// a refused refresh token marks the account for a new sign-in. Returns the stored login.
+    pub fn refresh_idle(&self, id: &AccountId) -> Option<Login> {
+        let _cred = self.cred_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let login = self.vault.load(id.as_str()).ok()?;
+        if !needs_refresh(&login, now_ms()) {
+            // Stored meanwhile (a capture of Claude's own refresh, or another refresh).
+            return Some(login);
+        }
+        let rt = login.refresh_token().filter(|r| !r.is_empty())?.to_string();
+        let envs: Vec<Env> = self.lock().envs.values().map(|s| s.env.clone()).collect();
+        for env in &envs {
+            match qf_adapter::read_login(env) {
+                Ok(Some(l)) if l.refresh_token() == Some(rt.as_str()) => return None,
+                Ok(_) => {}
+                // Unreadable (mid-write, say): this copy could be live there. Not now.
+                Err(_) => return None,
+            }
+        }
+        let result = qf_provider::refresh_access(&rt, &login.scopes(), now_ms());
+        let mut inner = self.lock();
+        match result {
+            Ok(r) => {
+                let fresh = login.with_tokens(&r.access_token, &r.refresh_token, r.expires_at, r.scopes.as_deref());
+                let stored = self
+                    .vault
+                    .store(id.as_str(), &fresh)
+                    .or_else(|_| self.vault.store(id.as_str(), &fresh));
+                match stored {
+                    Ok(()) => {
+                        self.record(&inner, "login.refreshed", json!({"account": id}), true);
+                        if let Some(a) = inner.config.account_mut(id) {
+                            if a.health == Health::StaleAccess {
+                                a.health = Health::Ok;
+                            }
+                        }
+                        Some(fresh)
+                    }
+                    Err(e) => {
+                        // The service may have retired the old refresh token: this login
+                        // needs a new sign-in.
+                        if let Some(a) = inner.config.account_mut(id) {
+                            a.health = Health::VaultError;
+                        }
+                        self.log.log(
+                            "error",
+                            "vault.refresh_store_failed",
+                            json!({"account": id, "error": e.to_string()}),
+                            &[],
+                        );
+                        let text = format!(
+                            "{}'s refreshed login could not be saved ({e}). Sign in to it again (/quay, Accounts, Reauthenticate).",
+                            inner.config.label(id)
+                        );
+                        self.emit(&mut inner, "notice", None, &text);
+                        None
+                    }
+                }
+            }
+            Err(qf_provider::RefreshError::Rejected(m)) => {
+                if let Some(a) = inner.config.account_mut(id) {
+                    a.health = Health::RefreshRejected;
+                }
+                self.record(
+                    &inner,
+                    "login.refresh_rejected",
+                    json!({"account": id, "reason": m}),
+                    true,
+                );
+                let text = format!(
+                    "{}'s saved login was refused by the sign-in service. Sign in to it again (/quay, Accounts, Reauthenticate).",
+                    inner.config.label(id)
+                );
+                self.emit(&mut inner, "notice", None, &text);
+                None
+            }
+            Err(qf_provider::RefreshError::Failed(e)) => {
+                self.log.log(
+                    "warn",
+                    "token.refresh_failed",
+                    json!({"account": id, "error": e.to_string()}),
+                    &[],
+                );
+                None
+            }
         }
     }
 
@@ -1278,6 +1409,11 @@ fn prune_session_state(inner: &mut Inner) {
     inner.session_model.retain(|sid, _| alive.contains(sid));
     inner.progressed.retain(|sid, _| alive.contains(sid));
     inner.verified.retain(|sid, _| alive.contains(sid));
+}
+
+/// A saved login whose access token has expired or expires within five minutes.
+pub fn needs_refresh(login: &Login, now: i64) -> bool {
+    login.expires_at().is_some_and(|e| e < now + 5 * 60_000) && login.refresh_token().is_some_and(|r| !r.is_empty())
 }
 
 fn clear_vault_error(inner: &mut Inner, id: &AccountId) {

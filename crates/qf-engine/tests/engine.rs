@@ -1359,3 +1359,216 @@ fn usage_signal_wakes_watchers_without_an_activity_entry() {
         "nothing is added to the activity feed"
     );
 }
+
+fn api(e: &Shared, method: &str, path: &str, query: &str, body: serde_json::Value) -> serde_json::Value {
+    qf_engine::http::route(e, method, path, query, &body).unwrap()
+}
+
+#[test]
+fn explain_names_candidates_threshold_and_home_state() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_obs(&e, "uuid-org", 91.0, Some(3_600_000));
+    set_obs(&e, "uuid-personal", 20.0, None);
+    let v = api(&e, "GET", "/v1/explain", "", json!({}));
+    assert_eq!(v["threshold"], 85.0);
+    assert_eq!(v["margin"], 10.0);
+    assert_eq!(v["cooldownS"], 300);
+    let status = |v: &serde_json::Value, uuid: &str| {
+        v["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["account"] == id(uuid).0)
+            .map(|c| c["status"].as_str().unwrap().to_string())
+            .unwrap()
+    };
+    assert_eq!(status(&v, "uuid-org"), "live");
+    assert_eq!(status(&v, "uuid-personal"), "eligible");
+    assert_eq!(v["homeState"], "none");
+    // A stale observation is unknown, never 0%.
+    {
+        let mut inner = e.lock();
+        for o in inner
+            .observations
+            .iter_mut()
+            .filter(|o| o.account == id("uuid-personal"))
+        {
+            o.ts -= 10 * 3_600_000;
+        }
+    }
+    let v = api(&e, "GET", "/v1/explain", "", json!({}));
+    assert_eq!(status(&v, "uuid-personal"), "unknown");
+    // Home: the org account is Preferred; after a manual switch away it is pinned out of a return.
+    e.group_op("preferred", &json!({"group": "Default", "account": "org"}))
+        .unwrap();
+    assert_eq!(api(&e, "GET", "/v1/explain", "", json!({}))["homeState"], "home");
+    set_obs(&e, "uuid-personal", 20.0, None);
+    e.start_switch(
+        &EnvId::default_env(),
+        &id("uuid-personal"),
+        SwitchHow::Manual,
+        "test",
+        false,
+        true,
+    )
+    .unwrap();
+    set_obs(&e, "uuid-org", 10.0, None);
+    set_obs(&e, "uuid-personal", 30.0, None);
+    assert_eq!(
+        api(&e, "GET", "/v1/explain", "", json!({}))["homeState"],
+        "deferred_pin"
+    );
+    e.unpin(&EnvId::default_env());
+    assert_eq!(
+        api(&e, "GET", "/v1/explain", "", json!({}))["homeState"],
+        "deferred_cooldown"
+    );
+    api(&e, "POST", "/v1/tuning", "", json!({"cooldownS": 0}));
+    let v = api(&e, "GET", "/v1/explain", "", json!({}));
+    assert_eq!(v["homeState"], "ready");
+    assert_eq!(v["cooldownS"], 0);
+    // The explanation changes nothing.
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+}
+
+#[test]
+fn explain_reports_all_exhausted_and_the_soonest_account() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_obs(&e, "uuid-org", 100.0, Some(7_200_000));
+    set_obs(&e, "uuid-personal", 100.0, Some(1_800_000));
+    let v = api(&e, "GET", "/v1/explain", "", json!({}));
+    assert_eq!(v["allExhausted"], true);
+    assert_eq!(v["soonest"], id("uuid-personal").0);
+    let c = v["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["account"] == id("uuid-personal").0)
+        .unwrap()
+        .clone();
+    assert!(c["availableAt"].as_i64().unwrap() > time::now_ms());
+    assert_eq!(c["exhausted"], true);
+}
+
+#[test]
+fn identity_pin_tuning_and_pause_cause() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let mut cfg: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&w.env.claude_json).unwrap()).unwrap();
+    cfg["oauthAccount"]["emailAddress"] = json!("avery@example.test");
+    cfg["oauthAccount"]["organizationName"] = json!("Harbor Studio");
+    std::fs::write(&w.env.claude_json, cfg.to_string()).unwrap();
+    let v = api(&e, "GET", "/v1/identity", "env=default", json!({}));
+    assert_eq!(v["account"], id("uuid-org").0);
+    assert_eq!(v["display"], "avery@example.test");
+    assert_eq!(v["orgName"], "Harbor Studio");
+    // A registered account's identity comes from its protected copy.
+    let v = api(&e, "GET", "/v1/identity", "account=personal", json!({}));
+    assert_eq!(v["account"], id("uuid-personal").0);
+    // Pin the live account without a switch.
+    api(&e, "POST", "/v1/pin", "", json!({}));
+    let st = e.state_view(Some(SID), None);
+    assert_eq!(st.envs[0].pin.as_ref().unwrap().account, id("uuid-org"));
+    // Tuning: bounded values only.
+    api(
+        &e,
+        "POST",
+        "/v1/tuning",
+        "",
+        json!({"cooldownS": 120, "pinMinutes": 30}),
+    );
+    assert_eq!(e.lock().config.tuning.cooldown_s, 120);
+    assert_eq!(e.lock().config.tuning.pin_minutes, 30);
+    assert!(qf_engine::http::route(&e, "POST", "/v1/tuning", "", &json!({"pinMinutes": 1})).is_err());
+    assert_eq!(e.lock().config.tuning.pin_minutes, 30);
+    // What pauses automation, as a machine word: only "user" ends on resume.
+    api(&e, "POST", "/v1/engine", "", json!({"action": "pause"}));
+    assert_eq!(e.state_view(None, None).envs[0].paused_by.as_deref(), Some("user"));
+    api(&e, "POST", "/v1/engine", "", json!({"action": "resume"}));
+    assert_eq!(e.state_view(None, None).envs[0].paused_by, None);
+}
+
+#[test]
+fn report_is_previewed_then_saved_exactly_as_reviewed() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let before = std::fs::read_dir(w.dd.reports()).map(|d| d.count()).unwrap_or(0);
+    let p = api(&e, "POST", "/v1/report/preview", "", json!({}));
+    assert_eq!(
+        std::fs::read_dir(w.dd.reports()).map(|d| d.count()).unwrap_or(0),
+        before,
+        "a preview saves nothing"
+    );
+    assert!(!p["text"].as_str().unwrap().contains("sk-ant"));
+    assert!(qf_engine::http::route(&e, "POST", "/v1/report/save", "", &json!({"id": "other"})).is_err());
+    let r = api(&e, "POST", "/v1/report/save", "", json!({"id": p["id"]}));
+    let saved = std::fs::read_to_string(r["path"].as_str().unwrap()).unwrap();
+    assert_eq!(saved, p["text"].as_str().unwrap());
+    // A preview is saved once.
+    assert!(qf_engine::http::route(&e, "POST", "/v1/report/save", "", &json!({"id": p["id"]})).is_err());
+}
+
+#[test]
+fn operations_and_handoff_check_describe_without_acting() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let t = e
+        .start_switch(
+            &EnvId::default_env(),
+            &id("uuid-personal"),
+            SwitchHow::Manual,
+            "test",
+            false,
+            true,
+        )
+        .unwrap();
+    let ops = api(&e, "GET", "/v1/operations", "limit=5", json!({}));
+    let op = ops
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"] == t.id)
+        .expect("the switch is listed");
+    assert!(op["records"].as_array().unwrap().len() >= 2);
+    assert!(!op.to_string().contains("sk-ant"));
+    // The session already runs in the default environment; a lane that does not exist is named.
+    let c = api(
+        &e,
+        "GET",
+        "/v1/handoff/check",
+        &format!("sessionId={SID}&toEnv=default"),
+        json!({}),
+    );
+    assert!(c["blocked"].as_str().unwrap().contains("already runs"));
+    assert_eq!(c["running"], true);
+    assert!(qf_engine::http::route(
+        &e,
+        "GET",
+        "/v1/handoff/check",
+        &format!("sessionId={SID}&toEnv=nope"),
+        &json!({})
+    )
+    .is_err());
+}
+
+#[test]
+fn an_account_at_its_limit_is_named_so_and_never_suggested() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_obs(&e, "uuid-org", 90.0, None);
+    set_obs(&e, "uuid-personal", 100.0, None);
+    e.decide(&EnvId::default_env());
+    let st = e.state_view(None, None);
+    let p = st.accounts.iter().find(|a| a.id == id("uuid-personal")).unwrap();
+    let el = p.eligibility.as_ref().unwrap();
+    assert!(!el.eligible);
+    assert!(el.reason.starts_with("at its limit"), "{}", el.reason);
+    assert!(st.envs[0].suggestion.is_none(), "no switch to an exhausted account");
+    set_obs(&e, "uuid-personal", 80.0, None);
+    let st = e.state_view(None, None);
+    let p = st.accounts.iter().find(|a| a.id == id("uuid-personal")).unwrap();
+    assert!(p.eligibility.as_ref().unwrap().reason.contains("worth a switch"));
+}

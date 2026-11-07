@@ -6,6 +6,7 @@
 | `cli-fake-env.ps1` | fake | yes | CLI argument validation and error paths for every command that is safe to sandbox |
 | `sim-usage.ps1` | fake, with a fake usage API | yes | Usage over time: suggestions, Automatic, return home, stale data, backoff, recovery, all exhausted |
 | `real-switching.ps1` | **real** | no | Mid-job switch (H), switch during parallel subagents (S), simulated limit in Automatic (R1) and Suggest (R2) |
+| `real-headless.ps1` | **real** | no | Headless `claude -p` with a real exhausted account: Automatic recovery (X1), three parallel runs sharing one switch (X2), Suggest leaves Claude's result (X3), engine stopped (X4); stdout stays Claude's own JSON |
 | `real-lanes.ps1` | **real** | no | Lanes: links, a real Claude session inside a lane, independent logins |
 
 The fake-environment scripts point `USERPROFILE`, `CLAUDE_CONFIG_DIR` and `QUAYFLOW_HOME` at a temporary folder and never touch your real logins. Run them with `pwsh -File <script> [-Exe path\to\quayflow.exe]`.

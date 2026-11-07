@@ -9,18 +9,24 @@ import type {
   CancelResponse,
   CanaryStatus,
   CompatRecord,
+  ExplainView,
   GroupChangeResponse,
+  HandoffCheck,
   HandoffResponse,
+  IdentityView,
   LaneView,
   Mode,
   OkResponse,
+  OperationView,
+  Pin,
+  ReportPreview,
   ReportResponse,
   SigninStatus,
   StateView,
   SwitchResponse,
 } from '../types'
 import { Q, requestId } from './context'
-import { call } from './engine'
+import { call, dataDir } from './engine'
 import { label, myEnv, sessionName, transitionWords } from './format'
 import { refresh } from './watcher'
 
@@ -54,8 +60,8 @@ export function switchOutcome(s: StateView | undefined, r: SwitchResponse, pinne
 }
 
 
-export function actSwitchTo($: EngineInterface, to: string, idleWait = false) {
-  return after($, post<SwitchResponse>($, '/v1/switch', { to, env: envId(), sessionId: Q.sessionId, idleWait, requestId: requestId() }, 30_000))
+export function actSwitchTo($: EngineInterface, to: string, idleWait = false, env?: string) {
+  return after($, post<SwitchResponse>($, '/v1/switch', { to, env: env ?? envId(), sessionId: Q.sessionId, idleWait, requestId: requestId() }, 30_000))
 }
 
 export function actAccept($: EngineInterface) {
@@ -132,8 +138,8 @@ export function actSigninStatus($: EngineInterface, id: string) {
 }
 
 /** Saves a completed sign-in. HTTP 409 `needs_disclosure` as for register. */
-export function actSigninConfirm($: EngineInterface, id: string, labelText: string, group: string, acceptDisclosure = false) {
-  return after($, post<OkResponse>($, '/v1/accounts/signin/confirm', { id, label: labelText, group, acceptDisclosure }))
+export function actSigninConfirm($: EngineInterface, id: string, labelText: string, group: string, acceptDisclosure = false, asNew = false) {
+  return after($, post<OkResponse>($, '/v1/accounts/signin/confirm', { id, label: labelText, group, acceptDisclosure, ...(asNew ? { asNew: true } : {}) }))
 }
 
 export function actSigninCancel($: EngineInterface, id: string) {
@@ -208,4 +214,58 @@ export function handoffOutcome(how: 'open' | 'replace' | 'prepare', lane: string
       : `Could not open a window. ${files} Run this to continue in lane "${lane}": ${r.command}`
   }
   return `${files} Run this to continue in lane "${lane}": ${r.command}`
+}
+
+// ---- reads and settings for the review screens
+
+export function actExplain($: EngineInterface) {
+  return call<ExplainView>($, 'GET', `/v1/explain?env=${encodeURIComponent(envId() ?? '')}&sessionId=${encodeURIComponent(Q.sessionId)}`)
+}
+
+/** The full identity of the live login (`env`) or of a registered account's protected copy. */
+export function actIdentity($: EngineInterface, of: { env?: string; account?: string }) {
+  const q = of.account ? `account=${encodeURIComponent(of.account)}` : `env=${encodeURIComponent(of.env ?? envId() ?? '')}`
+  return call<IdentityView>($, 'GET', `/v1/identity?${q}`)
+}
+
+export function actHandoffCheck($: EngineInterface, toEnv: string) {
+  return call<HandoffCheck>($, 'GET', `/v1/handoff/check?sessionId=${encodeURIComponent(Q.sessionId)}&toEnv=${encodeURIComponent(toEnv)}`)
+}
+
+export function actOperations($: EngineInterface, limit = 20) {
+  return call<OperationView[]>($, 'GET', `/v1/operations?limit=${limit}`)
+}
+
+export function actReportPreview($: EngineInterface) {
+  return post<ReportPreview>($, '/v1/report/preview', {}, 60_000)
+}
+
+export function actReportSave($: EngineInterface, id: string) {
+  return post<ReportResponse>($, '/v1/report/save', { id }, 60_000)
+}
+
+/** Pins the live account of this environment without a switch. */
+export function actPin($: EngineInterface) {
+  return after($, post<Pin>($, '/v1/pin', { env: envId() }))
+}
+
+export function actSetTuning($: EngineInterface, t: { cooldownS?: number; pinMinutes?: number }) {
+  return after($, post<OkResponse>($, '/v1/tuning', t))
+}
+
+/** Records one consent (true gives it, false withdraws it). */
+export function actConsent($: EngineInterface, name: 'promptHook' | 'liveCanary', on: boolean) {
+  return after($, post<OkResponse>($, '/v1/onboarding', { consents: { [name]: on }, complete: false }))
+}
+
+/**
+ * Installs the PowerShell prompt hook (`quayflow shell install`) after its own opt-in.
+ * It loads in PowerShell windows opened afterwards; nothing else in the shell changes.
+ */
+export async function actShellInstall($: EngineInterface): Promise<{ ok: boolean; text: string }> {
+  const exe = `${await dataDir($)}\\bin\\quayflow.exe`
+  const r = await $.process.run([exe, 'shell', 'install'], { timeoutMs: 30_000 })
+  const text = `${r.stdout}\n${r.stderr}`.trim()
+  await refresh($).catch(() => undefined)
+  return { ok: r.exitCode === 0, text: text.slice(0, 400) }
 }

@@ -127,17 +127,18 @@ pub fn status(v: &Value) {
     }
     outln!("\nAccounts:");
     for a in v["accounts"].as_array().into_iter().flatten() {
+        // A stale reading is never printed as a current figure.
         let usage = match a["usage"].as_object() {
-            Some(u) => {
+            Some(u) if u["fresh"] == true => {
                 let b = &u["binding"];
                 format!(
-                    "{:.0}% {} ({} old{})",
+                    "{:.0}% {} ({} old)",
                     b["pct"].as_f64().unwrap_or(0.0),
                     b["key"].as_str().unwrap_or("?"),
-                    age(u["ageS"].as_i64().unwrap_or(0)),
-                    if u["fresh"] == true { "" } else { ", stale" }
+                    age(u["ageS"].as_i64().unwrap_or(0))
                 )
             }
+            Some(u) => format!("usage unknown (last read {} ago)", age(u["ageS"].as_i64().unwrap_or(0))),
             None => "usage unknown".into(),
         };
         let note = a["usageNote"].as_str().map(|n| format!(" — {n}")).unwrap_or_default();

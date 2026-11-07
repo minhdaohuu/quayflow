@@ -62,6 +62,30 @@ impl Login {
     pub fn rate_limit_tier(&self) -> Option<&str> {
         self.oauth.get("rateLimitTier").and_then(|v| v.as_str())
     }
+    /// Scopes the login was granted, when recorded.
+    pub fn scopes(&self) -> Vec<String> {
+        self.oauth
+            .get("scopes")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+    /// This login with new tokens from a refresh; every other field is kept.
+    pub fn with_tokens(&self, access: &str, refresh: &str, expires_at: i64, scopes: Option<&[String]>) -> Login {
+        let mut oauth = self.oauth.clone();
+        if let Some(o) = oauth.as_object_mut() {
+            o.insert("accessToken".into(), access.into());
+            o.insert("refreshToken".into(), refresh.into());
+            o.insert("expiresAt".into(), expires_at.into());
+            if let Some(s) = scopes {
+                o.insert("scopes".into(), s.into());
+            }
+        }
+        Login {
+            oauth,
+            account: self.account.clone(),
+        }
+    }
     /// Same identity and same tokens.
     pub fn same_tokens(&self, other: &Login) -> bool {
         self.account_uuid() == other.account_uuid()

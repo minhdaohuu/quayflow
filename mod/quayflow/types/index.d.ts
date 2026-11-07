@@ -208,6 +208,8 @@ export type EnvView = {
   decision: string
   automationPaused: boolean
   pausedReason?: string | null
+  /** What pauses automation; only 'user' and 'hold' end on resume. */
+  pausedBy?: 'user' | 'hold' | 'repair' | 'signed_out' | 'unknown_login' | 'other_switcher' | 'incompatible' | null
   notices: Notice[]
 }
 
@@ -350,6 +352,71 @@ export type SigninStatus = {
 export type GroupChangeResponse = { ok: boolean; needsDisclosure?: boolean; disclosure?: string | null; message?: string | null }
 export type HandoffResponse = { ok: boolean; fileCount: number; command: string; launched?: boolean; message?: string | null }
 export type ReportResponse = { path: string; preview: string }
+/** POST /v1/report/preview: built for review, not saved; /v1/report/save { id } saves exactly `text`. */
+export type ReportPreview = { id: string; text: string }
+
+/** One account in GET /v1/explain. */
+export type CandidateView = {
+  account: AccountId
+  status: 'live' | 'eligible' | 'excluded' | 'unknown' | string
+  reason: string
+  pct?: number | null
+  window?: string | null
+  ageS?: number | null
+  fresh: boolean
+  availableAt?: number | null
+  exhausted: boolean
+  endpointNote?: string | null
+  backoffS?: number | null
+  nextCheckAt?: number | null
+}
+
+/** GET /v1/explain: the inputs of the proactive decision for one environment (read-only). */
+export type ExplainView = {
+  env: EnvId
+  mode: Mode
+  governingGroups: string[]
+  threshold: number
+  margin: number
+  cooldownS: number
+  cooldownLeftS: number
+  hardLimitPct: number
+  live?: AccountId | null
+  home?: AccountId | null
+  homeState: 'none' | 'home' | 'ready' | 'deferred_pin' | 'deferred_cooldown' | 'away' | string
+  homeDetail: string
+  pinned: boolean
+  allExhausted: boolean
+  soonest?: AccountId | null
+  decision: string
+  candidates: CandidateView[]
+}
+
+/** GET /v1/identity: full identity of a login, for local review only. */
+export type IdentityView = { account: AccountId; kind: AccountKind; subscription?: string | null; display?: string | null; orgName?: string | null }
+
+/** GET /v1/handoff/check: a full-history move, named before it is committed. */
+export type HandoffCheck = {
+  toEnv: EnvId
+  toLogin?: AccountId | null
+  running: boolean
+  shell?: string | null
+  shellSupported: boolean
+  promptHook: boolean
+  blocked?: string | null
+}
+
+/** GET /v1/operations: recent transitions with their sanitized journal trail. */
+export type OperationView = {
+  id: string
+  ts: number
+  env?: string | null
+  how?: string | null
+  from?: string | null
+  to?: string | null
+  stage: string
+  records: Record<string, unknown>[]
+}
 export type PolicyEntry = { env: EnvId; managed: ManagedLogin }
 
 /** GET /v1/canary while the manual live canary records (null otherwise). */
@@ -405,8 +472,11 @@ export type QuayDisclosure = {
   signinId?: string
 }
 
-/** A support report built for review. */
-export type QuayReport = ReportResponse
+/** A support report: previewed (`id`, not saved yet) or saved (`path`). */
+export type QuayReport = { id?: string; text: string; path?: string }
+
+/** A value read from the engine for one review screen, keyed by what it was read for. */
+export type QuayCacheEntry = { key: string; at: number; value?: unknown; error?: string }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -419,6 +489,8 @@ declare module 'claude-code' {
       signin: QuaySignin | null
       disclosure: QuayDisclosure | null
       report: QuayReport | null
+      /** Engine reads for review screens (explanation, identity, handoff check, operations), by slot. */
+      cache: Record<string, QuayCacheEntry>
       /** Ids of suggestions and notices already announced in this session (no repeats). */
       announced: string[]
     }

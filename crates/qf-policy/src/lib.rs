@@ -232,6 +232,12 @@ pub fn explain_all(ctx: &Ctx) -> Vec<(AccountId, Result<String, Exclusion>)> {
                 }
                 ctx.permitted(&a.id)?;
                 let (o, w) = ctx.fresh_binding(&a.id)?;
+                if w.pct >= ctx.tuning.hard_limit_pct {
+                    return Err(Exclusion::AtLimit {
+                        pct: w.pct,
+                        window: w.key.clone(),
+                    });
+                }
                 if w.pct > threshold - margin {
                     return Err(Exclusion::NoHeadroom {
                         pct: w.pct,

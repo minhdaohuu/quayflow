@@ -39,16 +39,22 @@ describe('navigation and switching', () => {
     for (const surface of ['terminal', 'desktop'] as const) {
       await quay($, '')
       const ui = await $.ui.mount({ ...PANE, surface })
-      expect(await ui.find({ type: 'Text', text: /Environment default stores: "work"/ })).toBeDefined()
+      // Facts first: the live account with its marks; explanations wait for "? Hints".
+      expect(await ui.find({ key: 'ov-acct:a1a1a1a1a1a1' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /^ LIVE $/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /may not be listed/ })).toBeUndefined()
+      await ui.press({ key: 'hints' })
       expect(await ui.find({ type: 'Text', text: /may not be listed/ })).toBeDefined()
+      await ui.press({ key: 'hints' })
 
       await ui.press({ key: 'tab:accounts' })
       await ui.press({ key: 'acct:b2b2b2b2b2b2' })
-      expect(await ui.find({ type: 'Text', text: /access token stale/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /access token expired/ })).toBeDefined()
       expect(await ui.find({ type: 'Input', key: 'rename:b2b2b2b2b2b2' })).toBeDefined()
 
       await ui.press({ key: 'ad-switch' })
-      expect(await ui.find({ type: 'Text', text: /Every session of default moves at its next request/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /Moves\s+2 sessions in default/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /Pin duration\s+2 h/ })).toBeDefined()
       await ui.press({ key: 'sw-go' })
       expect(w.bodies('/v1/switch').pop()).toMatchObject({ to: 'b2b2b2b2b2b2', env: 'default', sessionId: 'S1', idleWait: false })
       await ui.unmount()
@@ -64,7 +70,12 @@ describe('navigation and switching', () => {
     await start($, w, true)
     await quay($, '')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'hints' })
     await ui.press({ key: 'ov-accept' })
+    // Accepting opens the compact review first; nothing is sent before the person accepts.
+    expect(w.routes()).not.toContain('/v1/accept')
+    expect(await ui.find({ type: 'Text', text: /does not pin/ })).toBeDefined()
+    await ui.press({ key: 'sw-accept' })
     expect(await ui.find({ type: 'Text', text: /Session "docs" \(project C:\\work\\docs, group Client\) does not permit "personal"/ })).toBeDefined()
     expect(await ui.find({ key: 'cf-lanes' })).toBeDefined()
     await ui.unmount()
@@ -98,7 +109,8 @@ describe('switch progress', () => {
     await quay($, '')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'ov-progress' })
-    expect(await ui.find({ type: 'Text', text: /Switch to "personal": preparing/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^preparing\.$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Prepared/ })).toBeDefined()
     await ui.press({ key: 'sp-cancel' })
     expect(w.bodies('/v1/transition/cancel')).toEqual([{ id: 'tr-9' }])
     expect(await ui.find({ type: 'Text', text: /Transition already started; checking state\./ })).toBeDefined()
@@ -144,7 +156,7 @@ describe('groups', () => {
       const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
       await ui.press({ key: 'tab:groups' })
       if (covered) {
-        expect(await ui.find({ type: 'Text', text: /explicit assignment for C:\\WORK\\app\)/ })).toBeDefined()
+        expect(await ui.find({ type: 'Text', text: /assigned: C:\\WORK\\app/ })).toBeDefined()
         await ui.press({ key: 'gr-unassign' })
         expect(w.bodies('/v1/projects/unassign')).toEqual([{ path }])
       } else {
@@ -171,6 +183,11 @@ describe('groups', () => {
     await ui.select({ key: 'add:Default', value: 'c3c3c3c3c3c3' })
     expect(await ui.find({ type: 'Text', text: /would mix two organizations/ })).toBeDefined()
     expect(w.bodies('/v1/groups/members').map(b => b.acceptDisclosure)).toEqual([false])
+    // The approval is an explicit box, not the button alone.
+    await ui.press({ key: 'dc-approve' })
+    expect(w.bodies('/v1/groups/members').map(b => b.acceptDisclosure)).toEqual([false])
+    expect(await ui.find({ type: 'Text', text: /client \(organization\)/ })).toBeDefined()
+    await ui.press({ key: 'dc:approve' })
     await ui.press({ key: 'dc-approve' })
     expect(w.bodies('/v1/groups/members').map(b => b.acceptDisclosure)).toEqual([false, true])
     await ui.unmount()
@@ -187,7 +204,7 @@ describe('first use', () => {
     expect(w.ui.filter(u => u.kind === 'ui.status').pop()?.text).toContain('not set up')
     await quay($, '')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /Unattended headless jobs \(claude -p\) only switch or recover in Automatic mode/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Shared login, shared effect/ })).toBeDefined()
     await ui.press({ key: 'welcome-continue' })
     expect(w.runs).toHaveLength(1)
     expect(w.routes()).not.toContain('/v1/onboarding')
@@ -248,8 +265,13 @@ describe('first use', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.input({ key: 'reg:label', text: 'client' })
     await ui.press({ key: 'reg-save' })
+    // Every save asks for the storage box: nothing is sent without it.
+    expect(w.routes()).not.toContain('/v1/accounts/register')
+    await ui.press({ key: 'reg:consent' })
+    await ui.press({ key: 'reg-save' })
     expect(await ui.find({ type: 'Text', text: /would mix two organizations/ })).toBeDefined()
     expect(w.bodies('/v1/accounts/register').map(b => b.acceptDisclosure)).toEqual([false])
+    await ui.press({ key: 'dc:approve' })
     await ui.press({ key: 'dc-approve' })
     expect(w.bodies('/v1/accounts/register')[1]).toMatchObject({ label: 'client', group: 'Default', acceptDisclosure: true })
     await ui.unmount()
@@ -275,6 +297,10 @@ describe('trust and settings', () => {
     expect(w.routes()).not.toContain('/v1/policy/dorg')
     await ui.input({ key: 'dorg:ack', text: 'I accept the risk for Acme Corp' })
     await ui.press({ key: 'dorg-enable' })
+    // The phrase alone is not enough: the risk box is a separate, explicit step.
+    expect(w.routes()).not.toContain('/v1/policy/dorg')
+    await ui.press({ key: 'dorg:understand' })
+    await ui.press({ key: 'dorg-enable' })
     // The engine records the organization by its hash; the name is for the person.
     expect(w.bodies('/v1/policy/dorg')).toEqual([{ enable: true, confirmOrg: '0f0f0f0f0f0f', acknowledge: 'I accept the risk for Acme Corp' }])
     await ui.unmount()
@@ -286,8 +312,36 @@ describe('trust and settings', () => {
     await quay($, '')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'tab:settings' })
+    // Integrity and the update command are details: shown with hints on.
+    expect(await ui.find({ type: 'Text', text: /Integrity:/ })).toBeUndefined()
+    await ui.press({ key: 'hints' })
     expect(await ui.find({ type: 'Text', text: /Integrity: not code-signed; provenance-attested · version 0\.1\.0 · SHA-256 ab12cd34/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /quayflow update/ })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('usage is shown only while current', () => {
+  // personal's last reading is old: no figure for it anywhere, and one engine read is asked for.
+  const STALE: StateView = {
+    ...STATE,
+    accounts: STATE.accounts.map(a => (a.id === 'b2b2b2b2b2b2' ? { ...a, usage: { ...a.usage!, fresh: false, ageS: 39_600 } } : a)),
+  }
+
+  test('a stale account shows no percentage; the pane asks for one fresh read', async ($, on) => {
+    const w = world(on, { state: STALE })
+    await start($, w, true)
+    await quay($, '')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    // The fleet chart draws no column for it, and says why in words.
+    expect(await ui.find({ type: 'Text', text: /personal: (reading|not current)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Raster' })).toBeDefined()
+    await ui.press({ key: 'tab:accounts' })
+    expect((await ui.find({ key: 'fleet:b2b2b2b2b2b2' }))?.text).not.toMatch(/\d+%/)
+    await ui.press({ key: 'acct:b2b2b2b2b2b2' })
+    expect(await ui.find({ type: 'Text', text: /^12%$|^3%$/ })).toBeUndefined()
+    // Opening the pane and the Accounts tab asked once, not on every draw.
+    expect(w.routes().filter(r => r === '/v1/poll')).toHaveLength(1)
     await ui.unmount()
   })
 })

@@ -7,8 +7,8 @@ the engine's decisions end to end:
   accept (FR-07, FR-09), Automatic switching, return to the Preferred account, stale data never
   counted as zero, backoff on a rate-limited usage endpoint, a rejected token, hard-limit
   recovery with one switch and one retry, concurrent failures sharing one switch, no recovery on
-  an unconfirmed limit, and the soonest-available account when every account is exhausted
-  (FR-15, FR-16).
+  an unconfirmed limit, the soonest-available account when every account is exhausted
+  (FR-15, FR-16), and the refresh of an idle account's expiring token.
 
 Safe to run anywhere: USERPROFILE, CLAUDE_CONFIG_DIR and QUAYFLOW_HOME point into a temporary
 folder, and QUAYFLOW_SIM_API (loopback only) sends usage and profile calls to the fake server.
@@ -52,12 +52,16 @@ function Sim([hashtable]$accounts) {
     Invoke-RestMethod "$api/__sim/accounts" -Method Post -ContentType 'application/json' -Body ($accounts | ConvertTo-Json -Depth 6) | Out-Null
 }
 function SimLog { Invoke-RestMethod "$api/__sim/log" }
+function SimRefresh([hashtable]$table) {
+    Invoke-RestMethod "$api/__sim/refresh" -Method Post -ContentType 'application/json' -Body ($table | ConvertTo-Json -Depth 6) | Out-Null
+}
+function LiveRefresh { ((Get-Content -Raw (Join-Path $cfgDir '.credentials.json')) | ConvertFrom-Json).claudeAiOauth.refreshToken }
 function SimResetLog { Invoke-RestMethod "$api/__sim/reset-log" -Method Post | Out-Null }
 
 # --- fake Claude environment ---
 $TA = 'sk-ant-oat-SIMA'; $TB = 'sk-ant-oat-SIMB'; $TC = 'sk-ant-oat-SIMC'
-function Set-Login([string]$uuid, [string]$tok) {
-    @{ claudeAiOauth = @{ accessToken = $tok; refreshToken = "$tok-r"; expiresAt = 9999999999999; subscriptionType = 'max' } } |
+function Set-Login([string]$uuid, [string]$tok, [long]$ExpiresAt = 9999999999999) {
+    @{ claudeAiOauth = @{ accessToken = $tok; refreshToken = "$tok-r"; expiresAt = $ExpiresAt; subscriptionType = 'max'; scopes = @('user:inference', 'user:profile') } } |
         ConvertTo-Json -Compress | Set-Content -NoNewline -Encoding utf8 (Join-Path $cfgDir '.credentials.json')
     $p = Join-Path $cfgDir '.claude.json'
     $c = if (Test-Path $p) { Get-Content -Raw $p | ConvertFrom-Json } else { [pscustomobject]@{ numStartups = 1 } }
@@ -203,6 +207,39 @@ try {
     $r = Recover 'turn-exhausted' 100
     Check 'all exhausted: switches to the account available soonest (b)' (WaitFor { (LiveToken) -eq $TB }) "$(LiveToken) $($r | ConvertTo-Json -Compress)"
     Check 'all exhausted: no retry; Claude''s own wait continues' (-not $r.retry) ($r | ConvertTo-Json -Compress)
+
+    # 9. Idle account whose access token expires: the engine refreshes the saved copy (only
+    # that copy), stores it, reads usage with the new token, and a later switch writes it.
+    Qf mode manual --group Default | Out-Null
+    $TD = 'sk-ant-oat-SIMD'; $TD2 = 'sk-ant-oat-SIMD2'
+    Sim @{ $TD = @{ uuid = 'uuid-d'; five_hour = 10; seven_day = 5 }; $TD2 = @{ uuid = 'uuid-d'; five_hour = 11; seven_day = 6 } }
+    SimRefresh @{ "$TD-r" = @{ access = $TD2; refresh = "$TD-r2" } }
+    $soon = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 240000
+    Set-Login 'uuid-d' $TD -ExpiresAt $soon
+    Start-Sleep 2
+    $r = Qf register --label d --group Default
+    Check 'register d (token expiring in 4 min)' ($r -match 'Registered d') $r
+    SimResetLog
+    Qf use b | Out-Null
+    Check 'switch away from d' (WaitFor { (LiveToken) -eq $TB }) (LiveToken)
+    $ok = WaitFor { $l = SimLog; [int]$l.$TD2.'/api/oauth/usage' -ge 1 } 20
+    $l = SimLog
+    Check 'idle d: saved token refreshed, usage read with the new token' $ok ($l | ConvertTo-Json -Depth 4 -Compress)
+    Check 'idle d: exactly one refresh request' ([int]$l."$TD-r".'/v1/oauth/token' -eq 1) ($l | ConvertTo-Json -Depth 4 -Compress)
+    Check 'live b is never refreshed by Quayflow' (-not $l."$TB-r") ''
+    $d = (Acct 'd') | ConvertTo-Json -Depth 8 -Compress
+    Check 'd shows fresh usage (11% 5h)' ($d -match '"pct":11') $d
+    Qf use d | Out-Null
+    Check 'switch to d writes the refreshed login' (WaitFor { (LiveToken) -eq $TD2 -and (LiveRefresh) -eq "$TD-r2" }) "$(LiveToken)"
+    # A refused refresh token marks the account for a new sign-in.
+    $TE = 'sk-ant-oat-SIME'
+    Sim @{ $TE = @{ uuid = 'uuid-e'; five_hour = 10; seven_day = 5 } }
+    Set-Login 'uuid-e' $TE -ExpiresAt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 240000)
+    Start-Sleep 2
+    Qf register --label e --group Default | Out-Null
+    Qf use d | Out-Null
+    $ok = WaitFor { ((Acct 'e') | ConvertTo-Json -Depth 8) -match 'refresh_rejected' } 20
+    Check 'refused refresh token: e is marked for a new sign-in' $ok ((Acct 'e') | ConvertTo-Json -Depth 8 -Compress)
 
     $all = (Get-ChildItem -Recurse $env:QUAYFLOW_HOME -File | Where-Object { $_.Extension -in '.log', '.jsonl', '.json' } | Get-Content -Raw) -join ''
     Check 'no token in logs, journal or state' (-not ($all -match 'sk-ant-oat-SIM')) ''

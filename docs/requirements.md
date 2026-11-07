@@ -61,7 +61,7 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. W
 |---|---|
 | FR-19 | One engine per Windows user, started on demand after consent, no visible windows, intentional stop respected, crash reconciliation without replay; matched engine and Mod updates; uninstall leaves the current login working. |
 | FR-20 | Loopback API with a per-run token and a versioned handshake (current and previous protocol); an incompatible pair disables switching and recovery. Detect another tool switching the same login. |
-| FR-21 | Credentials sealed with Windows DPAPI (current user plus application entropy); never refreshes tokens, captures Claude's refreshes; no plaintext fallback. |
+| FR-21 | Credentials sealed with Windows DPAPI (current user plus application entropy); captures Claude's refreshes of live logins; refreshes only the saved copy of an idle account (held by the vault alone); no plaintext fallback. |
 | FR-22 | Sanitized local logs (7 days, size cap) and a durable journal; no tokens, prompts, responses, emails or labels in records. |
 | FR-23 | Support reports are local and shared only by the user; no telemetry. |
 | FR-24 | Per-version compatibility: a static check of each Claude version, every real switch verified, the oldest running version governs; failures turn in-place switching off for that version. |

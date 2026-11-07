@@ -59,7 +59,9 @@ If DPAPI fails, Quayflow refuses to store or switch. It never falls back to plai
 
 ## Tokens and refresh
 
-**Quayflow never refreshes a token** and never acts as the Claude client toward the token service. Claude refreshes the live account itself. The engine saves each refresh into the vault: before every switch it stores the live login back first, and it watches the login file. An idle account whose access token has expired is shown as stale and is refreshed by Claude the next time it is live. Quayflow never restores an older snapshot over a newer refresh.
+**Quayflow never refreshes a live login.** Claude refreshes the live account itself. The engine saves each refresh into the vault: before every switch it stores the live login back first, and it watches the login file. Quayflow never restores an older snapshot over a newer refresh.
+
+**Idle accounts.** When an idle account's access token has expired, the engine refreshes the saved copy in the vault, through the same token service and public client that Claude Code uses, so that account's usage stays readable. This is safe only while the vault holds the only copy of that refresh token, because the service may rotate it. So the refresh runs under the credential lock that every switch holds while writing a login. Under that lock the engine reads every environment's login files and skips the refresh if any of them holds the same refresh token or cannot be read. The new login is stored before it is used, and a switch reads the saved login again under the lock, so it always writes the newest copy. A refused refresh token marks the account for a new sign-in. Tokens are never logged; the journal records only that an account was refreshed.
 
 When you add an account, the temporary sign-in copy is retired **without signing out**. Signing out could revoke the refresh token the vault now holds, and two holders of one refresh token can invalidate each other. That temporary environment is never used for sessions.
 

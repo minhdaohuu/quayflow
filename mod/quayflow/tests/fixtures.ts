@@ -1,7 +1,7 @@
 // Test fixtures: an engine StateView and model step results.
 import type { TurnStepInput, TurnStepResult } from 'claude-code'
 
-import type { StateView } from '../types'
+import type { ExplainView, StateView } from '../types'
 
 /** No response arrived: the shape FR-15 recovers from. */
 export function failed(e: Pick<TurnStepInput, 'turnId' | 'index'>): TurnStepResult {
@@ -113,4 +113,28 @@ export const STATE: StateView = {
   lanes: [],
   activity: [{ ts: 1_799_999_950_000, kind: 'suggestion', text: 'Suggested personal (work at 91% of 5 h)' }],
   seq: 42,
+}
+
+/** GET /v1/explain for STATE: work live at 91%, personal eligible, home = work (live). */
+export const EXPLAIN: ExplainView = {
+  env: 'default',
+  mode: 'suggest',
+  governingGroups: ['Default'],
+  threshold: 85,
+  margin: 10,
+  cooldownS: 300,
+  cooldownLeftS: 0,
+  hardLimitPct: 99,
+  live: 'a1a1a1a1a1a1',
+  home: 'a1a1a1a1a1a1',
+  homeState: 'home',
+  homeDetail: 'work is the home account and is live.',
+  pinned: false,
+  allExhausted: false,
+  soonest: null,
+  decision: 'work is above the 85% threshold; personal is eligible',
+  candidates: [
+    { account: 'a1a1a1a1a1a1', status: 'live', reason: 'live here: 91% 5h (40 s old)', pct: 91, window: '5h', ageS: 40, fresh: true, exhausted: false },
+    { account: 'b2b2b2b2b2b2', status: 'eligible', reason: '12% 7d (8 min old)', pct: 12, window: '7d', ageS: 480, fresh: true, exhausted: false },
+  ],
 }

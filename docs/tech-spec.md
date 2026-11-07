@@ -70,7 +70,7 @@ PoC data in `%USERPROFILE%\.quayflow-poc` is imported once with `quayflow migrat
 - `model_not_found` (or a model-unavailable error) on the first request after a switch marks the model unavailable for that account and switches back; that is the incident's single recovery. An authentication failure (`auth`) right after a switch sets the account aside (refresh rejected) and switches back the same way.
 - One login is never live in two environments at once (both clients would refresh the same token); such a switch is refused.
 
-**Known gap (decision pending):** Quayflow never refreshes tokens, so an idle account's access token expires after some hours and its usage can no longer be observed. Its last observation then ages past the 60-minute idle freshness limit, and the account stops being a candidate for automatic switching and recovery until it is used again. Options: accept it (current behavior; manual switching still works), allow recovery to use an account whose last observation is old but whose windows have all reset since (contradicts B2 for multi-machine use), or make idle accounts briefly live to let Claude refresh them (changes the shared login, not acceptable). Recorded in `docs/known-limits.md`.
+**Idle-account refresh (owner decision, 2026-11-07):** an idle account's access token expires after some hours, so the engine refreshes its saved copy (`Engine::refresh_idle`): `POST https://platform.claude.com/v1/oauth/token` with `grant_type=refresh_token`, Claude Code's public client id and the login's own scopes. It runs under `cred_lock` (the lock every switch holds while writing), only when no environment's login files hold the same refresh token (read from disk, any unreadable file skips the refresh), and stores the result before use; the switch reads the saved login again under that lock. `invalid_grant` or 401/403 sets the account to `refresh_rejected`; other failures leave it unchanged and it shows no usage until a later poll succeeds. The live login is never refreshed by Quayflow.
 
 ## 6. API v1
 
@@ -85,7 +85,7 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `POST /v1/accounts/register` | `{"label", "group", "env"?}` (current live login) | `AccountView` or error |
 | `POST /v1/accounts/signin/start` | `{"reauth"?: accountId}` | `SigninStatus` (opens a new console window running `claude auth login`) |
 | `GET /v1/accounts/signin/status` | `?id=` | `SigninStatus` |
-| `POST /v1/accounts/signin/confirm` | `{"id", "label", "group"}` | `AccountView` |
+| `POST /v1/accounts/signin/confirm` | `{"id", "label", "group", "asNew"?}` (`asNew`: a reauthentication that returned another identity is registered as its own account) | `AccountView` |
 | `POST /v1/accounts/signin/cancel` | `{"id"}` | `OkResponse` |
 | `POST /v1/accounts/remove` | `{"account"}` | `OkResponse` (refused while live) |
 | `POST /v1/accounts/label` | `{"account", "label"}` | `OkResponse` |
@@ -116,6 +116,14 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `POST /v1/policy/dorg` | `{"enable": bool, "confirmOrg": "<org hash>", "acknowledge": "<typed text>"}` | `OkResponse` (setting recorded only; no bypass path in this build) |
 | `GET /v1/compat` / `POST /v1/compat/check` | | `[CompatRecord]` |
 | `POST /v1/report` | `{}` | `ReportResponse` (saved locally for review) |
+| `POST /v1/report/preview` | `{}` | `ReportPreview` `{"id", "text"}` (built, not saved) |
+| `POST /v1/report/save` | `{"id"}` | `ReportResponse` (saves exactly the previewed text; refused when it is not the last preview) |
+| `GET /v1/explain` | `?env=&sessionId=` | `ExplainView`: each account live/eligible/excluded/unknown with reason, usage, age, exhausted and availability, endpoint backoff and next check; threshold, margin, cooldown (and time left), home state; read-only |
+| `GET /v1/identity` | `?env=` or `?account=` | `IdentityView` (e-mail and organization name from the local login record or the account's protected copy; for review only, never stored or logged) |
+| `GET /v1/handoff/check` | `?sessionId=&toEnv=` | `HandoffCheck` (destination login, running, shell name, PowerShell or not, prompt hook, blocker) |
+| `GET /v1/operations` | `?limit=` | `[OperationView]` (recent transitions with their sanitized journal records) |
+| `POST /v1/pin` | `{"env"?}` | `Pin` (pins the live account without a switch; same release rules as a manual switch) |
+| `POST /v1/tuning` | `{"cooldownS"?: 0-3600, "pinMinutes"?: 5-1440}` | `OkResponse` (applies to every group) |
 | `POST /v1/poll` | `{}` | `OkResponse` (observe every account now, respecting backoff) |
 | `POST /v1/migrate-poc` | `{"group", "acceptDisclosure"}` | `OkResponse` (imports the PoC vault) |
 | `POST /v1/canary/start` / `GET /v1/canary` / `POST /v1/canary/stop` | | Manual live canary recording (consent `liveCanary`); while active, `/v1/step` asks for identity on every request |
@@ -151,10 +159,10 @@ handoff open|replace|prepare --session <id> --to <env>
 shell install | uninstall      PowerShell prompt hook (PowerShell 7 and 5.1 profiles)
 shell claim                    used by the prompt hook: print and consume this terminal's pending replacement
 policy [--json]                managed login enforcement per environment
-report                         build a local support report for review
+report [--preview]             build a local support report for review (--preview prints it and saves nothing)
 migrate-poc                    import the PoC vault (~/.quayflow-poc)
 update [--check]               engine and Mod as a matched pair (hash-verified)
-uninstall [--delete-data] [--yes]
+uninstall [--delete-vault] [--delete-logs] [--delete-data] [--yes]   each deletion separate and off by default; --delete-data = vault, logs, settings and lanes
 consent <engine-start|signin-startup|credential-storage|terms|live-canary> <on|off>
 version
 ```

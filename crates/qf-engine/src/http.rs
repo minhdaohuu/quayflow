@@ -203,6 +203,7 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
                 s(body, "label"),
                 s(body, "group"),
                 body.get("acceptDisclosure").and_then(|v| v.as_bool()).unwrap_or(false),
+                body.get("asNew").and_then(|v| v.as_bool()).unwrap_or(false),
             )?;
             ok(OkResponse::ok(msg))
         }
@@ -434,6 +435,43 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
             let (path, preview) = e.build_report().map_err(ApiErr::invalid)?;
             ok(ReportResponse { path, preview })
         }
+        ("POST", "/v1/report/preview") => ok(e.preview_report().map_err(ApiErr::invalid)?),
+        ("POST", "/v1/report/save") => {
+            let (path, preview) = e
+                .save_reviewed_report(s(body, "id").unwrap_or(""))
+                .map_err(ApiErr::refused)?;
+            ok(ReportResponse { path, preview })
+        }
+        ("GET", "/v1/explain") => {
+            let env = match q(query, "env").filter(|x| !x.is_empty()) {
+                Some(x) => EnvId(x),
+                None => match q(query, "sessionId") {
+                    Some(sid) => e.env_of_session(&e.lock(), &sid),
+                    None => e.default_env.id.clone(),
+                },
+            };
+            ok(e.explain(&env, q(query, "sessionId").as_deref())?)
+        }
+        ("GET", "/v1/identity") => {
+            let env = q(query, "env").filter(|x| !x.is_empty()).map(EnvId);
+            ok(e.identity(env.as_ref(), q(query, "account").as_deref())?)
+        }
+        ("GET", "/v1/handoff/check") => ok(e.handoff_check(
+            &q(query, "sessionId").unwrap_or_default(),
+            &q(query, "toEnv").unwrap_or_default(),
+        )?),
+        ("GET", "/v1/operations") => {
+            let limit = q(query, "limit")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 100);
+            ok(e.operations(limit))
+        }
+        ("POST", "/v1/pin") => {
+            let env = env_param(e, body);
+            ok(e.pin_live(&env)?)
+        }
+        ("POST", "/v1/tuning") => ok(OkResponse::ok(e.set_tuning(body)?)),
         ("POST", "/v1/poll") => {
             e.observe(true);
             ok(OkResponse::ok("polled"))

@@ -98,6 +98,8 @@ export function when(ms: number | null | undefined): string {
 export function usageText(a: AccountView, long = false): string {
   const u = a.usage
   if (!u || !u.binding) return a.usageNote ? `usage unavailable (${a.usageNote})` : 'usage not observed yet'
+  // An old reading is never shown as a figure: only that it is not current.
+  if (!u.fresh) return `usage not current (last read ${age(u.ageS)} ago)`
   const b = u.binding
   const base = `${pct(b.pct)} ${windowName(b.key)}`
   const stale = u.fresh ? '' : `, stale`
@@ -115,7 +117,7 @@ export function healthText(h: Health): string {
     case 'ok':
       return 'credential healthy'
     case 'stale_access':
-      return 'access token stale (Claude refreshes it at next use; not an error)'
+      return 'access token expired; refreshed at the next reading (not an error)'
     case 'refresh_rejected':
       return 'refresh token rejected: set aside; sign in again (Reauthenticate)'
     case 'vault_error':
@@ -242,34 +244,209 @@ export function persistentWarnings(s: StateView, env: EnvView | undefined): stri
   return [...new Set(out)]
 }
 
-/** `Quayflow · <mode> · <account label> <binding%> <window> · <notice>` (FR-07). */
-export function statusLine(link: QuayLink, s: StateView | undefined): string | undefined {
-  if (!link.on) {
-    if (link.reason === 'connecting' && !link.message) return undefined
-    const lead = link.reason === 'no_consent' ? 'not set up' : 'off'
-    return `Quayflow · ${lead} · ${linkOffText(link)}`
+// ---------------------------------------------------------------- status line
+//
+// Design C01: `Quayflow · <Account> · <Mode> · <tail>`, one line, the tail the single
+// most important fact. Priority: errors > unknown login / signed out > switching or
+// pending > suggestion > pin > managed-login override > other warnings > stale usage >
+// home / away > plain usage. Info-level notices never show here. The line is budgeted
+// to the terminal width: the tail is cut, never the account label.
+
+/** How the status line is drawn: the width it must fit, and whether usage figures show. */
+export type StatusOptions = {
+  /** Characters available (default 80). */
+  width?: number
+  /** False when Claude Code's own status line already shows the usage limits. */
+  showUsage?: boolean
+  /** The session's model id, when known: picks the per-model weekly window that applies. */
+  model?: string
+}
+
+const DOT = ' · '
+
+function modeWord(m: string): string {
+  return m ? m[0]!.toUpperCase() + m.slice(1) : m
+}
+
+/** First clause of a notice, for a compact tail: "X needs a new sign-in; it is set aside." -> "X needs a new sign-in". */
+function clause(text: string): string {
+  const t = text.trim().split(/(?<=[^.]{3})[.;](\s|$)/)[0] ?? text
+  return t.replace(/[.;:]+$/, '')
+}
+
+/**
+ * Fits `head · tail` into `width`. `tails` runs from the fullest form to the shortest (usage
+ * figures dropped first): the first that fits wins, else the shortest is cut with an
+ * ellipsis. The head is never cut.
+ */
+function fit(head: string, tails: readonly string[], width: number): string {
+  if (!tails.length) return head
+  for (const t of tails) {
+    if (head.length + DOT.length + t.length <= width) return head + DOT + t
   }
+  const room = width - head.length - DOT.length
+  if (room < 8) return head
+  return `${head}${DOT}${tails[tails.length - 1]!.slice(0, room - 1).trimEnd()}…`
+}
+
+/** The line while Quayflow is off for this session: still one clean line. */
+function offLine(link: QuayLink): string | undefined {
+  switch (link.reason) {
+    case 'connecting':
+      return link.message ? `Quayflow · connecting · ${link.message}` : undefined
+    case 'unreachable':
+      return 'Quayflow · off · engine not running (Claude works as usual)'
+    case 'not_installed':
+      return 'Quayflow · off · engine not installed (Claude works as usual)'
+    case 'no_consent':
+      return 'Quayflow · not set up · run /quay to review and start'
+    case 'stopped_by_user':
+      return 'Quayflow · off · engine stopped by you (/quay start)'
+    case 'start_failed':
+      return `Quayflow · off · engine did not start${link.message ? ` (${link.message})` : ''}`
+    case 'incompatible':
+      return `Quayflow · off · update needed: incompatible with engine${link.engineVersion ? ` ${link.engineVersion}` : ''} (quayflow update)`
+    default:
+      return 'Quayflow · off'
+  }
+}
+
+/** The account slot: the live account's label; never cut. */
+function accountSlot(s: StateView, env: EnvView): string {
+  const live = env.live
+  if (live.signedOut) return 'Signed out'
+  if (!live.known) return 'Unknown login'
+  return account(s, live.account)?.label ?? live.label ?? label(s, live.account)
+}
+
+/**
+ * A per-model weekly window ("7d:Opus", "7d:Sonnet 4.6") applies to a model id when its
+ * family word appears in the id (the engine's rule); with no model known, every one applies.
+ */
+function windowApplies(key: string, model: string | undefined): boolean {
+  if (!key.startsWith('7d:')) return true
+  if (!model) return true
+  const family = key.slice(3).trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+  return !!family && model.toLowerCase().includes(family)
+}
+
+/**
+ * Usage figures of an account, fullest form first: `5h 45% · 7d 30% · Opus 7d 88%`, the
+ * per-model weekly window only when it applies to the model and is the fullest applicable
+ * window; then without it. Missing windows are left out; empty when none is observed.
+ */
+export function usageFigures(a: AccountView | undefined, model?: string): string[] {
+  // Figures only from a current reading; an old one is reported as not current instead.
+  const ws = a?.usage?.fresh ? a.usage.windows : []
+  const find = (...keys: string[]) => ws.find(w => keys.includes(w.key) && Number.isFinite(w.pct))
+  const base: string[] = []
+  const h5 = find('5h', 'five_hour')
+  const d7 = find('7d', 'seven_day')
+  if (h5) base.push(`5h ${pct(h5.pct)}`)
+  if (d7) base.push(`7d ${pct(d7.pct)}`)
+  const applicable = ws.filter(w => Number.isFinite(w.pct) && windowApplies(w.key, model))
+  const top = Math.max(-Infinity, ...applicable.map(w => w.pct))
+  const own = applicable.filter(w => w.key.startsWith('7d:')).sort((x, y) => y.pct - x.pct)[0]
+  const out: string[] = []
+  if (own && own.pct >= top) out.push([...base, `${own.key.slice(3)} 7d ${pct(own.pct)}`].join(DOT))
+  if (base.length) out.push(base.join(DOT))
+  return out
+}
+
+/** The one tail worth showing, by priority; undefined when nothing needs saying. */
+export function statusTail(s: StateView, env: EnvView, showUsage = true, model?: string): string | undefined {
+  return statusTails(s, env, showUsage, model)[0]
+}
+
+/** The tail in its forms, fullest first (see `fit`); empty when nothing needs saying. */
+function statusTails(s: StateView, env: EnvView, showUsage: boolean, model: string | undefined): string[] {
+  const one = (t: string | undefined): string[] => (t ? [t] : [])
+  const kinds = new Set(env.notices.filter(n => n.persistent && n.level !== 'info').map(n => n.kind))
+  const paused = env.pausedReason ?? ''
+  const live = env.live
+  const liveAccount = live.known ? account(s, live.account) : undefined
+
+  // 1. Errors: Quayflow cannot act safely here until something is fixed.
+  if (/inconsistent/i.test(paused)) return one('mixed login files: switch to an account to repair')
+  if (!env.inPlace.allowed || kinds.has('incompatible_version')) return one('in-place switching off for this Claude version')
+  if (kinds.has('adoption_mismatch')) return one('a session did not adopt the switch: /quay')
+  if (/interrupted switch/i.test(paused)) return one('interrupted switch: check the login, then /quay resume')
+  for (const n of env.notices) {
+    if (n.persistent && n.level === 'error') return one(clause(n.text))
+  }
+
+  // 2. The live login itself: not one Quayflow knows, or none at all.
+  if (live.signedOut) return one('sign in to Claude (/login)')
+  if (!live.known) return one('not registered: /quay register')
+  if (kinds.has('other_switcher')) return one('another switcher may be active')
+  if (env.automationPaused) return one(/by you/i.test(paused) || kinds.has('paused') ? 'automation paused (/quay resume)' : 'automation paused')
+
+  // 3. A switch in flight, or one this session has not adopted yet.
+  const t = env.transition
+  const mine = s.session?.adoption
+  if (t && !isTerminal(t) && t.state !== 'verifying_adoption') {
+    return one(t.state === 'idle_wait' ? `switching to ${label(s, t.to)}: waiting for an idle moment` : `switching to ${label(s, t.to)}`)
+  }
+  if (mine?.state === 'pending_next_request' || (t?.state === 'verifying_adoption' && mine?.state !== 'adopted')) return one('pending next request')
+
+  const figures = showUsage ? usageFigures(liveAccount, model) : []
+
+  // 4. A suggestion: the usage behind it, and where to.
+  const sg = env.suggestion
+  if (sg) {
+    const to = `${label(s, sg.to)} suggested`
+    return [...figures.map(f => `${f} | ${to}`), to]
+  }
+
+  // 5. A manual pin, with its end.
+  if (env.pin) {
+    const until = `until ${clock(env.pin.until)}`
+    return one(env.pin.account === live.account ? `pinned ${until}` : `pinned to ${label(s, env.pin.account)} ${until}`)
+  }
+
+  // 6. The managed-login override: persistent, never a passing toast (S56).
+  if (s.dOrg.enabled || kinds.has('d_org_enabled')) return one('managed-login override ON')
+
+  // 7. Other warnings (a set-aside account, a vault problem).
+  for (const n of env.notices) {
+    if (!n.persistent || n.level === 'info') continue
+    if (['d_org_enabled', 'incompatible_version', 'unknown_login', 'other_switcher', 'paused', 'suggestion', 'adoption_mismatch'].includes(n.kind)) continue
+    return one(clause(n.text))
+  }
+
+  // 8. Stale usage: the figures are not current enough to act on.
+  const u = liveAccount?.usage
+  if (u && u.binding && !u.fresh) return one(`usage stale (${age(u.ageS)})`)
+
+  // 9. Home or away, when the group has a Preferred account.
+  const group = s.groups.find(g => g.name === myGroup(s))
+  if (group?.preferred) {
+    const where = group.preferred === live.account ? 'Home account' : 'Away from home'
+    return [...figures.map(f => where + DOT + f), where]
+  }
+
+  // 10. Plain usage.
+  return figures
+}
+
+/** `Quayflow · <Account> · <Mode> · <tail>` (FR-07, design C01); undefined draws nothing. */
+export function statusLine(link: QuayLink, s: StateView | undefined, opts: StatusOptions = {}): string | undefined {
+  const width = Math.max(40, Math.floor(opts.width ?? 80))
+  const short = (line: string | undefined): string | undefined => {
+    if (!line || line.length <= width) return line
+    const [a, b, ...rest] = line.split(DOT)
+    return fit(`${a}${DOT}${b}`, [rest.join(DOT)], width)
+  }
+  if (!link.on) return short(offLine(link))
   if (!s) return undefined
-  if (!s.onboarded) return 'Quayflow · setup needed · /quay'
+  if (!s.onboarded) return short('Quayflow · not set up · finish setup in /quay')
   const env = myEnv(s)
   if (!env) return 'Quayflow · no environment'
-  const mode = env.mode
-  const parts: string[] = [`Quayflow · ${mode}`]
-  const live = env.live
-  if (live.signedOut) parts.push('signed out')
-  else if (!live.known) parts.push('unknown login')
-  else {
-    const a = account(s, live.account)
-    parts.push(a ? `${a.label} ${a.usage?.binding ? usageText(a) : 'usage n/a'}` : (live.label ?? 'unknown login'))
-  }
-  const notes: string[] = persistentWarnings(s, env)
-  const t = env.transition
-  if (t && !isTerminal(t)) notes.push(`switching to ${label(s, t.to)}: ${transitionWords(t.state)}`)
-  else if (env.suggestion) notes.push(`suggests ${label(s, env.suggestion.to)} · /quay accept`)
-  else if (env.pin) notes.push(`pinned ${label(s, env.pin.account)} until ${clock(env.pin.until)}`)
-  if (notes.length) parts.push(notes.join(' · '))
-  return parts.join(' · ')
+  const head = `Quayflow${DOT}${accountSlot(s, env)}${DOT}${modeWord(env.mode)}`
+  return fit(head, statusTails(s, env, opts.showUsage ?? true, opts.model), width)
 }
+
+// ---------------------------------------------------------------- transcript
 
 /** Lines worth one transcript note each (interactive only), keyed so none repeats. */
 export function announcements(s: StateView): { id: string; text: string; toast?: string }[] {
@@ -284,16 +461,35 @@ export function announcements(s: StateView): { id: string; text: string; toast?:
       toast: `Quayflow: switch to ${label(s, sg.to)}? /quay accept`,
     })
   }
-  const t = env.transition ?? env.lastSwitch
-  if (t && (t.state === 'verifying_adoption' || t.state === 'completed')) {
-    out.push({
-      id: `stored:${t.id}`,
-      text: `Quayflow stored "${label(s, t.to)}" for environment ${t.env} (${t.how.replace('_', ' ')}: ${t.reason}). Each client adopts it at its next request.`,
-    })
-  }
   for (const n of env.notices) {
     if (n.persistent || n.kind === 'suggestion' || n.level === 'info') continue
     out.push({ id: `notice:${n.id}`, text: `Quayflow: ${n.text}` })
+  }
+  return out
+}
+
+/** Engine event kinds whose text is news for the person: told once in the transcript. */
+const ANNOUNCED_EVENTS = new Set(['notice', 'switched', 'adoption'])
+
+/**
+ * Engine events to tell once (notices, switches, adoptions), for this session's
+ * environment, from after `since` (the session's start): never older history, never a
+ * text-less event (`usage`). Keyed by the engine run and the event's sequence.
+ */
+export function eventAnnouncements(
+  s: StateView,
+  events: readonly { seq: number; ts: number; kind: string; env?: string | null; text?: string | null }[],
+  since: number,
+): { id: string; text: string; toast?: string }[] {
+  const env = myEnv(s)
+  const run = `${s.engine.pid}:${s.engine.startedAt}`
+  const out: { id: string; text: string; toast?: string }[] = []
+  for (const e of events) {
+    const text = e.text?.trim()
+    if (!text || !ANNOUNCED_EVENTS.has(e.kind)) continue
+    if (e.env && env && e.env !== env.id) continue
+    if (e.ts < since) continue
+    out.push({ id: `event:${run}:${e.seq}`, text: `Quayflow: ${text}` })
   }
   return out
 }
@@ -302,9 +498,5 @@ export function announcements(s: StateView): { id: string; text: string; toast?:
 export function seedAnnouncements(s: StateView): string[] {
   const env = myEnv(s)
   if (!env) return []
-  const ids: string[] = []
-  if (env.lastSwitch) ids.push(`stored:${env.lastSwitch.id}`)
-  if (env.transition) ids.push(`stored:${env.transition.id}`)
-  for (const n of env.notices) ids.push(`notice:${n.id}`)
-  return ids
+  return env.notices.map(n => `notice:${n.id}`)
 }

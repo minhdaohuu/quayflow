@@ -1,7 +1,9 @@
-//! Provider access (FR-08): the usage and profile endpoints, and the per-account schedule.
+//! Provider access (FR-08): the usage and profile endpoints, the token refresh of idle
+//! accounts, and the per-account schedule.
 //!
-//! Quayflow never refreshes a token and never calls the token service. An idle account
-//! whose access token expired is reported as stale until Claude refreshes it while live.
+//! A live account's tokens belong to Claude: Quayflow never refreshes them. An idle account's
+//! saved login (held only by the vault) is refreshed by the engine when its access token has
+//! expired, so its usage stays readable (see `qf_engine` `refresh_idle`).
 
 use qf_model::time::parse_rfc3339_ms;
 use qf_model::{AccountId, Observation, Window};
@@ -33,7 +35,7 @@ pub enum ProviderError {
     Network(String),
     /// The response did not have the expected shape.
     Shape(String),
-    /// Token expired: not observed (Quayflow does not refresh).
+    /// Token expired and not refreshed (live: Claude refreshes it; idle: the refresh failed).
     Expired,
 }
 
@@ -45,7 +47,7 @@ impl std::fmt::Display for ProviderError {
                 retry_after_s,
             } => {
                 write!(f, "usage endpoint rate-limited")?;
-                if let Some(s) = retry_after_s {
+                if let Some(s) = retry_after_s.filter(|s| *s > 0) {
                     write!(f, " (retry after {s} s)")?;
                 }
                 Ok(())
@@ -54,10 +56,7 @@ impl std::fmt::Display for ProviderError {
             ProviderError::Status { code, .. } => write!(f, "HTTP {code}"),
             ProviderError::Network(m) => write!(f, "network: {m}"),
             ProviderError::Shape(m) => write!(f, "unexpected response shape: {m}"),
-            ProviderError::Expired => write!(
-                f,
-                "access token expired while idle; refreshes when this account is live"
-            ),
+            ProviderError::Expired => write!(f, "access token expired"),
         }
     }
 }
@@ -165,6 +164,138 @@ pub fn fetch_usage(
     parse_usage(account, now, &v)
 }
 
+/// Claude Code's token service and public OAuth client (the same ones Claude itself uses).
+pub const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+/// Scopes asked for when the saved login does not record its own.
+pub const DEFAULT_SCOPES: &[&str] = &["user:inference", "user:profile"];
+
+fn token_endpoint() -> String {
+    match qf_model::sim::api_base() {
+        Some(base) => format!("{base}/v1/oauth/token"),
+        None => TOKEN_URL.to_string(),
+    }
+}
+
+/// New tokens from the token service.
+#[derive(Clone, PartialEq)]
+pub struct Refreshed {
+    pub access_token: String,
+    /// The rotated refresh token, or the one sent when the service kept it.
+    pub refresh_token: String,
+    pub expires_at: i64,
+    pub scopes: Option<Vec<String>>,
+}
+
+impl std::fmt::Debug for Refreshed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Refreshed {{ expires_at: {} }}", self.expires_at)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RefreshError {
+    /// The refresh token was refused (`invalid_grant`, 401/403): the login needs a new sign-in.
+    Rejected(String),
+    /// Network, rate limit or server error: try again later; the saved login is unchanged.
+    Failed(ProviderError),
+}
+
+impl std::fmt::Display for RefreshError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefreshError::Rejected(m) => write!(f, "refresh token rejected ({m})"),
+            RefreshError::Failed(e) => write!(f, "token refresh failed: {e}"),
+        }
+    }
+}
+
+/// Reads the token service's answer. Never includes token text in an error.
+pub fn parse_refresh(v: &serde_json::Value, sent_refresh: &str, now: i64) -> Result<Refreshed, RefreshError> {
+    let access = v
+        .get("access_token")
+        .and_then(|t| t.as_str())
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| RefreshError::Failed(ProviderError::Shape("no access_token".into())))?;
+    let expires_in = v
+        .get("expires_in")
+        .and_then(|t| t.as_i64())
+        .filter(|s| *s > 0)
+        .ok_or_else(|| RefreshError::Failed(ProviderError::Shape("no expires_in".into())))?;
+    let refresh = v
+        .get("refresh_token")
+        .and_then(|t| t.as_str())
+        .filter(|t| !t.is_empty())
+        .unwrap_or(sent_refresh);
+    let scopes = v
+        .get("scope")
+        .and_then(|s| s.as_str())
+        .map(|s| s.split_whitespace().map(String::from).collect::<Vec<_>>())
+        .filter(|s| !s.is_empty());
+    Ok(Refreshed {
+        access_token: access.to_string(),
+        refresh_token: refresh.to_string(),
+        expires_at: now.saturating_add(expires_in.saturating_mul(1000)),
+        scopes,
+    })
+}
+
+/// Which refusals mean the refresh token itself is dead (never retried).
+pub fn refresh_rejected(code: u16, body: &serde_json::Value) -> bool {
+    let error = body.get("error").and_then(|e| e.as_str()).unwrap_or_default();
+    matches!(code, 401 | 403)
+        || (code == 400 && matches!(error, "invalid_grant" | "invalid_client" | "unauthorized_client"))
+}
+
+/// Exchanges a refresh token for new tokens. The caller must hold the only copy of this
+/// refresh token (it may be rotated) and store the result before using it.
+pub fn refresh_access(refresh_token: &str, scopes: &[String], now: i64) -> Result<Refreshed, RefreshError> {
+    let scope = if scopes.is_empty() {
+        DEFAULT_SCOPES.join(" ")
+    } else {
+        scopes.join(" ")
+    };
+    let body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": CLIENT_ID,
+        "scope": scope,
+    });
+    let r = agent()
+        .post(&token_endpoint())
+        .timeout(Duration::from_secs(15))
+        .set("Content-Type", "application/json")
+        .set("Accept", "application/json")
+        .send_json(body);
+    match r {
+        Ok(resp) => {
+            let v = resp
+                .into_json::<serde_json::Value>()
+                .map_err(|e| RefreshError::Failed(ProviderError::Shape(e.to_string())))?;
+            parse_refresh(&v, refresh_token, now)
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            let retry_after_s = resp.header("retry-after").and_then(|v| v.trim().parse().ok());
+            let v = resp.into_json::<serde_json::Value>().unwrap_or_default();
+            if refresh_rejected(code, &v) {
+                let reason = v.get("error").and_then(|e| e.as_str()).unwrap_or("refused");
+                // Only the error code is kept: a description could echo request data.
+                Err(RefreshError::Rejected(format!(
+                    "HTTP {code} {}",
+                    reason
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .take(40)
+                        .collect::<String>()
+                )))
+            } else {
+                Err(RefreshError::Failed(ProviderError::Status { code, retry_after_s }))
+            }
+        }
+        Err(ureq::Error::Transport(t)) => Err(RefreshError::Failed(ProviderError::Network(t.kind().to_string()))),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
     pub account_uuid: String,
@@ -212,7 +343,14 @@ pub struct Schedule {
     pub backoff_ms: BTreeMap<String, i64>,
     /// Last reason an account has no fresh observation (sanitized).
     pub note: BTreeMap<String, String>,
+    /// After a 429, until when the live account is read at half the pace: the endpoint's
+    /// budget is per token and shared with Claude Code itself.
+    #[serde(default)]
+    pub slow_until: BTreeMap<String, i64>,
 }
+
+/// How long a 429 keeps the live account at half the polling pace.
+pub const SLOW_FOR_MS: i64 = 60 * 60_000;
 
 /// Seconds to milliseconds, saturating at `i64::MAX`.
 fn secs_to_ms(s: u64) -> i64 {
@@ -227,8 +365,19 @@ impl Schedule {
     pub fn on_success(&mut self, id: &AccountId, now: i64, live: bool, live_s: u64, idle_s: u64) {
         self.backoff_ms.remove(id.as_str());
         self.note.remove(id.as_str());
-        let every = if live { live_s } else { idle_s } as i64 * 1000;
-        self.next_at.insert(id.0.clone(), now + every);
+        let mut every = secs_to_ms(if live { live_s } else { idle_s });
+        match self.slow_until.get(id.as_str()) {
+            Some(t) if *t > now => {
+                if live {
+                    every = every.max(secs_to_ms(live_s).saturating_mul(2));
+                }
+            }
+            Some(_) => {
+                self.slow_until.remove(id.as_str());
+            }
+            None => {}
+        }
+        self.next_at.insert(id.0.clone(), now.saturating_add(every));
     }
 
     pub fn on_error(&mut self, id: &AccountId, now: i64, err: &ProviderError, live_s: u64, max_backoff_s: u64) {
@@ -243,13 +392,28 @@ impl Schedule {
                 let ra = retry_after_s.map(secs_to_ms).unwrap_or(0);
                 let w = doubled.max(ra).min(secs_to_ms(max_backoff_s));
                 self.backoff_ms.insert(id.0.clone(), w);
+                self.slow_until.insert(id.0.clone(), now.saturating_add(SLOW_FOR_MS));
                 w
             }
-            // Expired idle token: look again later; it changes when the account is live.
+            // Expired token that could not be refreshed now: look again later.
             ProviderError::Expired => 10 * 60_000,
             _ => secs_to_ms(live_s),
         };
         self.next_at.insert(id.0.clone(), now.saturating_add(wait));
+    }
+
+    /// Whether a forced read (a person's refresh) may run now: never while a 429
+    /// backoff or the slower pace after one has the account waiting.
+    pub fn may_force(&self, id: &AccountId, now: i64) -> bool {
+        let waiting = self.next_at.get(id.as_str()).is_some_and(|t| now < *t);
+        let held =
+            self.backoff_ms.contains_key(id.as_str()) || self.slow_until.get(id.as_str()).is_some_and(|t| *t > now);
+        !(waiting && held)
+    }
+
+    /// Whether the last 429s came in a row (a backoff past its first doubling).
+    pub fn repeated_limit(&self, id: &AccountId) -> bool {
+        self.backoff_ms.get(id.as_str()).is_some_and(|b| *b > 120_000)
     }
 
     /// After an engine restart, do not burst: the first poll waits at least a minute
@@ -319,6 +483,43 @@ mod tests {
     }
 
     #[test]
+    fn refresh_answer_rotates_or_keeps_the_refresh_token() {
+        let r = parse_refresh(
+            &json!({"access_token": "A2", "refresh_token": "R2", "expires_in": 28800, "scope": "user:inference user:profile"}),
+            "R1",
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(r.access_token, "A2");
+        assert_eq!(r.refresh_token, "R2");
+        assert_eq!(r.expires_at, 1_000 + 28_800_000);
+        assert_eq!(
+            r.scopes.as_deref(),
+            Some(&["user:inference".to_string(), "user:profile".to_string()][..])
+        );
+        let kept = parse_refresh(&json!({"access_token": "A3", "expires_in": 60}), "R1", 0).unwrap();
+        assert_eq!(
+            kept.refresh_token, "R1",
+            "no refresh_token in the answer: the sent one stays valid"
+        );
+        assert!(kept.scopes.is_none());
+        assert!(matches!(
+            parse_refresh(&json!({"expires_in": 60}), "R1", 0),
+            Err(RefreshError::Failed(ProviderError::Shape(_)))
+        ));
+        assert!(!format!("{r:?}").contains("A2"), "Debug never shows tokens");
+    }
+
+    #[test]
+    fn only_a_dead_refresh_token_is_rejected() {
+        assert!(refresh_rejected(400, &json!({"error": "invalid_grant"})));
+        assert!(refresh_rejected(401, &json!({})));
+        assert!(!refresh_rejected(400, &json!({"error": "invalid_request"})));
+        assert!(!refresh_rejected(429, &json!({})));
+        assert!(!refresh_rejected(503, &json!({"error": "invalid_grant"})));
+    }
+
+    #[test]
     fn schedule_backoff() {
         let id = AccountId("a".into());
         let mut s = Schedule::default();
@@ -356,5 +557,37 @@ mod tests {
         assert!(!s.due(&id, 0), "poke does not cut a backoff short");
         s.on_success(&id, 0, false, 60, 600);
         assert_eq!(s.next_at["a"], 600_000);
+    }
+
+    #[test]
+    fn a_429_halves_the_live_pace_for_an_hour() {
+        let id = AccountId("a".into());
+        let mut s = Schedule::default();
+        let e429 = ProviderError::Status {
+            code: 429,
+            retry_after_s: Some(0),
+        };
+        assert_eq!(
+            e429.to_string(),
+            "usage endpoint rate-limited",
+            "no \"retry after 0 s\""
+        );
+        s.on_error(&id, 0, &e429, 60, 900);
+        assert!(!s.repeated_limit(&id));
+        assert!(!s.may_force(&id, 60_000), "a forced read waits out the backoff");
+        s.on_success(&id, 120_000, true, 60, 600);
+        assert_eq!(s.next_at["a"], 240_000, "live every 2 min after a 429");
+        assert!(!s.may_force(&id, 200_000), "a forced read keeps the slower pace");
+        assert!(s.may_force(&id, 240_000));
+        s.on_success(&id, SLOW_FOR_MS + 1, true, 60, 600);
+        assert_eq!(
+            s.next_at["a"],
+            SLOW_FOR_MS + 1 + 60_000,
+            "back to every minute after an hour"
+        );
+        assert!(s.slow_until.is_empty());
+        s.on_error(&id, 0, &e429, 60, 900);
+        s.on_error(&id, 0, &e429, 60, 900);
+        assert!(s.repeated_limit(&id));
     }
 }

@@ -5,7 +5,7 @@ import { expect, mock } from 'claude-code/testing'
 import type { On, TurnStepInput, TurnStepResult } from 'claude-code'
 
 import type { StateView } from '../types'
-import { STATE } from './fixtures'
+import { EXPLAIN, STATE } from './fixtures'
 
 export type Sent = { method: string; route: string; body: Record<string, unknown> | undefined }
 
@@ -22,6 +22,8 @@ export type Answers = {
   state?: StateView
   /** The engine is not running: no engine.json, connections refused. */
   down?: boolean
+  /** With `down`: engine.json is left from a run that ended (a restart of the computer). */
+  staleConn?: boolean
   /** What `quayflow.exe start` prints; `started` / `running` bring a down engine up. */
   start?: 'running' | 'started' | 'failed' | 'no_consent' | 'stopped_by_user'
   /** `quayflow.exe start` answers this long after it was run (on the mocked clock). */
@@ -34,6 +36,8 @@ export type Answers = {
   env?: Record<string, string>
   /** The content of `simulate-limit.json`; a `cmd /c move` of it takes it (once). */
   simLimit?: string
+  /** Other files the plugin may read, by Windows path. */
+  files?: Record<string, string>
 }
 
 /** The engine's refusal: HTTP 409 with its machine code (`needs_disclosure`, `needs_approval`). */
@@ -55,6 +59,7 @@ export function world(on: On, a: Answers = {}) {
   const sent: Sent[] = []
   const ui: { kind: string; text?: string }[] = []
   const runs: string[][] = []
+  let refused = 0
   let down = !!a.down
   let simLimit = a.simLimit
   const SIM_FILE = `${LOCALAPPDATA}\\Quayflow\\simulate-limit.json`
@@ -62,7 +67,9 @@ export function world(on: On, a: Answers = {}) {
   mock.env(on, { LOCALAPPDATA, ...a.env })
   const clock = mock.clock(on, { now: 1_800_000_000_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: 'S1' }))
+  on('session.end', () => ({ sessionId }))
+  let sessionId = 'S1'
+  on('session.id', () => ({ value: sessionId }))
   on('session.version', () => ({ value: { version: '2.1.316', base: '2.1.316', builtAt: '' } as never }))
   on('session.usage', () => ({
     value: { startedAt: 0, rateLimits: [{ kind: 'five_hour', percentUsed: 100, resetsAt: '2027-01-15T10:00:00Z' }] } as never,
@@ -71,10 +78,12 @@ export function world(on: On, a: Answers = {}) {
   on('command.register', () => ({ value: { command: 'quay' } }))
 
   on('fs.read', (_$, e) => {
-    if (!down && e.path === `${LOCALAPPDATA}\\Quayflow\\engine.json`) {
+    if ((!down || a.staleConn) && e.path === `${LOCALAPPDATA}\\Quayflow\\engine.json`) {
       return { value: JSON.stringify({ port: 47123, token: 'tok', pid: 9, protocol: 1 }) }
     }
     if (simLimit !== undefined && e.path === SIM_FILE) return { value: simLimit }
+    const file = a.files?.[e.path.replace(/\//g, '\\')]
+    if (file !== undefined) return { value: file }
     return { deny: 'ENOENT: no such file' }
   })
   on('fs.exists', () => ({ value: true }))
@@ -125,7 +134,10 @@ export function world(on: On, a: Answers = {}) {
       expect(e.init?.auth).toBe('opaque-handle')
       return reply(200, { account: { uuid: PROFILE_UUID } })
     }
-    if (down) return { deny: 'ECONNREFUSED' }
+    if (down) {
+      refused += 1
+      return { deny: 'ECONNREFUSED' }
+    }
     expect(e.init?.headers?.['x-quayflow-token']).toBe('tok')
     const body = e.init?.body ? (JSON.parse(e.init.body) as Record<string, unknown>) : undefined
     sent.push({ method: e.init?.method ?? 'GET', route: url.pathname, body })
@@ -136,6 +148,10 @@ export function world(on: On, a: Answers = {}) {
       '/v1/recover': a.recover ?? { retry: true, switched: true, to: 'b2b2b2b2b2b2', toLabel: 'personal', why: 'five_hour at 100%' },
       '/v1/state': state,
       '/v1/events': { seq: state.seq, events: [] },
+      '/v1/explain': EXPLAIN,
+      '/v1/identity': { account: 'a1a1a1a1a1a1', kind: 'organization', subscription: 'team', display: 'avery@example.test', orgName: 'Acme Corp' },
+      '/v1/operations': [],
+      '/v1/handoff/check': { toEnv: 'studio', toLogin: 'b2b2b2b2b2b2', running: true, shell: 'pwsh.exe', shellSupported: true, promptHook: true },
     }
     const route = a.routes?.[url.pathname]
     const answer = typeof route === 'function' ? await (route as (b: Record<string, unknown>, q: URLSearchParams) => unknown)(body ?? {}, url.searchParams) : (route ?? fixed[url.pathname] ?? { ok: true })
@@ -155,6 +171,12 @@ export function world(on: On, a: Answers = {}) {
     down: () => {
       down = true
     },
+    /** The process goes on under another session id (a resume or /clear). */
+    newSession: (id: string) => {
+      sessionId = id
+    },
+    /** Connections refused while the engine was down. */
+    refused: () => refused,
     routes: () => sent.map(s => s.route),
     bodies: (route: string) => sent.filter(s => s.route === route).map(s => s.body ?? {}),
   }

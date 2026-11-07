@@ -159,6 +159,7 @@ async function askRecover($: EngineInterface, e: StepEvent, limits: SessionRateL
 
 /** The `turn.step` hook body. */
 export async function* onStep($: EngineInterface, e: TurnStepInput, next: StreamNext<'turn.step'>): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+  if (!e.agentId && e.model) Q.model = e.model
   const simulated = Q.link.on ? await takeSimulatedLimit($, e).catch(() => false) : false
   // Taken before the request: a request already in flight when a switch is written finishes on
   // the previous account by design, so the engine must not read it as adoption evidence.

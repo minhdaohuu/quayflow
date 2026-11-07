@@ -34,6 +34,22 @@ Quayflow does that switch for you, in place. The running session continues on th
 - **It never touches your work.** No killed tools, no lost input, no replayed actions, and at most one retry of a request that hit a confirmed usage limit.
 - **Your normal commands stay.** You keep typing `claude` and `claude -p`. There is no wrapper or launcher, and no change to how commands resolve.
 
+## A look at `/quay`
+
+Type `/quay` in Claude Code to open the Quayflow pane. The Overview shows the live account's 5-hour and 7-day windows with countdowns to each reset, then every account side by side as a chart: each column warms from green to red as it fills, the dashed line is the switch threshold, ▼ marks the live account and ★ the suggested one.
+
+<p align="center">
+  <img src="assets/screenshots/quay-overview.svg" alt="The /quay Overview: the live account &quot;work&quot; at 88% of its 5-hour window and 31% of its 7-day window, a chart of both accounts with the 85% threshold as a dashed line, and the suggestion &quot;Switch to personal?&quot;" width="642">
+</p>
+
+Accepting a suggestion opens a short review before anything changes: which sessions move, the target's usage, the checks that passed and an optional wait for an idle moment.
+
+<p align="center">
+  <img src="assets/screenshots/quay-switch-review.svg" alt="The switch review: switch to personal, moves 2 sessions in default, usage 12% 7 d, checks for groups and plan and Claude version passed, an option to wait for idle, and the Switch, Why? and Cancel buttons" width="642">
+</p>
+
+<sub>Rendered from the Mod's own drawing code with sample data. In the terminal the pane draws in true color; the desktop app and IDE panels show the same figures as text gauges.</sub>
+
 ## Features
 
 | Feature | What it does |
@@ -168,7 +184,7 @@ The installer adds the Mod for you, pinned to the engine's release. To add only 
 1. Start Claude as usual: `claude`.
 2. Run `/quay`, give the consents, and **register** the login you are using. It joins the `Default` group.
 3. **Add** another account. A window opens with Claude's own sign-in; Quayflow never asks for a token.
-4. Watch the status line: `Quayflow · suggest · <account> <usage>`. When it suggests a switch, run `/quay accept`.
+4. Watch the status line: `Quayflow · <account> · Suggest · <status>`, for example `Quayflow · Work · Suggest · 5h 91% · 7d 40% | Personal suggested`. When it suggests a switch, run `/quay accept`.
 5. Optional:
    - `quayflow mode automatic --group Default --approve` lets Quayflow switch by itself. Unattended `claude -p` jobs need this.
    - `quayflow shell install` lets a session be replaced in the same PowerShell terminal.
@@ -179,10 +195,10 @@ Everything is also available from the command line: `quayflow status`, `quayflow
 
 - **Terms and organization rules are your responsibility.** Quayflow is not affiliated with or endorsed by Anthropic.
 - **A switch moves every session of an environment** (by default `~/.claude`), each at its next request. Use lanes to keep a session on a different account.
-- **Saved logins** are encrypted with Windows DPAPI for your user. This does not protect against malware running as you. Quayflow never refreshes tokens; Claude does, and Quayflow saves the result. Logins never go into logs, reports or the Mod, and there is no telemetry.
+- **Saved logins** are encrypted with Windows DPAPI for your user. This does not protect against malware running as you. Claude refreshes the live login and Quayflow saves the result; Quayflow refreshes only an idle account's saved copy so its usage stays readable. Logins never go into logs, reports or the Mod, and there is no telemetry.
 - **Organization-managed login enforcement is respected.** The managed-login override setting is recorded but has no bypass path in this build. See [Security notes](docs/security.md#managed-login-enforcement-and-the-override-setting).
 - **Releases are not Authenticode-signed.** They are reproducible, hashed and provenance-attested. Smart App Control and signed-only company policies may block them. See [Verifying a release](docs/verify-release.md).
-- **Idle accounts go stale.** Quayflow never refreshes tokens, so an account left idle for some hours can no longer be observed. It stops being a candidate for automatic switching until it is used again; manual switching still works.
+- **Idle accounts need a working saved login.** Quayflow refreshes an idle account's saved copy when its token expires. If the sign-in service refuses it, that account needs a new sign-in before it can be used again.
 - **Prompt cache is per account.** The first request after a switch reprocesses the conversation.
 
 Read [Known limits](docs/known-limits.md) before relying on Quayflow for unattended work.

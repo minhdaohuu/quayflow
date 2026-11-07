@@ -73,7 +73,7 @@ impl Engine {
                 push(
                     "error",
                     "adoption_mismatch",
-                    "A session did not adopt the switched login. Use Replace Session.".into(),
+                    "A session's next request did not use the switched login: in-place switching is off for that Claude version. Review the full-history fallback in /quay.".into(),
                     true,
                 );
             }
@@ -147,6 +147,7 @@ impl Engine {
                 decision: st.decision.clone(),
                 automation_paused: st.pause_reason(cfg).is_some(),
                 paused_reason: st.pause_reason(cfg),
+                paused_by: st.pause_kind(cfg).map(String::from),
                 notices,
             });
         }
