@@ -4,7 +4,7 @@ Quayflow v0.1 for Windows. This guide covers installing, setting up accounts and
 
 > **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Quayflow is not affiliated with or endorsed by Anthropic.
 
-Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Engine control](#engine-control) · [Update](#update) · [Uninstall](#uninstall) · [Several machines](#using-an-account-on-several-machines) · [Troubleshooting](#troubleshooting) · [Testing](#testing-your-setup) · [Files](#files-and-folders)
+Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Headless jobs](#headless-jobs-claude--p) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Engine control](#engine-control) · [Update](#update) · [Uninstall](#uninstall) · [Several machines](#using-an-account-on-several-machines) · [Troubleshooting](#troubleshooting) · [Testing](#testing-your-setup) · [Files](#files-and-folders)
 
 ## Requirements
 
@@ -171,9 +171,48 @@ When a request ends with no response, the Mod asks the engine whether the accoun
 
 - In **Automatic** mode Quayflow switches to the eligible account in the group with the most remaining allowance and retries the same request **once**, in the same process. When several sessions fail at once, they share one switch.
 - In **Suggest** mode it records a suggestion and does not switch.
-- **When every account in the group is exhausted**, Quayflow switches to the account that becomes available soonest, then leaves the rest to Claude. Claude reports the limit, waits, and resumes automatically if your Claude settings allow it; otherwise the job ends with Claude's own result. Quayflow adds no wait and no time limit of its own. If another account frees up first, Automatic mode switches to it. (Whether Claude's waiting client picks up a switch made during the wait is a v0.1 release condition still being confirmed.)
+- **When every account in the group is exhausted**, Quayflow switches to the account that becomes available soonest, then leaves the rest to Claude. Claude reports the limit, waits, and resumes automatically if your Claude settings allow it; otherwise the job ends with Claude's own result. Quayflow adds no wait and no time limit of its own. If another account frees up first, Automatic mode switches to it. (Whether Claude's waiting client picks up a switch made during the wait is a v0.1 release condition still being confirmed. A new `claude -p` started after the wait does pick it up; see [Headless jobs](#headless-jobs-claude--p).)
 
 Limits: one switch and at most one retry per failed request. Cancellation is never recovered. Quayflow never replays completed actions (edits, commits, messages, deployments) and never starts a second process for a job that has ended.
+
+## Headless jobs (`claude -p`)
+
+Quayflow works with unattended `claude -p` jobs (scheduled tasks, scripts, agent pipelines) on your own machine, with no change to how you run them.
+
+**Setup.** Put the group your jobs' projects belong to in **Automatic** (`quayflow mode automatic --group <G> --approve`, a one-time approval). In Suggest mode nobody is there to accept a suggestion, so a job that hits a limit simply ends with Claude's own result.
+
+**Output is never changed.** Quayflow writes nothing to a headless run's stdout or stderr and never changes its exit code. What a job sees:
+
+| Situation | What `claude -p` returns |
+|---|---|
+| No limit reached | Claude's normal result |
+| Limit reached, another approved account has room (Automatic) | Claude's normal result: Quayflow switched and retried the request once inside the run (a few seconds longer) |
+| Every approved account at its limit | Claude's own limit result (for example `is_error: true`, exit code 1, "You've hit your weekly limit · resets 11am"). Quayflow switched to the account available soonest; the reset time in Claude's message is the failed account's, which is never earlier |
+| Suggest or Manual mode, or Quayflow off | Claude's own result, as without Quayflow |
+
+**A job that waits and runs again** (for example after reading the reset time from Claude's message) needs nothing from Quayflow: a new `claude -p` process reads the login when it starts, so it runs on whichever account Quayflow left live.
+
+**Why did a run fail, and when to run again.** Pass the `session_id` from Claude's JSON output:
+
+```powershell
+quayflow last --session <session_id> --json
+```
+
+```json
+{
+  "session": "c35454cf-…", "found": true, "outcome": "all_exhausted",
+  "limit": { "account": "sdk", "window": "7d", "pct": 100, "resetsAt": "2026-11-08T04:00:00Z" },
+  "switchedTo": "personal", "retried": false,
+  "availableAt": "2026-11-08T01:00:00Z",
+  "why": "every approved account is at its limit; personal is available soonest (…)"
+}
+```
+
+- `outcome`: `recovered` (switched and retried; the run answered), `all_exhausted` (switched to the account available soonest, no retry), `not_recovered` (a confirmed limit without a recovery: Suggest or Manual mode, a group conflict, a pause, or a retry that failed too; `why` says which), or `no_limit` (nothing recorded for the session).
+- `availableAt`: the earliest time worth running again, when the account now live frees up. It can be earlier than the reset in Claude's message.
+- Exit code 0 when the session is found, 3 when nothing is recorded for it. It reads the engine's journal, so it also works while the engine is stopped. Account names appear only in this local output; logs keep ids.
+
+**Your interactive sessions move too.** A switch changes the login of the whole environment, so a recovery made for a job also moves Claude windows open in the same environment, at their next request (a request in progress finishes on its account). The strictest mode among all running sessions applies: an interactive session in a Suggest group keeps a job in that environment from recovering while it runs.
 
 ## Lanes
 

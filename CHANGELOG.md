@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- `quayflow last --session <id> [--json]`: what Quayflow did for one Claude session, for headless jobs: `recovered`, `all_exhausted` (switched to the account available soonest), `not_recovered` with the reason, or `no_limit`; the limit that was hit and its reset; and `availableAt`, the earliest time worth running again. Reads the journal, so it works with the engine stopped; exit code 3 when nothing is recorded. Recovery decisions now record the account that failed and, when every account is at its limit, when the soonest one is available.
+- User guide: "Headless jobs (`claude -p`)": setup, what a job sees in each case, running again after a limit, and how interactive sessions are affected.
+- `tests/e2e/real-headless.ps1`: case X5 (a run fails at the limit, `quayflow last` names a time to run again, a fresh `claude -p` succeeds on another account) and `quayflow last` checks in X1 and X3.
+
 ## [0.1.2] - 2026-11-07
 
 Pane redesign with true-color graphics, readable idle accounts, connection and headless fixes. Tested end to end with real logins and a real usage limit, including headless runs. Upgrading is recommended.

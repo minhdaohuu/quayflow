@@ -389,6 +389,9 @@ pub struct RecoverResponse {
     pub why: String,
     #[serde(default)]
     pub transition: Option<String>,
+    /// Every approved account was at its limit: when the soonest one is available (ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

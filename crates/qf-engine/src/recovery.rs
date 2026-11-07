@@ -21,6 +21,7 @@ fn no(why: impl Into<String>) -> RecoverResponse {
         to_label: None,
         why: why.into(),
         transition: None,
+        available_at: None,
     }
 }
 
@@ -47,12 +48,18 @@ impl Engine {
             r.index.map(|i| i.to_string()).unwrap_or_default(),
             r.agent_id.as_deref().unwrap_or("main")
         );
+        // The account the failed request used: the environment's live login before any switch.
+        let from = {
+            let inner = self.lock();
+            let env = self.env_of_session(&inner, &r.session_id);
+            inner.envs.get(&env).and_then(|s| s.live.clone())
+        };
         let resp = self.recover_inner(r, &key);
         let inner = self.lock();
         self.record(
             &inner,
             "recovery.decision",
-            json!({"key": key, "retry": resp.retry, "switched": resp.switched, "to": resp.to, "why": resp.why, "simulated": r.simulated, "errorKind": r.error_kind}),
+            json!({"key": key, "session": r.session_id, "from": from, "retry": resp.retry, "switched": resp.switched, "to": resp.to, "why": resp.why, "availableAt": resp.available_at, "simulated": r.simulated, "errorKind": r.error_kind}),
             true,
         );
         resp
@@ -123,6 +130,7 @@ impl Engine {
                         to_label: Some(self.lock().config.label(&from)),
                         why: reason,
                         transition: Some(t.id),
+                        available_at: None,
                     },
                     Ok(t) => no(format!("switch back not made: {}", t.detail.unwrap_or_default())),
                     Err(e) => no(format!("switch back not made: {}", e.message)),
@@ -198,6 +206,7 @@ impl Engine {
             .as_ref()
             .map(|l| inner.config.label(l))
             .unwrap_or_else(|| "?".into());
+        let mut soonest_at = None;
         let (to, retry, reason) = match target {
             RecoveryTarget::None(why) => return no(format!("usage limit confirmed ({}), but {why}", evidence.detail)),
             RecoveryTarget::Capacity(c) => {
@@ -218,6 +227,7 @@ impl Engine {
                     qf_model::time::to_rfc3339(available_at)
                 );
                 // Claude's own usage-limit behavior takes over; no Quayflow retry or hold.
+                soonest_at = Some(available_at);
                 (id, false, reason)
             }
         };
@@ -241,11 +251,19 @@ impl Engine {
                     Some(&env),
                     &format!("Usage limit reached. Suggest switching to {label}: /quay accept"),
                 );
-                return no(format!(
-                    "Suggest mode: no automatic switch; /quay accept switches to {label}"
-                ));
+                return RecoverResponse {
+                    available_at: soonest_at,
+                    ..no(format!(
+                        "Suggest mode: no automatic switch; /quay accept switches to {label}"
+                    ))
+                };
             }
-            Mode::Manual => return no("Manual mode: no automatic switch"),
+            Mode::Manual => {
+                return RecoverResponse {
+                    available_at: soonest_at,
+                    ..no("Manual mode: no automatic switch")
+                }
+            }
         }
         drop(inner);
         match self.start_switch(&env, &to, SwitchHow::Recovery, &reason, false, true) {
@@ -260,6 +278,7 @@ impl Engine {
                     to_label: Some(inner.config.label(&to)),
                     why: reason,
                     transition: Some(t.id),
+                    available_at: soonest_at,
                 }
             }
             Ok(t) => no(format!("switch not made: {}", t.detail.unwrap_or_default())),
@@ -328,6 +347,7 @@ impl Engine {
                 evidence.detail
             ),
             transition: Some(t.id.clone()),
+            available_at: None,
         }
     }
 

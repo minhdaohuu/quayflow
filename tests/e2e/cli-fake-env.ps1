@@ -48,6 +48,9 @@ try {
     $o = Qf consent bogus on; Check 'consent unknown key refused' ($script:code -ne 0) "$($script:code) $o"
     $o = Qf consent terms maybe; Check 'consent bad value refused' ($script:code -ne 0) "$($script:code) $o"
     $o = Qf start --if-consented; Check 'start --if-consented without consent does not start' ($o -match 'not_consented|consent') $o
+    $o = Qf last; Check 'last without a session refused' ($script:code -ne 0 -and $script:code -ne 3 -and $o -match 'session') "$($script:code) $o"
+    $o = Qf last --session no-such-session --json; $j = $null; try { $j = $o | ConvertFrom-Json } catch {}
+    Check 'last for an unknown session: exit 3, JSON no_limit, engine not needed' ($script:code -eq 3 -and $j.found -eq $false -and $j.outcome -eq 'no_limit') "$($script:code) $o"
 
     @{ pid = $PID; sessionId = '11111111-2222-4333-8444-555555555555'; cwd = $root; version = '9.9.9'; status = 'idle' } |
         ConvertTo-Json | Set-Content (Join-Path $cfgDir "sessions\$PID.json")

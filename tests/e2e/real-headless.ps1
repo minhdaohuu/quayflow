@@ -16,15 +16,19 @@ Cases (default: all)
   X2  real limit, Automatic, three parallel runs: one shared switch, every run answers
   X3  real limit, Suggest: no switch, no question, no hang; Claude's own result stands
   X4  engine stopped: `claude -p` behaves as without Quayflow (and the cost of Quayflow on)
+  X5  the agent loop: a run fails at the limit (Suggest), `quayflow last` says when to run
+      again, the login moves, and a FRESH `claude -p` succeeds on the other account
+
+`quayflow last --session <id> --json` is checked after X1, X3 and X5 (needs v0.1.3 or later).
 
 In every case stdout must be exactly Claude's own JSON, and neither stdout nor stderr may
 carry a Quayflow line (headless output is never changed).
 
-Usage: pwsh -File tests/e2e/real-headless.ps1 -Exhausted <label> [-Case X1,X2,X3,X4] [-PluginDir path] [-Group Default]
+Usage: pwsh -File tests/e2e/real-headless.ps1 -Exhausted <label> [-Case X1,X2,X3,X4,X5] [-PluginDir path] [-Group Default]
 #>
 param(
     [Parameter(Mandatory)][string]$Exhausted,
-    [string[]]$Case = @('X1', 'X2', 'X3', 'X4'),
+    [string[]]$Case = @('X1', 'X2', 'X3', 'X4', 'X5'),
     [string]$PluginDir,
     [string]$Group = 'Default'
 )
@@ -94,6 +98,10 @@ function CleanOutput([string]$c, $run) {
     Check $c "$($run.Name): stdout is exactly one JSON result" ($null -ne $run.Json -and $run.Json.type -eq 'result') ($run.Raw.Substring(0, [Math]::Min(120, $run.Raw.Length)))
     Check $c "$($run.Name): no Quayflow text in stdout or stderr" (-not ("$($run.Raw)`n$($run.Err)" -match 'Quayflow|quayflow'))
 }
+function Last($run) {
+    $raw = & $qf last --session $run.Json.session_id --json 2>$null
+    try { ($raw -join "`n") | ConvertFrom-Json } catch { $null }
+}
 function UseExhausted {
     & $qf use $Exhausted | Out-Null
     Start-Sleep 2
@@ -128,6 +136,10 @@ try {
         Check $xc 'exactly one switch, by recovery' ($switches.Count -eq 1) "$($switches.Count) switch(es)"
         Check $xc 'every failed request retried at most once' (-not ($dec | Group-Object key | Where-Object Count -gt 1)) "$($dec.Count) decision(s): $(($dec | ForEach-Object { "switched=$($_.switched) retry=$($_.retry)" }) -join '; ')"
         Check $xc "live is no longer $Exhausted" ((Live).label -ne $Exhausted) "live: $((Live).label)"
+        if ($xc -eq 'X1') {
+            $l = Last $runs[0]
+            Check $xc 'quayflow last: recovered, from the exhausted account' ($l.outcome -eq 'recovered' -and $l.retried -and $l.limit.account -eq $Exhausted) ($l | ConvertTo-Json -Compress)
+        }
         Restore
     }
     if ($Case -contains 'X3') {
@@ -144,6 +156,25 @@ try {
         Check 'X3' "Claude's own result stands (an error result)" ($r.Json.is_error -or $r.Process.ExitCode -ne 0) "exit $($r.Process.ExitCode)"
         CleanOutput 'X3' $r
         Check 'X3' "live is still $Exhausted" ((Live).label -eq $Exhausted)
+        $l = Last $r
+        Check 'X3' 'quayflow last: not recovered, with the reset time to run again' ($l.outcome -eq 'not_recovered' -and $l.availableAt -and $l.limit.pct -ge 99) ($l | ConvertTo-Json -Compress)
+        Restore
+    }
+    if ($Case -contains 'X5') {
+        Write-Host "`n=== X5 ===" -ForegroundColor Cyan
+        & $qf mode suggest --group $Group | Out-Null
+        UseExhausted
+        $first = Finish (Start-Run 'X5-first' $PROMPT) 120
+        Check 'X5' 'the run fails at the limit with Claude''s own result' ($first.Json.is_error -and $first.Process.ExitCode -ne 0) "exit $($first.Process.ExitCode): $($first.Json.result)"
+        $l = Last $first
+        Check 'X5' 'quayflow last names a time to run again' ([bool]$l.availableAt) "$($l.outcome), run again at $($l.availableAt)"
+        # What the engine does when every account is at its limit: the soonest one goes live.
+        $dest = $room[0].label
+        & $qf use $dest | Out-Null
+        Start-Sleep 2
+        $again = Finish (Start-Run 'X5-again' $PROMPT)
+        Check 'X5' "a fresh claude -p succeeds on $dest" ($again.Process.ExitCode -eq 0 -and $again.Json.result -match 'HEADLESS-OK') "exit $($again.Process.ExitCode)"
+        CleanOutput 'X5' $again
         Restore
     }
     if ($Case -contains 'X4') {

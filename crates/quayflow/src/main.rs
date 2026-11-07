@@ -8,6 +8,7 @@ macro_rules! outln {
 
 mod canary;
 mod client;
+mod last;
 mod local;
 mod print;
 mod term;
@@ -25,6 +26,8 @@ Engine
   start [--if-consented]       start the engine in the background (no window)
   stop | pause | resume        stop the engine; pause or resume automation
   status [--json]              environments, accounts, usage and decisions
+  last --session ID [--json]   what Quayflow did for one Claude session (headless jobs:
+                               recovered, all accounts at their limit, or why not; when to run again)
   serve                        run the engine in the foreground
 
 Accounts and groups
@@ -260,6 +263,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             Err(e) => fail(e),
         },
         "start" => local::start(dd, a.has("if-consented")),
+        "last" => last_cmd(dd, a),
         "stop" => {
             let r = connect(dd).and_then(|c| c.post("/v1/engine", json!({"action": "stop"})));
             say(r)
@@ -665,6 +669,34 @@ Continue?",
             outln!("{HELP}");
             2
         }
+    }
+}
+
+/// `last --session ID [--json]`: read from the journal, so it works with the engine stopped.
+fn last_cmd(dd: &DataDir, a: &Args) -> i32 {
+    let Some(session) = a.val("session").or_else(|| a.p(1).map(str::to_string)) else {
+        return fail("last --session <id>  (the session_id from Claude's JSON output)");
+    };
+    let events: Vec<Value> = std::fs::read_to_string(dd.journal())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let labels = std::fs::read_to_string(dd.config())
+        .ok()
+        .and_then(|t| serde_json::from_str::<qf_model::Config>(t.trim_start_matches('\u{feff}')).ok())
+        .map(|c| c.accounts.into_iter().map(|a| (a.id.0, a.label)).collect())
+        .unwrap_or_default();
+    let v = last::summarize(&events, &labels, &session);
+    if a.has("json") {
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    } else {
+        outln!("{}", last::text(&v));
+    }
+    if v["found"] == true {
+        0
+    } else {
+        last::NOT_FOUND
     }
 }
 
