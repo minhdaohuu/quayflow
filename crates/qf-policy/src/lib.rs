@@ -54,7 +54,7 @@ impl Exclusion {
             Exclusion::GroupConflict { session, group } => {
                 format!("session {session} works in group \"{group}\", which does not include this account")
             }
-            Exclusion::Health(Health::StaleAccess) => "access token expired while idle; usage unknown until it is live".into(),
+            Exclusion::Health(Health::StaleAccess) => "access token expired while idle and could not be refreshed yet; usage unknown".into(),
             Exclusion::Health(Health::RefreshRejected) => "sign-in expired (refresh rejected); reauthenticate".into(),
             Exclusion::Health(Health::VaultError) => "protected copy cannot be read".into(),
             Exclusion::Health(Health::Ok) => "ok".into(),

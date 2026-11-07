@@ -159,7 +159,9 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
   if (!Q.link.on) await reconnect($)
   if (!Q.link.on) {
     await paintStatus($)
-    return `Quayflow is off: ${linkOffText(Q.link)}${Q.link.message && Q.link.reason !== 'start_failed' ? ` (${Q.link.message})` : ''}. Claude works as usual.`
+    // Still shaking hands (the engine is starting): not "off", just not ready yet.
+    if (Q.link.reason === 'connecting') return `Quayflow is still connecting to the engine${Q.link.message ? ` (${Q.link.message})` : ''}; try again in a moment. Claude works as usual.`
+    return `Quayflow is off:${linkOffText(Q.link)}${Q.link.message && Q.link.reason !== 'start_failed' ? ` (${Q.link.message})` : ''}. Claude works as usual.`
   }
 
   try {

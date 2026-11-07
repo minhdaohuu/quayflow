@@ -262,7 +262,7 @@ impl Engine {
                 pid: std::process::id(),
                 started_at: self.started_at,
                 data_dir: self.dd.root.display().to_string(),
-                integrity: "not code-signed; provenance-attested (verify with SHA256SUMS and gh attestation verify)"
+                integrity: "not code-signed; verify with the release's SHA256SUMS (and gh attestation verify when the release is attested)"
                     .into(),
                 exe_sha256: self.exe_sha256.clone(),
                 simulation: qf_model::sim::api_base(),

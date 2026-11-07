@@ -1116,7 +1116,7 @@ impl Engine {
                             &[],
                         );
                         let text = format!(
-                            "{}'s refreshed login could not be saved ({e}). Sign in to it again (/quay, Accounts, Reauthenticate).",
+                            "{}'s refreshed login could not be saved ({e}). Sign in to it again (/quay → Accounts → Sign in again).",
                             inner.config.label(id)
                         );
                         self.emit(&mut inner, "notice", None, &text);
@@ -1135,7 +1135,7 @@ impl Engine {
                     true,
                 );
                 let text = format!(
-                    "{}'s saved login was refused by the sign-in service. Sign in to it again (/quay, Accounts, Reauthenticate).",
+                    "{}'s saved login was refused by the sign-in service. Sign in to it again (/quay → Accounts → Sign in again).",
                     inner.config.label(id)
                 );
                 self.emit(&mut inner, "notice", None, &text);

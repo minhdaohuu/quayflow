@@ -19,7 +19,7 @@ export const STATE: StateView = {
     pid: 9,
     startedAt: 1_799_999_000_000,
     dataDir: 'C:\\Users\\t\\AppData\\Local\\Quayflow',
-    integrity: 'not code-signed; provenance-attested',
+    integrity: 'not code-signed; verify with SHA256SUMS',
     exeSha256: 'ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12',
   },
   onboarded: true,

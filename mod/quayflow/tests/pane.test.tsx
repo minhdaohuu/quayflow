@@ -315,7 +315,7 @@ describe('trust and settings', () => {
     // Integrity and the update command are details: shown with hints on.
     expect(await ui.find({ type: 'Text', text: /Integrity:/ })).toBeUndefined()
     await ui.press({ key: 'hints' })
-    expect(await ui.find({ type: 'Text', text: /Integrity: not code-signed; provenance-attested · version 0\.1\.0 · SHA-256 ab12cd34/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Integrity: not code-signed; verify with SHA256SUMS · version 0\.1\.0 · SHA-256 ab12cd34/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /quayflow update/ })).toBeDefined()
     await ui.unmount()
   })
@@ -334,7 +334,7 @@ describe('usage is shown only while current', () => {
     await quay($, '')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     // The fleet chart draws no column for it, and says why in words.
-    expect(await ui.find({ type: 'Text', text: /personal: (reading|not current)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /personal: (reading|usage unknown)/ })).toBeDefined()
     expect(await ui.find({ type: 'Raster' })).toBeDefined()
     await ui.press({ key: 'tab:accounts' })
     expect((await ui.find({ key: 'fleet:b2b2b2b2b2b2' }))?.text).not.toMatch(/\d+%/)

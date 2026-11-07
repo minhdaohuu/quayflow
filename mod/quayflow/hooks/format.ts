@@ -99,7 +99,7 @@ export function usageText(a: AccountView, long = false): string {
   const u = a.usage
   if (!u || !u.binding) return a.usageNote ? `usage unavailable (${a.usageNote})` : 'usage not observed yet'
   // An old reading is never shown as a figure: only that it is not current.
-  if (!u.fresh) return `usage not current (last read ${age(u.ageS)} ago)`
+  if (!u.fresh) return `usage unknown (last read ${age(u.ageS)} ago)`
   const b = u.binding
   const base = `${pct(b.pct)} ${windowName(b.key)}`
   const stale = u.fresh ? '' : `, stale`
@@ -119,7 +119,7 @@ export function healthText(h: Health): string {
     case 'stale_access':
       return 'access token expired; refreshed at the next reading (not an error)'
     case 'refresh_rejected':
-      return 'refresh token rejected: set aside; sign in again (Reauthenticate)'
+      return 'refresh token rejected: set aside; sign in again (Accounts → Sign in again)'
     case 'vault_error':
       return 'protected storage failed: no plaintext fallback; check the vault'
   }

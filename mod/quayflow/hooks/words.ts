@@ -56,7 +56,7 @@ export function candidateWord(status: string): string {
 /** "47% 7 d · 4 min ago" for a candidate, or "usage unknown". */
 export function candidateUsage(c: CandidateView): string {
   if (c.pct === undefined || c.pct === null) return 'usage unknown (never read as 0%)'
-  if (!c.fresh) return `not current${c.ageS !== undefined && c.ageS !== null ? ` (read ${age(c.ageS)} ago)` : ''}`
+  if (!c.fresh) return `usage unknown${c.ageS !== undefined && c.ageS !== null ? ` (read ${age(c.ageS)} ago)` : ''}`
   return `${pct(c.pct)} ${windowName(c.window ?? '?')}${c.ageS !== undefined && c.ageS !== null ? ` · ${age(c.ageS)} ago` : ''}${c.fresh ? '' : ' · stale'}`
 }
 

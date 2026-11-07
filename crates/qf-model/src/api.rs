@@ -192,7 +192,7 @@ pub struct EngineInfo {
     pub pid: u32,
     pub started_at: i64,
     pub data_dir: String,
-    /// "not code-signed; provenance-attested" plus the executable's SHA-256.
+    /// How to verify the build ("not code-signed; verify with the release's SHA256SUMS ...") plus its SHA-256.
     pub integrity: String,
     pub exe_sha256: String,
     /// Set only in simulation mode (`QUAYFLOW_SIM_API`): the fake API origin in use.

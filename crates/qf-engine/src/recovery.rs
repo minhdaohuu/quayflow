@@ -115,7 +115,7 @@ impl Engine {
                 };
                 let text = if kind == "auth" {
                     format!(
-                        "{to_label} needs a new sign-in (/quay accounts → Reauthenticate). It is set aside meanwhile."
+                        "{to_label} needs a new sign-in (/quay → Accounts → Sign in again). It is set aside meanwhile."
                     )
                 } else {
                     reason.clone()

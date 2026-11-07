@@ -141,7 +141,7 @@ export function Line(c: Ctx, text: string, opts: { dim?: boolean; tone?: Tone } 
   )
 }
 
-/** A short word on a colored ground: LIVE, HOME, NEXT. */
+/** A short word on a colored ground: LIVE, HOME, PINNED, SIGN IN. */
 export function Badge(c: Ctx, text: string, tone: Tone | 'accent' | 'muted' = 'muted'): JSX.Element {
   const { Text } = c.els
   const bg = tone === 'accent' ? 'claude' : tone === 'muted' ? 'inactive' : toneColor(tone)

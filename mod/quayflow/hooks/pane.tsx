@@ -284,7 +284,7 @@ function usageGap(a: AccountView, reading: boolean): string | undefined {
   if (reading) return 'reading…'
   const note = a.usageNote?.split(/[;(]/)[0]?.trim()
   if (note) return `unreadable: ${note}`
-  return a.usage ? 'not current' : 'not read yet'
+  return a.usage ? 'usage unknown' : 'not read yet'
 }
 
 /** The group threshold and margin that color the gauges. */
