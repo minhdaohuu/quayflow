@@ -77,7 +77,7 @@ async function startEngine($: EngineInterface, c: Ctx): Promise<void> {
 
 const CONSENTS = [
   { key: 'c:engineStart', label: 'Start the engine when Claude needs it (required)' },
-  { key: 'c:signinStartup', label: 'Also start it at Windows sign-in' },
+  { key: 'c:signinStartup', label: 'Also start it when you sign in' },
   { key: 'c:credentialStorage', label: 'Keep registered logins in the protected vault' },
   { key: 'c:terms', label: 'I follow my provider\'s terms and my organization\'s rules (required)' },
 ]

@@ -493,6 +493,8 @@ declare module 'claude-code' {
       cache: Record<string, QuayCacheEntry>
       /** Ids of suggestions and notices already announced in this session (no repeats). */
       announced: string[]
+      /** The everyday status line drawn after the prompt hint (null: none). */
+      hint: string | null
     }
   }
 }

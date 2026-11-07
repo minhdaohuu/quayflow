@@ -9,7 +9,7 @@
 // everything Quayflow does is off and Claude behaves as without it.
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
-import { Q, errorText, pause, setLink, setSnapshot, shownLink, uiLog } from './context'
+import { Q, errorText, pause, readHintText, setLink, setSnapshot, shownLink, uiLog } from './context'
 import type { UsageDisplay } from './context'
 import { establish, stuckConnecting } from './engine'
 import { onStep } from './step'
@@ -101,9 +101,11 @@ export const register: Register = (on, options) => {
     if (Q.headless || e.surface !== 'terminal') return next(e)
     if (!Q.footer) {
       Q.footer = true
-      void paintStatus($).catch(() => {})
+      // Not from inside this draw: drawing is pure, so the repaint runs as its own event.
+      Q.repaint?.()
     }
-    return Q.hint ? next({ ...e, props: { ...e.props, tail: `  ${Q.hint}` } }) : next(e)
+    const hint = await readHintText($)
+    return hint ? next({ ...e, props: { ...e.props, tail: `  ${hint}` } }) : next(e)
   })
   on('ui.render', { component: 'Pane', requestId: 'quay' }, async ($, e) => {
     // A pane left on "connecting" with no handshake under way starts one; a pane that

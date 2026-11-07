@@ -357,7 +357,9 @@ export function useRead<T>($: EngineInterface, c: Ctx, slot: string, key: string
     void load()
       .then(
         value => setCacheEntry($, slot, { key, at: Date.now(), value }),
-        err => setCacheEntry($, slot, { key, at: Date.now(), error: errorText(err) }),
+        // A read cancelled because the pane was drawn again is not an answer: nothing is
+        // cached, so the next draw asks again.
+        err => (/superseded/i.test(errorText(err)) ? undefined : setCacheEntry($, slot, { key, at: Date.now(), error: errorText(err) })),
       )
       .finally(() => loading.delete(id))
   }

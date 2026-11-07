@@ -4,7 +4,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { EngineEvent, EventsResponse, StateView } from '../types'
-import { Q, errorText, pause, seedAnnounced, setSnapshot, takeUnannounced, uiLog, uiStatus, uiToast } from './context'
+import { Q, errorText, pause, seedAnnounced, setHintText, setSnapshot, takeUnannounced, uiLog, uiStatus, uiToast } from './context'
 import { EngineError, call, establish, fetchState, hasCode, markUnreachable } from './engine'
 import { announcements, eventAnnouncements, seedAnnouncements, statusParts } from './format'
 import { showUsageFigures } from './hostline'
@@ -34,9 +34,9 @@ export async function paintStatus($: EngineInterface): Promise<void> {
 function setHint($: EngineInterface, text: string | undefined): void {
   if (Q.hint === text) return
   Q.hint = text
-  try {
-    $.ui.invalidate('ui.render')
-  } catch {}
+  // Through session state, not `$.ui.invalidate('ui.render')`: that would redraw the pane too
+  // and cancel the engine reads a pane draw is waiting on ("ui.render: superseded").
+  void setHintText($, text ?? null)
 }
 
 /**
@@ -87,6 +87,12 @@ async function announce($: EngineInterface, s: StateView, events: readonly Engin
  */
 export function startWatcher($: EngineInterface): void {
   if (Q.headless) return
+  // From a timer: a state write made while a draw is dispatched is refused ("drawing is pure").
+  Q.repaint = () => {
+    try {
+      $.clock.after(1, () => void paintStatus($).catch(() => {}))
+    } catch {}
+  }
   const mine = ++generation
   void (async () => {
     let backoff = 5_000

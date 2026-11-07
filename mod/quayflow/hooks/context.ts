@@ -41,6 +41,9 @@ export const Q = {
   startedAt: 0,
   /** True once the terminal drew the prompt hint: the everyday status goes in its tail. */
   footer: false,
+  /** Repaints the status through a long-lived session handle (set by the watcher and session
+   * start); a draw's own handle stops working once the draw returns. */
+  repaint: undefined as (() => void) | undefined,
   /** The text this session adds after the prompt hint (the everyday status line). */
   hint: undefined as string | undefined,
   /** The terminal's width as the last `/quay` saw it; the status line is budgeted to it. */
@@ -64,6 +67,9 @@ const disclosureAtom = atom({ plugin: 'quayflow', key: 'disclosure' } as const, 
 const reportAtom = atom({ plugin: 'quayflow', key: 'report' } as const, null)
 const announcedAtom = atom({ plugin: 'quayflow', key: 'announced' } as const, [])
 const cacheAtom = atom({ plugin: 'quayflow', key: 'cache' } as const, {})
+/** The everyday status line drawn after the prompt hint. Only the PromptHint hook reads it, so
+ * a write redraws the hint line alone (never the pane, whose pending reads it would cancel). */
+const hintAtom = atom({ plugin: 'quayflow', key: 'hint' } as const, null)
 
 /** A request id for a mutating call: a repeat returns the first response (tech-spec §6). */
 export function requestId(): string {
@@ -104,6 +110,15 @@ export async function setLink($: EngineInterface, link: QuayLink): Promise<void>
   Q.link = link
   if (Q.headless) return
   await update($, linkAtom, () => link).catch(() => {})
+}
+
+export async function setHintText($: EngineInterface, text: string | null): Promise<void> {
+  if (Q.headless) return
+  await update($, hintAtom, () => text).catch(() => {})
+}
+
+export async function readHintText($: EngineInterface): Promise<string | null> {
+  return read($, hintAtom).catch(() => null)
 }
 
 export async function setSnapshot($: EngineInterface, s: StateView | null): Promise<void> {

@@ -334,9 +334,19 @@ describe('interactive sessions', () => {
     const pinned = () => w.ui.filter(u => u.kind === 'ui.status').pop()?.text
     // Before the terminal draws its prompt hint, the line is pinned as before.
     expect(pinned()).toMatch(/^Quayflow · work · Suggest/)
-    const hint = await $.ui.mount({ plugin: 'quayflow', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } })
+    const HINT = { plugin: 'quayflow', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } } as const
+    let hint = await $.ui.mount(HINT)
+    // The repaint runs from a timer, not inside the draw (drawing is pure).
+    await w.clock.advance(10)
     await w.clock.settle()
     expect(pinned()).toBeUndefined()
+    // Claude Code draws the hint line again when the session state it read changes; the test
+    // kit does not, so draw it again here.
+    const redraw = async () => {
+      await hint.unmount()
+      hint = await $.ui.mount(HINT)
+    }
+    await redraw()
     expect(JSON.stringify(await hint.drawn())).toContain('? for shortcuts  Quayflow · work · Suggest · Home account · 5h 91% · 7d 40%')
     // A suggestion to accept needs the person: pinned again, and gone from the hint.
     state = STATE
@@ -344,6 +354,7 @@ describe('interactive sessions', () => {
     await w.clock.advance(31_000)
     await w.clock.settle()
     expect(pinned()).toBe('Quayflow · work · Suggest · 5h 91% · 7d 40% | personal suggested')
+    await redraw()
     expect(JSON.stringify(await hint.drawn())).not.toContain('Quayflow')
     await hint.unmount()
   })

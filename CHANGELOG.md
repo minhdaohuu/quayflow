@@ -14,6 +14,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - When the GitHub CLI is missing or signed out, the installer and `quayflow update` say how to install it and sign in (`winget install --id GitHub.cli -e`, `gh auth login`), and what `-SkipAttestation` gives up.
 - The README, user guide and installer say to use only accounts that are yours to use.
 - The Quayflow status line no longer looks like a warning all the time. In the terminal, the everyday line (usage, home or away, a pin, a switch under way) is drawn dim at the end of the hint line under the prompt; only a line that needs you (a suggestion to accept, a sign-in, a paused automation, a problem, the engine off) is pinned, where Claude Code draws it as a warning.
+- In the terminal, a status change could cancel a read the `/quay` pane was waiting for, so a screen such as Register showed "not readable (engine unreachable (ui.render: superseded))". The status line no longer redraws the pane, and a cancelled read is asked again.
 - An update from a local build says the Mod was left as it is, instead of "Skipped the Claude Code plugin (-NoPlugin)".
 
 ## [0.1.4] - 2026-11-07
