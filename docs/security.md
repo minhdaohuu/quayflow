@@ -33,7 +33,7 @@ In v0.1 the confirmation, display and journal hooks exist, but the bypass itself
 | Component | Reads | Writes |
 |---|---|---|
 | Engine (`quayflow.exe`) | Claude's login entries (`claudeAiOauth` in `<env>\.credentials.json`, `oauthAccount` in `.claude.json`); session registry `<env>\sessions\*.json`; managed policy (above); the Claude binary, scanned for the markers it relies on | Only those two login entries, by atomic replace under Claude's own locks, leaving every other key unchanged; its own data folder `%LOCALAPPDATA%\Quayflow` |
-| Engine, network | Two provider endpoints with each saved account's access token: usage (`/api/oauth/usage`) and profile (`/api/oauth/profile`) on `api.anthropic.com`; GitHub Releases for `quayflow update` | Nothing else. No telemetry |
+| Engine, network | Two provider endpoints with each saved account's access token: usage (`/api/oauth/usage`) and profile (`/api/oauth/profile`) on `api.anthropic.com`; the token service (`platform.claude.com/v1/oauth/token`) with an idle account's saved refresh token, only to refresh that saved copy; GitHub Releases for `quayflow update` | Nothing else. No telemetry |
 | Mod (Claude Code plugin) | Per-request results, the session's own rate-limit information, and the identity its request used (an opaque handle and a profile lookup, hashed) | Calls to the engine's loopback API only. It never receives a credential |
 | PowerShell integration (opt-in) | Its own claim file `handoff\claims\<pid>.json` | Your two PowerShell profiles (a marked block), `CLAUDE_CONFIG_DIR` only for the resumed process |
 | Installer | Release assets, Claude plugin lists | `%LOCALAPPDATA%\Quayflow\bin`, user PATH, Claude plugin and marketplace registration |
@@ -68,7 +68,7 @@ When you add an account, the temporary sign-in copy is retired **without signing
 ## Logs, journal and reports
 
 - **Logs** (`logs\quayflow-YYYYMMDD.jsonl`, 7 days, 20 MB per day) contain versions, timestamps, durations, opaque IDs, transition states and sanitized reasons. They exclude tokens, prompt and response content, source code, email addresses, friendly labels, raw arguments and raw provider responses (FR-22).
-- **Journal** (`journal.jsonl`) is append-only and flushed to disk before each switch begins. It holds switches, recovery decisions, policy overrides, unresolved operations and active waits, with the same sanitization. If Quayflow cannot record the state before a switch, it does not switch.
+- **Journal** (`journal.jsonl`) is append-only and flushed to disk before each switch begins. It holds switches, recovery decisions (with the Claude session id and account ids), policy overrides, unresolved operations and active waits, with the same sanitization. If Quayflow cannot record the state before a switch, it does not switch. `quayflow last` reads it locally and adds account labels from `config.json` only to its own output.
 - **Accounts in records** are identified by the first 12 hex characters of SHA-256 of the account UUID, not by email or label.
 - **Support reports** (`quayflow report`) are built locally from the same sanitized data. You review them before saving and share them yourself. Nothing is uploaded.
 
@@ -84,9 +84,11 @@ The PowerShell hook acts only on a claim file named for its own shell's process 
 
 ## Release integrity
 
-Releases are reproducible, hashed and provenance-attested, but **not Authenticode-signed** in v0.1 . See [Verifying a release](verify-release.md).
+Releases are reproducible and hashed (attestations once the repository is public), but **not Authenticode-signed** in v0.1. See [Verifying a release](verify-release.md).
 
 The installer always checks the SHA-256 hashes. It also requires a build-provenance attestation made by this repository's release workflow (`.github/workflows/release.yml`) for the release tag and commit, verified with a signed-in GitHub CLI; if it cannot verify one, it refuses to install, unless you pass `-SkipAttestation`, which leaves the hash check as the only protection. Private pilot releases are not attested and need that switch. The Mod is added from the release tag and refused if the checkout is not at the commit the release records in `SOURCE_COMMIT`; the gaps that remain are in [Known limits](known-limits.md#distribution).
+
+`quayflow update` always checks the SHA-256 hashes, but it verifies attestations only when the GitHub CLI is installed and signed in (and then only the repository, not the workflow, tag or commit), and it does not check the Mod against `SOURCE_COMMIT`. For the installer's full checks, run the installer for the new version.
 
 The release workflow pins every third-party GitHub Action to a full commit SHA and checks out without keeping the job token in the git configuration.
 

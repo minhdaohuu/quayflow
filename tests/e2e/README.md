@@ -2,22 +2,24 @@
 
 | Script | Logins | Runs in CI | What it covers |
 |---|---|---|---|
-| `smoke-fake-env.ps1` | fake | yes | Engine start, handshake, registration, manual switch, locks, unknown login, report, stop |
-| `cli-fake-env.ps1` | fake | yes | CLI argument validation and error paths for every command that is safe to sandbox |
-| `sim-usage.ps1` | fake, with a fake usage API | yes | Usage over time: suggestions, Automatic, return home, stale data, backoff, recovery, all exhausted |
-| `real-switching.ps1` | **real** | no | Mid-job switch (H), switch during parallel subagents (S), simulated limit in Automatic (R1) and Suggest (R2) |
-| `real-headless.ps1` | **real** | no | Headless `claude -p` with a real exhausted account: Automatic recovery (X1), three parallel runs sharing one switch (X2), Suggest leaves Claude's result (X3), engine stopped (X4); stdout stays Claude's own JSON |
-| `real-lanes.ps1` | **real** | no | Lanes: links, a real Claude session inside a lane, independent logins |
+| `smoke-fake-env.ps1` | fake | yes | Single instance, start without a window, handshake, consent-gated registration, mixed-identity disclosure, manual switch with pin, a held lock leaving the login unchanged, unknown login pausing automation, report without secrets, intentional stop |
+| `cli-fake-env.ps1` | fake | yes | CLI argument validation and error paths: groups, modes, projects, accounts, lanes, shell hook, policy, canary, update and corrupted state. Never runs `uninstall`, `add`, `reauth` or `onboard` |
+| `sim-usage.ps1` | fake, with a fake usage and profile API (`tests/sim/fake_api.py`, needs Python) | yes | Usage over time: 5-hour and per-model windows, suggestion at the threshold and accept, Automatic, return home, stale data never counted as zero, a rejected token, backoff after a refused read (429), recovery with one switch and one retry, concurrent failures sharing one switch, no recovery on an unconfirmed limit, all exhausted, an idle account's saved token refreshed (never the live one), a refused refresh token marking the account for a new sign-in |
+| `real-switching.ps1` | **real** | no | Mid-job switch (H), switch during two parallel subagents (S), simulated limit in Automatic (R1) and Suggest (R2) |
+| `real-headless.ps1` | **real**, with one account at a real usage limit | no | Headless `claude -p`: Automatic recovery (X1), three parallel runs sharing one switch (X2), Suggest leaves Claude's result (X3), engine stopped (X4), a run failing at the limit then a fresh `claude -p` succeeding on another account after `quayflow last` names a time to run again (X5). `quayflow last --session <id> --json` is checked after X1, X3 and X5. In every case stdout is exactly Claude's own JSON and no Quayflow line appears |
+| `real-lanes.ps1` | **real** | no | Lanes: links, a real headless Claude job inside a lane reading and writing through the links, independent logins, the shared setup surviving lane deletion |
 
-The fake-environment scripts point `USERPROFILE`, `CLAUDE_CONFIG_DIR` and `QUAYFLOW_HOME` at a temporary folder and never touch your real logins. Run them with `pwsh -File <script> [-Exe path\to\quayflow.exe]`.
+The fake-environment scripts point `CLAUDE_CONFIG_DIR` and `QUAYFLOW_HOME` (and, for `cli-fake-env.ps1` and `sim-usage.ps1`, `USERPROFILE`) at a temporary folder, and never touch your real logins. `smoke-fake-env.ps1` and `cli-fake-env.ps1` turn network calls off (`QUAYFLOW_OFFLINE`); `sim-usage.ps1` sends usage and profile calls to its loopback fake (`QUAYFLOW_SIM_API`). Run them with `pwsh -File <script> [-Exe path\to\quayflow.exe]`; the default is `target\debug\quayflow.exe`.
 
 ## Running the real-login scenarios
 
-These switch your **live Claude login** between two of your accounts and put it back. Read the scripts first. Prompts are synthetic and use the Haiku model.
+These switch your **live Claude login** between your accounts and put it back. Read the scripts first. Prompts are synthetic and use the Haiku model.
 
 Always run them with `pwsh -File`, never dot-sourced (`. script`): they end with `exit`, which would close your PowerShell window.
 
-### One-time setup from a local build (before a release exists)
+### One-time setup
+
+To test a published release (v0.1.3 or later), install it as the [user guide](../../docs/user-guide.md#install) describes and go to step 4. To test a local build, start at step 1.
 
 1. Remove any earlier Quayflow PoC plugin, which uses the same plugin name:
 
@@ -72,10 +74,18 @@ Always run them with `pwsh -File`, never dot-sourced (`. script`): they end with
 ```powershell
 pwsh -File tests/e2e/real-switching.ps1              # all cases: H, S, R1, R2
 pwsh -File tests/e2e/real-switching.ps1 -Case H      # one case
-pwsh -File tests/e2e/real-lanes.ps1
+pwsh -File tests/e2e/real-headless.ps1 -Exhausted <label>             # all cases: X1-X5
+pwsh -File tests/e2e/real-headless.ps1 -Exhausted <label> -Case X1,X5 # selected cases
+pwsh -File tests/e2e/real-lanes.ps1 [-Account <label>]
 ```
 
-Each script prints a PASS/FAIL table and ends with your original account live. Record the results in [docs/acceptance.md](../../docs/acceptance.md).
+`real-switching.ps1` and `real-headless.ps1` take `-Group` (default `Default`) and `-PluginDir mod\quayflow` to load the repository's Mod instead of the installed one.
+
+`real-headless.ps1` needs, in one group, an account that is at its usage limit now (`-Exhausted`) and at least one other account with room. It moves the live login to the exhausted account, sets the group to Automatic (with `--approve`) or Suggest per case, and stops the engine for X4 (then starts it again). The `quayflow last` checks need v0.1.3 or later.
+
+`real-lanes.ps1` uses a second registered account (`-Account`, or the first other account in good health) in a lane named `qf-e2e`; your default login is not changed.
+
+Each script prints a PASS/FAIL table. `real-switching.ps1` and `real-headless.ps1` end with your original account live and no pin, and `real-headless.ps1` also puts back the group's mode; if it cannot, it prints the commands to do it by hand. Record the results in [docs/acceptance.md](../../docs/acceptance.md).
 
 ### Undo
 

@@ -28,7 +28,7 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. W
 | ID | Requirement |
 |---|---|
 | FR-07 | Modes: Manual, Suggest (default) and Automatic (explicitly approved per group). Unattended headless jobs switch only in Automatic mode. A manual switch pins the account until unpinned, its window resets, or a period passes; near exhaustion normal behavior resumes. |
-| FR-08 | Observe every account's 5-hour, 7-day and per-model windows on a per-account schedule with backoff; keep observations with their age; stale or missing data never counts as zero. Default threshold 85% of the binding window. |
+| FR-08 | Observe every account's 5-hour, 7-day and per-model windows on a per-account schedule with backoff, paced so that Quayflow does not use up the usage endpoint's per-login budget that Claude Code shares; keep observations with their age; stale or missing data never counts as zero. Default threshold 85% of the binding window. |
 | FR-09 | Eligibility first (group, managed login, sessions, sign-in health, plan compatibility, freshness), then remaining allowance with optional ranks. Return to the Preferred (home) account when it has room again. Cooldown and margin apply. Explain choices with timestamps. |
 
 ## Switching
@@ -44,9 +44,9 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. W
 
 | ID | Requirement |
 |---|---|
-| FR-14 | `claude -p` output stays exactly as without Quayflow; no prompts during jobs; if the Mod or engine is unavailable or mismatched, Claude behaves as without Quayflow. |
+| FR-14 | Quayflow never changes the stdout, stderr or exit code of `claude -p`; no prompts during jobs; if the Mod or engine is unavailable or mismatched, Claude behaves as without Quayflow. A job can ask afterwards what Quayflow did for its session and when to run again (`quayflow last`), also with the engine stopped. |
 | FR-15 | Hard-limit recovery: only on a confirmed usage limit, one switch and at most one retry of the same request in the same process; concurrent failures share one switch; no replay of completed actions. |
-| FR-16 | When every account is exhausted, switch to the account available soonest and leave waiting to Claude's own usage-limit behavior; Quayflow does not hold requests. |
+| FR-16 | When every account is exhausted, switch to the account available soonest without a retry, and leave waiting to Claude's own usage-limit behavior; Claude's own result for that request stands. Quayflow does not hold requests. |
 
 ## Continuity
 

@@ -11,6 +11,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - The build's integrity line no longer claims "provenance-attested": releases are not attested while the repository is private. It says to verify with the release's `SHA256SUMS`.
 - An idle account whose token could not be refreshed yet is explained as such, not as "usage unknown until it is live".
 
+### Changed
+- Documentation reviewed against the code: README (a walkthrough with real outputs, interactive and headless, and a section on headless jobs), user guide, technical specification, requirements, acceptance results (real usage-limit and headless evidence of 2026-11-07), security notes, known limits, release verification, contributing guide, Mod and test READMEs.
+
 ## [0.1.3] - 2026-11-07
 
 Headless jobs: `quayflow last` explains what Quayflow did for a `claude -p` run and when to run again. Tested with real logins and a real usage limit (42 headless checks).

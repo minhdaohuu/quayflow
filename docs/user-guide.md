@@ -1,6 +1,6 @@
 # Quayflow user guide
 
-Quayflow v0.1 for Windows. This guide covers installing, setting up accounts and groups, how switching behaves, and how to remove Quayflow.
+Quayflow v0.1.3. This guide covers installing, setting up accounts and groups, how switching behaves, and how to remove Quayflow. Quayflow targets every platform Claude Code runs on; Windows is the first release, so paths and shells below are the Windows ones.
 
 > **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Quayflow is not affiliated with or endorsed by Anthropic.
 
@@ -8,8 +8,8 @@ Contents: [Requirements](#requirements) · [Install](#install) · [First use](#f
 
 ## Requirements
 
-- Windows 10 or 11, x64.
-- Claude Code installed and working (`claude --version`). Quayflow v0.1 was validated against Claude Code 2.1.316; other versions are checked automatically (see [Version checks](#version-checks)).
+- Windows 10 or 11, x64 (the platform of this first release).
+- Claude Code installed and working (`claude --version`). Quayflow v0.1.3 was validated against Claude Code 2.1.316; other versions are checked automatically (see [Version checks](#version-checks)).
 - Windows PowerShell 5.1 or PowerShell 7 for the installer. No administrator rights.
 - Claude subscription logins (claude.ai sign-in). Quayflow never switches a subscription session to API-key billing.
 
@@ -33,12 +33,13 @@ It does not read, copy or change any Claude login. Running Claude sessions load 
 
 | Option | Effect |
 |---|---|
-| `-Version v0.1.0` | Install a specific release instead of the latest |
+| `-Version v0.1.3` | Install a specific release instead of the latest |
 | `-Startup` | Also start the engine at Windows sign-in (per-user startup entry, no window) |
 | `-NoPath` | Do not change your PATH |
 | `-NoPlugin` | Engine only; do not touch Claude Code plugins |
 | `-Yes` | Accept the consent text without a prompt (it is still printed) |
-| `-Source <folder>` | Install from local files (`quayflow.exe`, `quayflow-bg.exe`, `SHA256SUMS`) |
+| `-Source <folder>` | Install from local files (`quayflow.exe`, `quayflow-bg.exe`, `SHA256SUMS`). The Mod is then added from the repository holding that folder, or from `-MarketplaceSource` |
+| `-MarketplaceSource <source>` | Add the Mod from this plugin marketplace source instead (a local repository path, `owner/repo` or `owner/repo#tag`) |
 | `-SkipAttestation` | Skip `gh attestation verify` (builds you made yourself, private pilot releases, or no GitHub CLI). Without it, files whose attestation cannot be verified are refused. Hashes are still checked |
 | `-Uninstall [-DeleteData]` | Remove Quayflow (see [Uninstall](#uninstall)) |
 
@@ -65,19 +66,39 @@ After the consents, `/quay` shows a readiness table: engine and Mod protocol, th
 
 ### The /quay pane
 
-`/quay` opens a pane with five tabs (keys 1-5): **Overview**, **Accounts**, **Groups**, **Activity** and **Settings**. Overview shows, in this order: the account this session last used, the environment a switch changes, the project's group and mode, the accounts with their binding usage and observation age (with **[Home]**, **[Live]** and **[Recommended]** marks), the recommendation, the home account's state, and entry points to *Running sessions*, *Session actions* and *Limits and recovery*.
+`/quay` opens a pane with five tabs (keys 1-5): **Overview**, **Accounts**, **Groups**, **Activity** and **Settings**. Tab and the arrow keys move between controls, a key shown on a button presses it, and Esc returns the keys to the prompt.
 
-- **Why this account?** lists every account as *Eligible*, *Excluded* or *Unknown* (no fresh reading, never 0%), with the reason and the observation age, plus the threshold, the required margin and the cooldown (with any time left).
-- **Accept recommendation** opens a short review (destination, scope, reason, checks, optional quiet moment) before anything is switched. Accepting does not pin.
-- **Home account** reads *Home account*, *Home ready*, *Home ready, return deferred (pinned)*, *Home ready, return deferred (cooldown)* or *Away from home*. **Pin current account** pins the live account without a switch.
-- **Running sessions** lists each client of the environment with its mode, group, version and the identity of its last request.
-- **Limits and recovery** explains the recovery checks, shows the all-exhausted table (each account's exhausted-window resets and earliest usable time; unknown resets stay unknown), each account's endpoint state and next check, and states plainly that Claude's own wait setting and waiting state are not reported to Quayflow.
+Under the tabs, a one-line **status strip** shows the live account, the mode (with *(paused)* when automation is paused), the project's group, the environment when it is a lane, and, when it differs, the account this session last used. A colored dot before it says whether all is well.
+
+**Hints.** Explanations are hidden until you press **? Hints** (key `h`); press it again to hide them. Rules you must see before committing, such as the one-executor rule of Session actions and the mixed-identity approval, always show.
+
+The **Overview** shows, top to bottom:
+
+- anything that needs your attention (an unknown login, another switcher, a pause and its remedy), and a switch in progress;
+- a card for the **live account** with its 5-hour and 7-day usage gauges (and a per-model weekly gauge when there is one), colored by the group's threshold, with the threshold marked on each gauge and a countdown to each reset (`↻ 2 h 10 min`);
+- the other accounts. In the terminal they are a **fleet chart**: a 5-hour and a 7-day column per account, the threshold as a dashed line, **▼** over the live account and **★** over the recommended one, and the account names under it as buttons. Elsewhere, and when the accounts do not fit the width, they are rows with small gauges, a ★ before the recommended one, LIVE and HOME badges, and a short reason when the account is not a switch target now (see below);
+- the **recommendation**: *Switch to Personal?* with **Switch** and **Why?**, or *Staying on Work*;
+- a pin, if any, with **Unpin**, and the last switch;
+- the **home account's** state when you are away from it (see below);
+- the number of sessions on this environment, and **Sessions**, **Actions**, **Limits** and **Home**.
+
+Every figure is written out beside its graphic. Usage is shown only while the reading is current: otherwise the account says *reading…*, *not read yet*, *not current* or why it cannot be read, never 0%. The true-color graphics are drawn in the terminal; other surfaces show text gauges.
+
+**Why an account is not a switch target.** Account rows (Overview and Accounts) give the reason in a word or two: *no room to gain* (it would not leave enough margin below the threshold), *usage unknown* (no current reading), *at its limit*, *not in this group*, *group conflict* (a running session's group does not allow it), *blocked by your organization* (managed login), or *plan lacks this model*. The live account, and an account whose badge already says what is wrong (SIGN IN, VAULT), get no reason. The full reason is in the account's detail and in **Why?**.
+
+- **Why?** ("Why this account?") lists every account as *Eligible*, *Excluded* or *Unknown* (no fresh reading, never 0%), with the reason and the observation age, plus the threshold, the required margin and the cooldown (with any time left).
+- **Switch** on the recommendation opens a short review (destination, scope, reason, checks, optional quiet moment) before anything is switched. Accepting does not pin. A switch shows its phases as a step track (prepared, quiet moment, apply, verify), a participant table while it waits for a quiet moment, and which clients have adopted it.
+- **Home account** reads *Home account*, *Home ready*, *Home ready, return deferred (pinned)*, *Home ready, return deferred (cooldown)* or *Away from home*. **Pin** pins the live account without a switch.
+- **Sessions** lists each client of the environment with its mode, group, version and the identity of its last request.
+- **Limits** explains the recovery checks, shows the all-exhausted table (each account's exhausted-window resets and earliest usable time; unknown resets stay unknown), each account's endpoint state and next check, and states plainly that Claude's own wait setting and waiting state are not reported to Quayflow.
+
+**`/quay` commands.** Every action is also a subcommand: `/quay help` lists them. An option `/quay` does not know is refused, never ignored: `/quay mode automatic --aprove` answers `unknown option --aprove (did you mean --approve?)` and changes nothing.
 
 ## Accounts
 
-**Register the login you are using now.** In `/quay`, choose Register, or run `quayflow register --label "Work" --group Default`. Quayflow shows the identity of the live login (its e-mail address and organization, read locally for your review and never stored or logged), together with the name and group you choose; you can create a group right there. It saves a copy only after you tick the storage box and confirm; the identity is verified by a profile lookup when you save. Registering does not switch anything, does not change your running work, and does not turn on Automatic mode.
+**Register the login you are using now.** In `/quay`, choose **Register login** (Accounts), or run `quayflow register --label "Work" --group Default`. Quayflow shows the identity of the live login (its e-mail address and organization, read locally for your review and never stored or logged), together with the name and group you choose; you can create a group right there. It saves a copy only after you tick the storage box and confirm; the identity is verified by a profile lookup when you save. Registering does not switch anything, does not change your running work, and does not turn on Automatic mode.
 
-**Add another account.** In `/quay` choose Add account, or run `quayflow add --label "Personal" --group Default`. A new console window opens with Claude's own sign-in (`claude auth login`) in a temporary environment. Quayflow never asks you to paste a token. After you sign in, Quayflow shows the identity, you tick the storage box and confirm, and it saves the login. If the identity is already registered, it says so and offers to review that registration; updating it never counts as extra capacity. It then retires the temporary copy without signing out, because signing out could revoke the token Quayflow just saved. Cancelling or failing the sign-in leaves your current login unchanged.
+**Add another account.** In `/quay` choose Add account (or run `/quay add`), or run `quayflow add --label "Personal" --group Default`. The pane shows three steps: name and group, Claude's sign-in, review. The name field takes the keyboard when the screen opens; a line under it confirms the name and its group as you type, or says the name is already in use, which is refused. Pick the group in the list, or choose **+ New group** to create one there. Enter in the name field (or **Sign in**) starts the sign-in. A new console window opens with Claude's own sign-in (`claude auth login`) in a temporary environment. Quayflow never asks you to paste a token. After you sign in, Quayflow shows the identity, you tick the storage box and confirm, and it saves the login. If the identity is already registered, it says so and offers to review that registration; updating it never counts as extra capacity. It then retires the temporary copy without signing out, because signing out could revoke the token Quayflow just saved. Cancelling or failing the sign-in leaves your current login unchanged.
 
 **Other account actions:**
 
@@ -114,7 +135,11 @@ Turning on Automatic needs explicit approval: `quayflow mode automatic --group D
 
 Defaults, adjustable per group: proactive threshold 85% of the account's binding usage window; a candidate must be at least 10 points below the threshold; 5 minutes between proactive switches. The binding window is the fullest of the five-hour, seven-day and per-model weekly windows. Quayflow uses only fresh usage readings: at most 5 minutes old for the live account and 60 minutes for idle ones. A missing or stale reading is never treated as zero and never triggers an automatic switch.
 
-**Idle accounts and expired tokens.** Claude refreshes the live account's login. When an idle account's access token expires, Quayflow refreshes that account's saved copy so its usage stays readable and it remains a candidate. A usage figure is shown only when it is fresh; otherwise `/quay` and `quayflow status` say the usage is unknown or being read. If the sign-in service refuses an idle account's saved login, the account is marked for a new sign-in (Accounts, Reauthenticate).
+**Idle accounts and expired tokens.** Claude refreshes the live account's login; Quayflow never refreshes the live login. When an idle account's access token expires, Quayflow refreshes that account's saved copy (with Claude's own token service and the login's own scopes) and reads its usage with the new token, so the account stays a candidate for suggestions, automatic switching and recovery. The refresh runs under the same credential lock every switch holds, and only when no environment's login uses the same refresh token; the new login is stored before it is used. If the sign-in service refuses an idle account's saved login, the account is marked for a new sign-in (**Sign in again** in its detail, or `quayflow reauth <account>`).
+
+**Stale readings are never shown as current.** A usage figure is shown only while it is fresh. Otherwise `quayflow status` prints `usage unknown (last read 25 min ago)`, and `/quay` says the usage is being read, not current, or why it cannot be read.
+
+**How often usage is read.** The live account is read every 60 seconds and idle accounts every 10 minutes. The usage endpoint's budget is per login and shared with Claude Code, so after it refuses a read (HTTP 429), the live account is read every 2 minutes for the next hour, with a longer backoff when refusals repeat. A refresh from `/quay` (`/quay poll`, or the pane asking for a fresh read) reads at once, except during that slower pace or a backoff: then it waits for the next scheduled read instead of forcing one.
 
 ## The status line
 
@@ -280,11 +305,11 @@ If your organization enforces its login (`forceLoginOrgUUID` or `forceLoginMetho
 - `quayflow status` shows environments, accounts, usage and observation age (`--json` for scripts).
 - `quayflow pause` and `quayflow resume` pause and resume automation. Manual switches keep working. Resume ends only a pause you made (or a hold left by an unresolved switch). When automation is paused for another reason (an unknown login, another switcher, a signed-out or inconsistent login, an incompatible Claude version), `/quay` names that reason and its remedy instead of offering Resume.
 - `quayflow stop` stops the engine on purpose. The Mod then does not restart it until you run `quayflow start`. Stopping the engine never stops Claude: without the engine, Claude works exactly as it would without Quayflow.
-- `/quay` Activity shows recent decisions and the last switches; open one for its local trail (opaque ids and sanitized reasons). **Preview sanitized report** builds the report without saving it; you review it, tick *I reviewed this report*, then save it locally. `/quay report` prints the preview without saving (`/quay report --save` saves), and `quayflow report --preview` does the same in a terminal; `quayflow report` saves at once. Nothing is sent automatically.
+- `/quay` Activity shows recent decisions and the last switches; open one for its local trail (opaque ids and sanitized reasons). **Report**, then **Build preview**, builds the sanitized report without saving it; you review it, tick *I reviewed this report before saving it for sharing*, then **Save locally**. `/quay report` prints the preview without saving (`/quay report --save` saves), and `quayflow report --preview` does the same in a terminal; `quayflow report` saves at once. Nothing is sent automatically.
 
 ### Version checks
 
-When the engine sees a new Claude version, it checks automatically that the parts it relies on are still present. If the check fails, in-place switching is disabled for that version, and Quayflow uses Open/Replace instead with a warning. The first real switch on a new version is verified per session as described above. `quayflow canary --live` runs an optional synthetic check, with your consent; `/quay` > Settings > Version detail shows what it does, its consent and its status before you run it. When several Claude versions run at once, the oldest one decides.
+When the engine sees a new Claude version, it checks automatically that the parts it relies on are still present. If the check fails, in-place switching is disabled for that version, and Quayflow uses Open/Replace instead with a warning. The first real switch on a new version is verified per session as described above. `quayflow canary --live` runs an optional synthetic check, with your consent; `/quay` > Settings > **Version** shows what it does, its consent and its status before you run it. When several Claude versions run at once, the oldest one decides.
 
 ## Update
 
@@ -304,11 +329,11 @@ quayflow uninstall --delete-logs    # also deletes routine logs and saved report
 quayflow uninstall --delete-data    # deletes the vault, logs, settings and lanes
 ```
 
-Each deletion is a separate choice and off by default (`/quay` > Settings > Uninstall options shows them and the matching command). An unresolved recovery record in the journal is kept and reported. Or use `install.ps1 -Uninstall [-DeleteData]`. Uninstall removes the Mod, the sign-in startup entry, the PowerShell profile block and the engine. The installer also removes the PATH entry. **The login that is live at that moment stays live**, so your current account keeps working in Claude. Conversation history is never deleted.
+Each deletion is a separate choice and off by default (`/quay` > Settings > **Uninstall** shows them and the matching command). An unresolved recovery record in the journal is kept and reported. Or use `install.ps1 -Uninstall [-DeleteData]`. Uninstall removes the Mod, the sign-in startup entry, the PowerShell profile block and the engine. The installer also removes the PATH entry. **The login that is live at that moment stays live**, so your current account keeps working in Claude. Conversation history is never deleted.
 
 ## Using an account on several machines
 
-The same account used on several machines shares one allowance and one usage-reading rate limit. Each machine's Quayflow reads usage on its own schedule: about once a minute for the live account and every ten minutes for idle ones, backing off when the provider asks. An idle account's reading from this machine does not include what another machine has used since, so it is never treated as guaranteed capacity. Its age is shown, and a usage-limit failure on the new account is handled as normal recovery.
+The same account used on several machines shares one allowance and one usage-reading rate limit. Each machine's Quayflow reads usage on its own schedule: about once a minute for the live account and every ten minutes for idle ones, slowing down and backing off when the usage endpoint refuses a read (see [Modes](#modes)). An idle account's reading from this machine does not include what another machine has used since, so it is never treated as guaranteed capacity. Its age is shown, and a usage-limit failure on the new account is handled as normal recovery.
 
 ## Troubleshooting
 
@@ -321,10 +346,12 @@ The same account used on several machines shares one allowance and one usage-rea
 | Installer: attestation failed | The file was not built by this repository's release workflow. Do not install it. For a pilot release from a private repository, see [Install](#install) |
 | `claude plugin marketplace add` fails | Private repository: `gh auth login` then `gh auth setup-git`; without an SSH key set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` |
 | Windows blocks `quayflow.exe` (SmartScreen, Smart App Control, company policy) or antivirus flags it | See [Verifying a release](verify-release.md#windows-protections-and-quayflow) |
-| No switch happens near the limit | Check the mode (Suggest only suggests), a pin, the cooldown, group conflicts (`/quay` names the blocking session), stale readings, or a paused engine. `/quay` explains each exclusion |
-| An idle account is never chosen automatically | Its token expired while idle, so its usage reading is stale. Switch to it by hand once (`quayflow use <account>`). See [Modes](#modes) |
-| Headless job stopped at a usage limit | Its group is not in Automatic mode, or every account was exhausted and Claude's own wait was not enabled |
-| An account shows "set aside" | Its refresh token was refused. Run `quayflow reauth <account>` |
+| `/quay` shows "Connecting to the engine…" | Wait a few seconds: the Mod is shaking hands, or starting the engine. If it stays, run `quayflow status`, then `/quay start` |
+| `/quay` says "unknown option" | A mistyped option is refused, never ignored. Use the suggested one (`--approve`, `--accept-disclosure`, `--idle-wait`, `--save`) |
+| No switch happens near the limit | Check the mode (Suggest only suggests), a pin, the cooldown, group conflicts (`/quay` names the blocking session), stale readings, or a paused engine. Each account row in `/quay` says in a word or two why it is not a target; **Why?** gives the full reason |
+| An idle account is never chosen | Look at its row in `/quay`. *usage unknown*: its reading is not current yet or cannot be read (its detail says why). SIGN IN: its saved login was refused; run `quayflow reauth <account>`. See [Modes](#modes) |
+| Headless job stopped at a usage limit | Its group is not in Automatic mode, or every account was exhausted and Claude's own wait was not enabled. `quayflow last --session <session_id>` says which, and when to run again (see [Headless jobs](#headless-jobs-claude--p)) |
+| An account shows SIGN IN or "set aside" | Its refresh token was refused. Run `quayflow reauth <account>`, or **Sign in again** in its detail in `/quay` |
 | "Unknown login" notice | See [Unknown logins](#unknown-logins-and-other-switchers) |
 | Replace did nothing in this terminal | The PowerShell hook is not loaded: `quayflow shell install`, open a new terminal, check the execution policy (5.1). Other shells use Open New Session |
 | Replace said history is not ready | Run the command it printed once Claude has fully exited |
@@ -333,17 +360,19 @@ Logs are in `%LOCALAPPDATA%\Quayflow\logs` (sanitized, 7 days).
 
 ## Testing your setup
 
-Two scripts in the repository's `tests/e2e/` folder exercise the product build. Read each one before you run it.
+The repository's `tests/e2e/` folder holds scripts that exercise the product build; [tests/e2e/README.md](../tests/e2e/README.md) lists them all. Read each one before you run it.
 
-**Fake environment (safe anywhere).** This runs the real `quayflow.exe` against a temporary fake Claude environment. `CLAUDE_CONFIG_DIR` and `QUAYFLOW_HOME` point to a temporary folder and network calls are off, so it never touches `~/.claude` or a real login. CI runs it on every change.
+**Fake environment (safe anywhere).** `smoke-fake-env.ps1`, `cli-fake-env.ps1` and `sim-usage.ps1` run the real `quayflow.exe` against a temporary fake Claude environment, so they never touch `~/.claude` or a real login. CI runs all three on every change.
 
 ```powershell
 pwsh -File tests/e2e/smoke-fake-env.ps1 -Exe "$env:LOCALAPPDATA\Quayflow\bin\quayflow.exe"
 ```
 
-It covers single instance, the handshake, consent-gated registration, the mixed-identity disclosure, a manual switch with pin, a held lock leaving the login unchanged, an unknown login pausing automation, a support report without secrets, and an intentional stop.
+The smoke test covers single instance, the handshake, consent-gated registration, the mixed-identity disclosure, a manual switch with pin, a held lock leaving the login unchanged, an unknown login pausing automation, a support report without secrets, and an intentional stop. `cli-fake-env.ps1` checks the CLI's argument validation and error paths. `sim-usage.ps1` scripts usage over time against a fake usage API (it needs Python): suggestions, Automatic, return home, stale readings, backoff, recovery, all accounts exhausted, and the refresh of an idle account's token.
 
-**Real logins (owner-run).** `tests/e2e/real-switching.ps1` **switches your live Claude login** between two registered accounts and puts it back. It uses synthetic prompts on model haiku. Run it only on your own machine, never in CI. Prerequisites:
+**Real logins (owner-run).** These **switch your live Claude login** and put it back. They use synthetic prompts on model haiku. Run them only on your own machine, never in CI.
+
+`tests/e2e/real-switching.ps1` switches between two registered accounts. Prerequisites:
 
 - the engine running, and two accounts registered in one group (`quayflow status`);
 - the Mod installed;
@@ -360,6 +389,23 @@ pwsh -File tests/e2e/real-switching.ps1 -Case H,R1       # selected cases
 | S | Switch while two parallel subagents run: each follows at its next request |
 | R1 | Simulated usage limit in Automatic mode: one switch, one retry, one JSON result |
 | R2 | Simulated usage limit in Suggest mode: no switch in a headless job |
+
+`tests/e2e/real-headless.ps1` runs `claude -p` against a **real** usage limit. It needs, in one group, an account that is at its limit now and at least one other account with room:
+
+```powershell
+pwsh -File tests/e2e/real-headless.ps1 -Exhausted <label>             # all cases
+pwsh -File tests/e2e/real-headless.ps1 -Exhausted <label> -Case X1,X5 # selected cases
+```
+
+| Case | What it checks |
+|---|---|
+| X1 | Automatic: one switch, one retry, one clean JSON result, exit code 0; `quayflow last` says `recovered` |
+| X2 | Automatic, three parallel runs: one shared switch, every run answers |
+| X3 | Suggest: no switch, no question, no hang; Claude's own result stands; `quayflow last` says `not_recovered` with a time to run again |
+| X4 | Engine stopped: `claude -p` behaves as without Quayflow, and the stopped engine is not restarted |
+| X5 | A run fails at the limit, `quayflow last` names a time to run again, and a fresh `claude -p` succeeds on another account |
+
+In every case stdout must be exactly Claude's JSON, with no Quayflow line. The script puts back your live account and the group's mode at the end. `tests/e2e/real-lanes.ps1` checks lanes with a real second account.
 
 Results are saved under `%LOCALAPPDATA%\Quayflow\e2e`. If a case fails, check that your live account afterwards is the one you expect (`quayflow status`), then attach the sanitized output and a `quayflow report` to a bug report. Recorded results against the product build are in [acceptance.md](acceptance.md).
 

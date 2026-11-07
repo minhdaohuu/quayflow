@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest release receives security fixes during the 0.x series.
+Only the latest release (currently v0.1.3) receives security fixes during the 0.x series.
 
 ## Reporting a vulnerability
 
@@ -12,7 +12,7 @@ You will get an acknowledgement within 7 days. Fixes are released as soon as pra
 
 ## Scope
 
-In scope: the engine and CLI (`quayflow.exe`), the Mod, the PowerShell integration, the installer and the release pipeline. Examples: credential exposure in logs, reports or the API; the loopback API accepting requests without its token; a path that bypasses consent, group permissions or managed-login enforcement; tampering with release artifacts.
+In scope: the engine and CLI (`quayflow.exe`), the background launcher (`quayflow-bg.exe`), the Mod, the PowerShell integration, the installer, `quayflow update` and the release pipeline. Examples: credential exposure in logs, the journal, reports or the API; a saved refresh token sent anywhere but Claude's own token service; the loopback API accepting requests without its token; a path that bypasses consent, group permissions or managed-login enforcement; tampering with release artifacts.
 
 Out of scope: malware already running as the same Windows user (DPAPI user scope cannot protect against it; see `docs/security.md`), and the behavior of Claude Code itself.
 

@@ -13,16 +13,18 @@ Every Quayflow release publishes these assets:
 
 Each asset is built by this repository's release workflow (`.github/workflows/release.yml`) and has three integrity properties:
 
-1. **Published hash.** `SHA256SUMS` lists the SHA-256 of every asset. The installer and `quayflow update` refuse a file whose hash does not match.
-2. **Build provenance.** A GitHub artifact attestation, signed through GitHub's Sigstore integration, records that the file was built by this repository's workflow from a specific commit and tag.
+1. **Published hash.** `SHA256SUMS` lists the SHA-256 of every other asset. The installer and `quayflow update` refuse a file whose hash does not match.
+2. **Build provenance.** A GitHub artifact attestation, signed through GitHub's Sigstore integration, records that the file was built by this repository's workflow from a specific commit and tag. Not available while the repository is private (see below).
 3. **Reproducible build.** The workflow builds the same commit twice, in separate jobs and directories, and fails if the two executables differ. The toolchain is pinned in `rust-toolchain.toml`, dependencies are locked with `Cargo.lock`, paths are remapped, `/Brepro` makes the PE header deterministic, and `SOURCE_DATE_EPOCH` is set from the tag's commit.
 
-The installer checks (1) always, and (2) unless you pass `-SkipAttestation`: it refuses to install when the GitHub CLI is missing or signed out, or when an executable (or `SOURCE_COMMIT`) has no attestation from this repository's `.github/workflows/release.yml` for the release tag and commit. It also checks that the Mod it adds from the release tag is at the commit in `SOURCE_COMMIT`. You can check everything by hand as described below.
+The installer checks (1) always, and (2) unless you pass `-SkipAttestation`: it refuses to install when the GitHub CLI is missing or signed out, or when an executable (or `SOURCE_COMMIT`) has no attestation from this repository's `.github/workflows/release.yml` for the release tag and commit. It also checks that the Mod it adds from the release tag is at the commit in `SOURCE_COMMIT`.
+
+`quayflow update` checks (1) always. It checks (2) only when the GitHub CLI is installed and signed in, and then only that the executables were attested for this repository (not the workflow, tag or commit); otherwise it reports that the attestation was not checked and continues. It does not check the Mod against `SOURCE_COMMIT`. For the full checks, run the installer for the new version (`-Version vX.Y.Z`). You can check everything by hand as described below.
 
 ## Check the hashes by hand
 
 ```powershell
-$v = 'v0.1.0'
+$v = 'v0.1.3'
 $base = "https://github.com/minhdaohuu/quayflow/releases/download/$v"
 foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
     try { Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f } catch { "$f is not in this release" }   # v0.1.0 has no SOURCE_COMMIT
@@ -62,7 +64,7 @@ On Windows with Visual Studio Build Tools (MSVC) and rustup:
 
 ```powershell
 git clone https://github.com/minhdaohuu/quayflow; cd quayflow
-git checkout v0.1.0
+git checkout v0.1.3
 rustup toolchain install          # installs the version pinned in rust-toolchain.toml
 $env:SOURCE_DATE_EPOCH = git log -1 --format=%ct
 $env:CARGO_INCREMENTAL = '0'
@@ -79,7 +81,7 @@ The workflow proves that two builds on GitHub's Windows runner are identical. A 
 
 Quayflow v0.1 executables are **not Authenticode-signed**. This is common for open-source tools. A code-signing certificate costs money and needs a verified legal entity. The integrity properties above give a stronger link between the binary and its source: an Authenticode signature identifies who signed a file, but not what source it was built from. Signing can be added later, for example through SignPath's free program for open-source projects, without other changes.
 
-`quayflow status` and the `/quay` Settings tab show the build's version, its SHA-256, and "not code-signed; provenance-attested".
+`quayflow status` and the `/quay` pane show the build's version, its SHA-256, and how to verify it ("not code-signed; verify with the release's SHA256SUMS"). While the repository is private releases are not attested; check the hash as above.
 
 ## Windows protections and Quayflow
 

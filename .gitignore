@@ -6,3 +6,4 @@ node_modules/
 .DS_Store
 mod/host-types/
 .claude/
+CLAUDE.local.md

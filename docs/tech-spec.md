@@ -1,6 +1,6 @@
 # Quayflow v0.1 technical specification
 
-> Scope: this specification describes the Windows MVP. Quayflow targets all platforms Claude Code runs on; platform-specific parts (DPAPI vault, Windows paths and locks, PowerShell integration, installer) are isolated so that macOS and Linux can provide their own. See [requirements.md](requirements.md#platform-scope).
+> Scope: this specification describes the Windows MVP as of v0.1.3. Quayflow targets all platforms Claude Code runs on; platform-specific parts (DPAPI vault, Windows paths and locks, PowerShell integration, installer) are isolated so that macOS and Linux can provide their own. See [requirements.md](requirements.md#platform-scope).
 
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
@@ -16,13 +16,18 @@ Companion to [requirements.md](requirements.md). This file holds the engineering
 
 ## 2. Data folder `%LOCALAPPDATA%\Quayflow`
 
+Tests can move the whole folder with `QUAYFLOW_HOME`.
+
 | Path | Content |
 |---|---|
+| `bin\` | `quayflow.exe` and `quayflow-bg.exe` as installed |
+| `shell\` | `Quayflow.psm1` written by `quayflow shell install` |
+| `update\` | Temporary download folder of `quayflow update`; removed after each run |
 | `config.json` | `qf_model::Config` (accounts metadata, groups, projects, tuning, consents, managed-login override setting). No credentials |
 | `vault\<account-id>.dpapi` | Base64 of a DPAPI blob (CurrentUser, entropy `quayflow-vault-v1`, `CRYPTPROTECT_UI_FORBIDDEN`) of `{"oauth": <claudeAiOauth>, "account": <oauthAccount>}` |
 | `backups\unknown-<hash>-<ts>.dpapi` | Protected backup of an unknown live login taken before a manual switch |
 | `observations.json` | Last usage observation per account with timestamps, and poll schedule state |
-| `journal.jsonl` | Durable journal (switches, recovery decisions, policy overrides, unresolved operations); fsync before a transition write |
+| `journal.jsonl` | Durable journal (switches, recovery decisions, policy overrides, unresolved operations); fsync before a transition write. Read by `quayflow last` (section 7) |
 | `logs\quayflow-YYYYMMDD.jsonl` | Sanitized structured log; 7 days, 20 MB per day cap |
 | `engine.json` | `{port, token, pid, protocol, version, startedAt}` for the running engine |
 | `engine.lock` | Single-instance lock: holds the engine's PID and stays open without write sharing for the engine's lifetime; a sharing violation means another engine runs, and the OS releases it when a crashed engine exits |
@@ -61,16 +66,23 @@ PoC data in `%USERPROFILE%\.quayflow-poc` is imported once with `quayflow migrat
 - Governing groups of an environment: the groups that the running sessions' projects resolve to (FR-05); the default group when no session runs. Candidates must be members of every governing group. Effective mode: the most restrictive (manual < suggest < automatic). Threshold: the lowest; margin: the largest; home: only when all governing groups name the same Preferred account.
 - Binding window: the fullest of 5 h, 7 d and the per-model weekly window matching the session's model (all per-model windows when the model is unknown).
 - Freshness: live account 5 min, idle accounts 60 min (B2: an idle observation is never treated as guaranteed capacity; its age is shown).
+- Eligibility explanation per account (`Exclusion`, in this order): live; not in group or group conflict (naming the session); managed login; health (refresh rejected, vault error); plan cannot serve the model; no observation or stale; at its limit (binding >= `hardLimitPct`, 99%: "at its limit (100% 7d)"); no room to gain (binding above threshold - margin). An account that passes all of them is eligible.
 - Proactive trigger: live binding >= threshold; candidate binding <= threshold - margin; cooldown 5 min between proactive switches.
 - Ranking: lowest binding first; among candidates within 10 points of the best, rank order Preferred < Normal < Backup decides; ties by binding.
 - Pin: a manual switch pins until unpin, binding reset of the pinned account, or 2 h; released at 98% of a window.
 - Return home: live != home, home fresh and <= threshold - margin, not pinned, cooldown passed.
 - Hard limit: confirmed when the session's own rate limit (or a fresh engine observation) is >= 99%. Generic errors never switch.
-- Recovery target: eligible member with the most remaining allowance below 99%; otherwise the soonest-available account (availability = latest reset among its exhausted windows; unknown reset times are not ranked). Concurrent failures within 30 s retry on the account already switched to, if it is still live.
+- Recovery target: eligible member with the most remaining allowance below 99%; otherwise the soonest-available account (availability = latest reset among its exhausted windows that apply to the session's model; unknown reset times are not ranked). The soonest account is chosen only when it opens before the live account's own known reset; otherwise nothing is switched and Claude's own wait applies. Concurrent failures within 30 s retry on the account already switched to, if it is still live.
+- All accounts exhausted: switch to the soonest-available account (Automatic mode only) with **no retry** and no hold; Claude's own result for that request stands. A request is recovered at most once, and a session's next recovery needs task progress since the previous one.
+- Each recovery decision is journaled as `recovery.decision` with `session`, `from` (the account the failed request used), `retry`, `switched`, `to`, `why` and `availableAt` (when every account is exhausted: when the chosen account becomes available). `failure.shape` records the failed request's rate limits.
 - `model_not_found` (or a model-unavailable error) on the first request after a switch marks the model unavailable for that account and switches back; that is the incident's single recovery. An authentication failure (`auth`) right after a switch sets the account aside (refresh rejected) and switches back the same way.
 - One login is never live in two environments at once (both clients would refresh the same token); such a switch is refused.
 
-**Idle-account refresh (owner decision, 2026-11-07):** an idle account's access token expires after some hours, so the engine refreshes its saved copy (`Engine::refresh_idle`): `POST https://platform.claude.com/v1/oauth/token` with `grant_type=refresh_token`, Claude Code's public client id and the login's own scopes. It runs under `cred_lock` (the lock every switch holds while writing), only when no environment's login files hold the same refresh token (read from disk, any unreadable file skips the refresh), and stores the result before use; the switch reads the saved login again under that lock. `invalid_grant` or 401/403 sets the account to `refresh_rejected`; other failures leave it unchanged and it shows no usage until a later poll succeeds. The live login is never refreshed by Quayflow.
+**Headless contract (owner requirement):** Quayflow never changes the stdout, stderr or exit code of `claude -p`. The Mod prints nothing in a headless run and never asks a question. Recovery in a job happens only in Automatic mode, and only as one switch and at most one retry of the failed request in the same process. A job learns afterwards what Quayflow did with `quayflow last --session <id>` (section 7).
+
+**Usage polling (`qf_provider::Schedule`, defaults in `qf_model::Tuning`):** live account every 60 s (`livePollS`), idle accounts every 600 s (`idlePollS`); the minimum outside simulation is 30 s live and 60 s idle. A 429 from the usage endpoint backs off by `Retry-After` or by doubling from 2 min, at most 15 min (`backoffMaxS`), and puts the account on a slower pace for 1 hour: the live account is then read every 2 min (twice `livePollS`), because the endpoint's budget is per login and shared with Claude Code. An expired idle token that could not be refreshed is tried again after 10 min; other errors after `livePollS`. A forced read (`POST /v1/poll`, a refresh from `/quay`) does not cut a backoff or the slower pace short. A single 429 is logged as `info`; 429s in a row (a backoff past its first doubling) and other errors as `warn`. After an engine restart the first read of each account waits at least 1 min after its last observation. Accounts with a rejected refresh token are not polled.
+
+**Idle-account refresh (owner decision, 2026-11-07):** an idle account's access token expires after some hours, so the engine refreshes its saved copy (`Engine::refresh_idle`): `POST https://platform.claude.com/v1/oauth/token` with `grant_type=refresh_token`, Claude Code's public client id and the login's own scopes. It runs under `cred_lock` (the lock every switch holds while writing), only when no environment's login files hold the same refresh token (read from disk, any unreadable file skips the refresh), and stores the result before use; the switch reads the saved login again under that lock. `invalid_grant` or 401/403 sets the account to `refresh_rejected` (a notice asks for a new sign-in; the account is no longer polled or a candidate); a refreshed login that cannot be stored sets `vault_error`; other failures leave it unchanged and it shows no usage until a later poll succeeds. The journal records `login.refreshed` or `login.refresh_rejected` with the account id only. The live login is never refreshed by Quayflow.
 
 ## 6. API v1
 
@@ -80,12 +92,12 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 |---|---|---|
 | `POST /v1/hello` | `HelloRequest` | `HelloResponse` (protocol 1; accepted `[1]`) |
 | `GET /v1/state` | `?sessionId=&cwd=` | `StateView` |
-| `GET /v1/events` | `?since=<seq>&wait=<s, max 25>` | `EventsResponse` (long-poll) |
+| `GET /v1/events` | `?since=<seq>&wait=<s, max 25>` | `EventsResponse` (long-poll; past a bounded number of open long-polls it answers at once) |
 | `POST /v1/onboarding` | `{"consents": {"engineStart": true, "credentialStorage": true, "terms": true, "signinStartup": false}, "complete": true}` | `OkResponse` |
-| `POST /v1/accounts/register` | `{"label", "group", "env"?}` (current live login) | `AccountView` or error |
+| `POST /v1/accounts/register` | `{"label", "group", "env"?, "acceptDisclosure"?}` (current live login) | `AccountView` (with `note` when relevant) or error |
 | `POST /v1/accounts/signin/start` | `{"reauth"?: accountId}` | `SigninStatus` (opens a new console window running `claude auth login`) |
 | `GET /v1/accounts/signin/status` | `?id=` | `SigninStatus` |
-| `POST /v1/accounts/signin/confirm` | `{"id", "label", "group", "asNew"?}` (`asNew`: a reauthentication that returned another identity is registered as its own account) | `AccountView` |
+| `POST /v1/accounts/signin/confirm` | `{"id", "label", "group", "acceptDisclosure"?, "asNew"?}` (`asNew`: a reauthentication that returned another identity is registered as its own account) | `OkResponse` |
 | `POST /v1/accounts/signin/cancel` | `{"id"}` | `OkResponse` |
 | `POST /v1/accounts/remove` | `{"account"}` | `OkResponse` (refused while live) |
 | `POST /v1/accounts/label` | `{"account", "label"}` | `OkResponse` |
@@ -99,11 +111,11 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `POST /v1/projects/assign` / `unassign` | `{"path", "group"}` / `{"path"}` | `OkResponse` |
 | `POST /v1/switch` | `SwitchRequest` (manual; pins) | `SwitchResponse` |
 | `POST /v1/accept` | `{"sessionId"?, "env"?}` | `SwitchResponse` |
-| `POST /v1/transition/cancel` | `{"id"}` | `OkResponse` (`message` "already started" after the write) |
+| `POST /v1/transition/cancel` | `{"id"}` | `{"ok", "message", "started"}` (`started` true when the write had already begun) |
 | `POST /v1/unpin` | `{"env"?}` | `OkResponse` |
 | `POST /v1/step` | `StepReport` | `StepResponse` |
 | `POST /v1/adoption` | `AdoptionReport` | `OkResponse` |
-| `POST /v1/recover` | `RecoverRequest` | `RecoverResponse` |
+| `POST /v1/recover` | `RecoverRequest` | `RecoverResponse` (`retry`, `switched`, `to`, `why`, `availableAt` when every account is exhausted); journaled as `recovery.decision` |
 | `POST /v1/failure` | `FailureShape` | `OkResponse` |
 | `POST /v1/unknown` | `{"env"?, "action": "ignore"}` | `OkResponse` |
 | `GET /v1/lanes` | | `[LaneView]` |
@@ -112,7 +124,7 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `POST /v1/handoff/open` | `{"sessionId", "toEnv"}` | `HandoffResponse` (new window launched) |
 | `POST /v1/handoff/replace` | `{"sessionId", "toEnv"}` | `HandoffResponse` (claim written for the PowerShell hook; the user then exits the session) |
 | `POST /v1/engine` | `{"action": "pause|resume|stop"}` | `OkResponse` |
-| `GET /v1/policy` | | `[{"env", "managed": ManagedLogin}]` plus `dOrg` |
+| `GET /v1/policy` | | `{"envs": [{"env", "managed": ManagedLogin}], "dOrg"}` |
 | `POST /v1/policy/dorg` | `{"enable": bool, "confirmOrg": "<org hash>", "acknowledge": "<typed text>"}` | `OkResponse` (setting recorded only; no bypass path in this build) |
 | `GET /v1/compat` / `POST /v1/compat/check` | | `[CompatRecord]` |
 | `POST /v1/report` | `{}` | `ReportResponse` (saved locally for review) |
@@ -124,7 +136,7 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `GET /v1/operations` | `?limit=` | `[OperationView]` (recent transitions with their sanitized journal records) |
 | `POST /v1/pin` | `{"env"?}` | `Pin` (pins the live account without a switch; same release rules as a manual switch) |
 | `POST /v1/tuning` | `{"cooldownS"?: 0-3600, "pinMinutes"?: 5-1440}` | `OkResponse` (applies to every group) |
-| `POST /v1/poll` | `{}` | `OkResponse` (observe every account now, respecting backoff) |
+| `POST /v1/poll` | `{}` | `OkResponse` (observe every due account now; an account in a 429 backoff or on the slower pace after one waits for its next read) |
 | `POST /v1/migrate-poc` | `{"group", "acceptDisclosure"}` | `OkResponse` (imports the PoC vault) |
 | `POST /v1/canary/start` / `GET /v1/canary` / `POST /v1/canary/stop` | | Manual live canary recording (consent `liveCanary`); while active, `/v1/step` asks for identity on every request |
 | `POST /v1/canary/switch` | `{"to"}` | `SwitchResponse` (switch marked `canary`, no pin) |
@@ -133,6 +145,8 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 Refusals that need an explicit user decision use HTTP 409 with `code` `needs_disclosure` (mixed-identity group; resend with `acceptDisclosure: true`) or `needs_approval` (Automatic mode; resend with `approveAutomatic: true`).
 
 The Mod's request hook calls `/v1/step` after every main or subagent request; when the response says `verify`, it reads the identity its request used (`$.session.authorize()` handle + profile endpoint, hashed) and posts `/v1/adoption`.
+
+Mod connection: the session's first handshake (`/v1/hello`) is tried up to three times (about 8 s at most) only while something answers or a try times out; a refused connection or a missing `engine.json` runs `quayflow start --if-consented` at once, at most once per session. After `/reload-plugins` the last link is kept until the new handshake answers. After a resume or `/clear` (a new session id without a session start) the Mod carries the link over and says hello under the new id. The pane and every `/quay` command connect when no handshake is under way, without starting the engine. `/quay` refuses an option it does not know and names the nearest known one.
 
 ## 7. CLI
 
@@ -143,29 +157,35 @@ serve                          run the engine (foreground; used by start)
 start [--if-consented]         start the engine without a window; prints {"state":"running|started|failed|no_consent|stopped_by_user"}
 stop | pause | resume          intentional stop; pause or resume automation
 status [--json]                summary of environments, accounts and usage
+last --session <id> [--json]   what Quayflow did for one Claude session (see below)
 onboard                        interactive first-use consents (terminal)
-register --label L --group G   register the current login (asks for consent)
-add --label L --group G        add another account through native sign-in in a new window
+register --label L --group G [--accept-disclosure]   register the current login (asks for consent)
+add --label L --group G [--accept-disclosure]        add another account through native sign-in in a new window
 reauth <account>               sign in again for a set-aside account
-remove <account> | label <account> <new>
-use <account> [--idle-wait] | accept | unpin
+remove <account> [--yes] | label <account> <new>
+use <account> [--idle-wait] [--env E] | accept | unpin
 mode <manual|suggest|automatic> [--group G] [--approve]
 group list | create <G> | delete <G> | add <G> <account..> [--accept-disclosure] | remove <G> <account..>
       | preferred <G> <account|none> | rank <G> <account> <rank> | default <G> | tuning <G> [--threshold N] [--margin N]
 project assign <path> <G> | project unassign <path> | project list
+unknown ignore [--env E]       acknowledge an unregistered live login (automation stays paused)
 canary [--live]                static check now; --live runs the synthetic adoption job (consent)
 lanes list | create <name> | delete <name> | check <name>
 handoff open|replace|prepare --session <id> --to <env>
 shell install | uninstall      PowerShell prompt hook (PowerShell 7 and 5.1 profiles)
-shell claim                    used by the prompt hook: print and consume this terminal's pending replacement
+shell claim --pid N            used by the prompt hook: print and consume this terminal's pending replacement
 policy [--json]                managed login enforcement per environment
 report [--preview]             build a local support report for review (--preview prints it and saves nothing)
-migrate-poc                    import the PoC vault (~/.quayflow-poc)
-update [--check]               engine and Mod as a matched pair (hash-verified)
+migrate-poc [--group G] [--accept-disclosure]   import the PoC vault (~/.quayflow-poc)
+update [--check] [--version vX.Y.Z] [--skip-attestation]   engine and Mod as a matched pair (hash-verified)
 uninstall [--delete-vault] [--delete-logs] [--delete-data] [--yes]   each deletion separate and off by default; --delete-data = vault, logs, settings and lanes
-consent <engine-start|signin-startup|credential-storage|terms|live-canary> <on|off>
+consent <engine-start|signin-startup|credential-storage|terms|prompt-hook|live-canary> <on|off>
 version
 ```
+
+`quayflow last --session <id> [--json]` reads `journal.jsonl` and `config.json` directly, so it works with the engine stopped. The session id is the `session_id` of Claude's JSON output. It reports the latest `recovery.decision` for that session and the `failure.shape` before it: `outcome` is `recovered` (switched and retried once, and the retry did not fail), `all_exhausted` (switched to the account available soonest, no retry), `not_recovered` (with the reason in `why`, including a retry that failed too) or `no_limit` (nothing recorded); `limit` names the account, window, percentage and reset that was hit; `switchedTo`, `retried`, `at`; and `availableAt`, the earliest time worth running again (the soonest account's availability, or the reset of the limit that was hit; empty after a recovery). Exit code 0 when something is recorded, 3 when nothing is.
+
+`update` always checks SHA-256 hashes against `SHA256SUMS`. It verifies attestations (`gh attestation verify --repo`) only when the GitHub CLI is installed and signed in; otherwise it says that the attestation was not checked and continues. It then moves the Mod to the release tag through `claude plugin marketplace` without the `SOURCE_COMMIT` check the installer makes.
 
 ## 8. Early checks
 
@@ -173,13 +193,15 @@ version
 |---|---|---|
 | C1 Mod imports sibling modules | See `mod/quayflow/README.md` (recorded by the Mod build) | |
 | C2 Pane with tabs, Input and Select | See `mod/quayflow/README.md` | |
-| C3 Claude through lane links | Junctions (`junction` crate, no admin) for folders. Files (`settings.json`, `CLAUDE.md`) are hard links; if Claude replaces a file by rename, the link breaks: `lanes check` detects a broken link and re-links to the newer content. Release condition: confirm with a real lane session (owner-run, `tests/e2e/lanes.ps1`) | Junctions + hard links with repair |
+| C3 Claude through lane links | Junctions (`junction` crate, no admin) for folders. Files (`settings.json`, `CLAUDE.md`) are hard links; if Claude replaces a file by rename, the link breaks: `lanes check` detects a broken link and re-links to the newer content. A real lane session passed on a local build on 2026-11-03 (owner-run, `tests/e2e/real-lanes.ps1`, 8/8) | Junctions + hard links with repair |
 | C4 PoC DPAPI blobs decrypt in Rust | The PoC stored `base64(ProtectedData.Protect(utf8 JSON, entropy, CurrentUser))`; Rust `CryptUnprotectData` with the same entropy reads it (unit test round-trips the format; owner runs `quayflow migrate-poc`) | Migration supported |
 | C5 Native sign-in in a temporary environment | `claude auth login` exists in 2.1.316. The engine opens it in a new console window (`CREATE_NEW_CONSOLE`) with `CLAUDE_CONFIG_DIR` set and detects completion by polling the temporary environment for `claudeAiOauth` + `oauthAccount`; the exact command is shown as a fallback | New window + detection |
 
 ## 9. Simulation mode (tests only)
 
-`QUAYFLOW_SIM_API=http://127.0.0.1:<port>` sends the usage and profile calls to a fake server instead of `https://api.anthropic.com`. Only a loopback HTTP origin is accepted (`127.0.0.1` or `localhost`, a port, no path); any other value is ignored, so the setting cannot send a login token to another host. In simulation mode polling intervals below the normal 30 s / 60 s minimum are allowed, and `quayflow status` and `status --json` (`engine.simulation`) show that the mode is on. `QUAYFLOW_OFFLINE` disables these calls and update downloads altogether. The fake server is `tests/sim/fake_api.py`; `tests/e2e/sim-usage.ps1` drives it.
+`QUAYFLOW_SIM_API=http://127.0.0.1:<port>` sends the usage and profile calls (instead of `https://api.anthropic.com`) and the idle-account token refresh (instead of `https://platform.claude.com`) to a fake server. Only a loopback HTTP origin is accepted (`127.0.0.1` or `localhost`, a port, no path); any other value is ignored, so the setting cannot send a login or refresh token to another host. In simulation mode polling intervals below the normal 30 s / 60 s minimum are allowed, and `quayflow status` and `status --json` (`engine.simulation`) show that the mode is on. `QUAYFLOW_OFFLINE` disables these calls and update downloads altogether. The fake server is `tests/sim/fake_api.py` (usage, profile and token endpoints); `tests/e2e/sim-usage.ps1` drives it.
+
+`QUAYFLOW_SIM_LIMIT=1` in the Claude process turns on the Mod's simulated-limit hook: `simulate-limit.json` in the data folder (`{"atStep": n}`) makes the first main-agent request with index >= n fail as a usage limit without being sent, once. Without the variable the file is ignored. `tests/e2e/real-switching.ps1` case R1 uses it.
 
 ## 10. Build notes
 
