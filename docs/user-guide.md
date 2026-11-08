@@ -139,12 +139,12 @@ Each group has a mode. When several groups govern an environment, the most restr
 | Mode | Interactive sessions | Headless jobs (`claude -p`) |
 |---|---|---|
 | Manual | Only switches you ask for | No switching |
-| **Suggest** (default) | Shows a suggested account in the status line; `/quay accept` switches | Records a suggestion; no prompt, no pause, no switch |
-| Automatic (opt-in per group) | Switches by itself under the group's rules | Switches, returns home and recovers from usage limits |
+| Suggest (groups you create start here) | Shows a suggested account in the status line; `/quay accept` switches | Records a suggestion; no prompt, no pause, no switch |
+| **Automatic** (the `Default` group starts here) | Switches by itself under the group's rules | Switches, returns home and recovers from usage limits |
 
 **Unattended headless jobs need Automatic mode on their group.** In Suggest mode a headless job never switches, and a usage limit ends or pauses it exactly as Claude would without Quayflow.
 
-Turning on Automatic needs explicit approval: `quayflow mode automatic --group Default --approve` (or the Groups tab in `/quay`).
+The `Default` group of a new installation starts in Automatic: starting the engine on the welcome screen, which says so, is the approval. An existing configuration keeps its modes. A group you create starts in Suggest, and turning on Automatic for it needs explicit approval once: `quayflow mode automatic --group <G> --approve` (or the Groups tab in `/quay`). To decide each switch yourself, run `quayflow mode suggest --group Default`.
 
 Defaults per group (Groups tab, or `quayflow group tuning`): proactive threshold 85% of the account's binding usage window; a candidate must be at least 10 points below the threshold. For every group (`/quay` > Settings > Tuning): 5 minutes between proactive switches. The binding window is the fullest of the five-hour, seven-day and per-model weekly windows. Quayflow uses only fresh usage readings: at most 5 minutes old for the live account and 60 minutes for idle ones. A missing or stale reading is never treated as zero and never triggers an automatic switch.
 
@@ -223,7 +223,7 @@ The same account used on several machines shares one allowance and one usage-rea
 
 Quayflow works with unattended `claude -p` jobs (scheduled tasks, scripts, agent pipelines) on your own machine, with no change to how you run them.
 
-**Setup.** Put the group your jobs' projects belong to in **Automatic** (`quayflow mode automatic --group <G> --approve`, a one-time approval). In Suggest mode nobody is there to accept a suggestion, so a job that hits a limit simply ends with Claude's own result.
+**Setup.** The group your jobs' projects belong to must be in **Automatic**. The `Default` group starts in it; for a group you created, run `quayflow mode automatic --group <G> --approve` (a one-time approval). In Suggest mode nobody is there to accept a suggestion, so a job that hits a limit simply ends with Claude's own result.
 
 **Output is never changed.** Quayflow writes nothing to a headless run's stdout or stderr and never changes its exit code. What a job sees:
 

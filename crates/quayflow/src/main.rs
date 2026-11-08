@@ -955,8 +955,9 @@ fn onboard(dd: &DataDir) -> i32 {
   Claude refreshes the live login; Quayflow refreshes only the saved copy of an idle account
   (so its usage stays readable) and sends tokens nowhere except Anthropic's own endpoints.
 - A switch moves every session that uses the same Claude login, at each one's next request.
-- Suggest mode is the default. Unattended headless jobs (claude -p) only switch in Automatic mode,
-  which you enable per group.
+- The Default group starts in Automatic mode: its accounts switch by themselves, including in
+  unattended headless jobs (claude -p). Groups you create start in Suggest; change a group's
+  mode with `quayflow mode`.
 - You are responsible for complying with the provider's terms and your organization's rules.
   Quayflow is not affiliated with or endorsed by Anthropic.
 "

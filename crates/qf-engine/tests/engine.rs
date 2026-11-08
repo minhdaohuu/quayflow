@@ -133,9 +133,9 @@ fn register_requires_consent_and_group() {
     // Duplicate is not extra capacity.
     let (_, note) = e.register(None, "again", "Default", false).unwrap();
     assert!(note.unwrap().contains("already registered"));
-    // Registration never switches and never enables Automatic.
+    // Registration never switches and never changes a mode (a new Default group starts in Automatic).
     assert_eq!(live(&w.env).as_deref(), Some("uuid-a"));
-    assert_eq!(e.lock().config.groups[0].mode, Mode::Suggest);
+    assert_eq!(e.lock().config.groups[0].mode, Mode::Automatic);
     // Vault holds no plaintext.
     let vault_text = std::fs::read_to_string(w.dd.vault().join(format!("{}.{}", id("uuid-a"), qf_vault::EXT))).unwrap();
     assert!(!vault_text.contains("sk-ant"));
@@ -414,6 +414,7 @@ fn recovery_automatic_switches_once_and_retries_once() {
 fn recovery_refuses_unconfirmed_limits_and_suggest_mode_only_records() {
     let w = world();
     let e = engine_with_accounts(&w);
+    set_mode(&e, "suggest");
     set_obs(&e, "uuid-personal", 10.0, None);
     // Generic error: not a usage limit.
     let r = e.recover(&RecoverRequest {
@@ -590,6 +591,7 @@ fn group_conflict_names_the_blocking_session() {
 fn proactive_suggest_then_accept_without_pin() {
     let w = world();
     let e = engine_with_accounts(&w);
+    set_mode(&e, "suggest");
     set_obs(&e, "uuid-org", 90.0, None);
     set_obs(&e, "uuid-personal", 20.0, None);
     e.decide(&EnvId::default_env());
@@ -1393,7 +1395,7 @@ fn mode_without_a_group_uses_the_configured_default_group() {
     e.group_op("mode", &json!({"mode": "manual"})).unwrap();
     let inner = e.lock();
     assert_eq!(inner.config.group("Work").unwrap().mode, Mode::Manual);
-    assert_eq!(inner.config.group("Default").unwrap().mode, Mode::Suggest);
+    assert_eq!(inner.config.group("Default").unwrap().mode, Mode::Automatic);
 }
 
 #[test]

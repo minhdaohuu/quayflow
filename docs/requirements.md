@@ -27,7 +27,7 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. I
 
 | ID | Requirement |
 |---|---|
-| FR-07 | Modes: Manual, Suggest (default) and Automatic (explicitly approved per group). Unattended headless jobs switch only in Automatic mode. A manual switch pins the account until unpinned, its window resets, or a period passes; near exhaustion normal behavior resumes. |
+| FR-07 | Modes: Manual, Suggest and Automatic. The Default group of a new configuration starts in Automatic (approved by starting the engine on the welcome screen, which says so); a group the user creates starts in Suggest, and Automatic for it needs explicit approval. Unattended headless jobs switch only in Automatic mode. A manual switch pins the account until unpinned, its window resets, or a period passes; near exhaustion normal behavior resumes. |
 | FR-08 | Observe every account's 5-hour, 7-day and per-model windows on a per-account schedule with backoff, paced so that Quayflow does not use up the usage endpoint's per-login budget that Claude Code shares; keep observations with their age; stale or missing data never counts as zero. Default threshold 85% of the binding window. |
 | FR-09 | Eligibility first (group, managed login, sessions, sign-in health, plan compatibility, freshness), then remaining allowance with optional ranks. Return to the Preferred (home) account when it has room again. Cooldown and margin apply. Explain choices with timestamps. |
 

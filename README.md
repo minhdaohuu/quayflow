@@ -40,7 +40,7 @@ Three things set it apart:
 
 - **In place.** No wrapper, no launcher, no proxy. You keep typing `claude` and `claude -p`. Quayflow swaps the login under Claude's own locks between requests and then checks that the next request really used the new account.
 - **Built for unattended work.** A headless run's stdout, stderr and exit code are always Claude's own. Nothing prompts, nothing hangs, at most one retry, never a replay.
-- **You stay in control.** Groups say which accounts may serve which projects. Automatic is approved once per group; until then Quayflow only suggests (Suggest mode) or does nothing (Manual). Fresh usage only: a reading that is out of date never counts as room.
+- **You stay in control.** Groups say which accounts may serve which projects. The `Default` group starts in Automatic; a group you create starts in Suggest and needs a one-time approval for Automatic. Suggest only suggests and Manual does nothing on its own. Fresh usage only: a reading that is out of date never counts as room.
 
 ## Same job, two outcomes
 
@@ -133,15 +133,7 @@ Details: [acceptance results](docs/acceptance.md).
 2. Type `/quay`. The welcome screen asks you to start the engine and to accept the terms reminder.
 3. **Register login**: register the login you are signed in with, and allow Quayflow to keep it in its vault. It joins the `Default` group.
 4. **Add account.** Pick a group and choose **Sign in with Claude**: a window opens with Claude's own sign-in. Afterwards Quayflow suggests a name from the account's e-mail address; press Enter to save. Quayflow never sees a password or asks for a token.
-5. **Turn on Automatic** for the group. Quayflow asks you to approve it once:
-
-   ```text
-   /quay mode automatic
-   ```
-
-   (or `quayflow mode automatic --group Default --approve` from a terminal or a script.)
-
-6. Keep working. The status line shows the live account and its usage:
+5. Keep working. The `Default` group starts in **Automatic** mode, so there is nothing to turn on. (A group you create starts in Suggest; `/quay mode automatic <group>` turns on Automatic after a one-time approval.) The status line shows the live account and its usage:
 
    ```text
    Quayflow · work-01 · Automatic · 5h 62% · 7d 40%
@@ -153,7 +145,7 @@ Details: [acceptance results](docs/acceptance.md).
    ● quayflow: Quayflow: Switched to work-02 (usage-limit recovery). Each session uses it from its next request; …
    ```
 
-Prefer to decide each time? Leave the group in Suggest, the default: the status line then says `| work-02 suggested` and `/quay accept` switches.
+Prefer to decide each time? Put the group in Suggest (`/quay mode suggest`): the status line then says `| work-02 suggested` and `/quay accept` switches.
 
 Everything in the pane also works from the command line: `quayflow status`, `quayflow use <account>`, `quayflow group ...`. See the [user guide](docs/user-guide.md).
 
@@ -191,7 +183,7 @@ Session a04910ad-30f6-4c2a-8bd8-94a317333a02: not recovered
 <details>
 <summary><b>Recipes: nightly jobs and self-healing agent loops</b></summary>
 
-Every recipe assumes the group is in Automatic mode (`quayflow mode automatic --group Default --approve`).
+Every recipe assumes the group is in Automatic mode (the `Default` group starts in it; for another group, `quayflow mode automatic --group <G> --approve`).
 
 A nightly job (cron):
 

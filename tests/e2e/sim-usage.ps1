@@ -111,6 +111,8 @@ try {
 
     Set-Login 'uuid-a' $TA
     Qf start | Out-Null
+    # A new Default group starts in Automatic; the Suggest checks below need Suggest.
+    Qf mode suggest --group Default | Out-Null
     $st = Qf status
     Check 'simulation mode is announced in status' ($st -match 'SIMULATION MODE') ''
     $r = Qf register --label a --group Default

@@ -153,12 +153,12 @@ sequenceDiagram
     participant F as Login files
 
     E->>E: Account A reaches 85% of its binding window
-    alt Suggest mode (default)
+    alt Suggest mode (groups you create)
         E-->>M: Candidate: account B (same group)
         M-->>You: Status line shows the suggestion
         You->>M: /quay accept
         M->>E: Switch to B
-    else Automatic mode (approved per group)
+    else Automatic mode (Default group; others approved per group)
         E->>E: Pick B by eligibility, then remaining allowance
     end
     Note over C: A request in flight finishes on A

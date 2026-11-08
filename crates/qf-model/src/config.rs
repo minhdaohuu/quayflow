@@ -246,8 +246,13 @@ pub struct Config {
 fn d_version() -> u32 {
     1
 }
+/// A new configuration's Default group starts in Automatic mode, approved: installing
+/// Quayflow is the approval. Groups created later start in Suggest.
 fn d_groups() -> Vec<Group> {
-    vec![Group::new(DEFAULT_GROUP)]
+    let mut g = Group::new(DEFAULT_GROUP);
+    g.mode = Mode::Automatic;
+    g.automatic_approved_at = Some(crate::time::now_ms());
+    vec![g]
 }
 fn d_default_group() -> String {
     DEFAULT_GROUP.into()
@@ -463,12 +468,28 @@ mod tests {
     }
 
     #[test]
+    fn new_default_group_is_automatic_and_other_groups_suggest() {
+        let c = Config::default();
+        assert_eq!(c.groups[0].name, DEFAULT_GROUP);
+        assert_eq!(c.groups[0].mode, Mode::Automatic);
+        assert!(c.groups[0].automatic_approved_at.is_some());
+        assert!(c.validate().is_ok());
+        let min: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(min.groups[0].mode, Mode::Automatic);
+        assert_eq!(Group::new("Work").mode, Mode::Suggest);
+        // A saved Default group keeps its mode: existing configurations are not changed.
+        let saved: Config = serde_json::from_str(r#"{"groups":[{"name":"Default","mode":"suggest"}]}"#).unwrap();
+        assert_eq!(saved.groups[0].mode, Mode::Suggest);
+    }
+
+    #[test]
     fn rejects_invalid() {
         let mut c = Config::default();
         c.groups[0].threshold = 0.0;
         assert!(c.validate().unwrap_err().contains("threshold"));
         let mut c = Config::default();
-        c.groups[0].mode = Mode::Automatic;
+        c.groups.push(Group::new("Work"));
+        c.groups[1].mode = Mode::Automatic;
         assert!(c.validate().unwrap_err().contains("approval"));
         let mut c = Config::default();
         c.tuning.live_poll_s = 5;

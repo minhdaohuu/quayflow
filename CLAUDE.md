@@ -29,7 +29,7 @@ Read `CHANGELOG.md` first for what changed recently; it is kept accurate.
 - **Stale is never zero.** A usage reading past its freshness limit is shown as unknown and never counts as room.
 - **The live login is Claude's to refresh.** The engine refreshes only an idle account's saved copy, under `cred_lock` (lock order: `cred_lock`, then the engine lock), and skips it when any environment's login files hold the same refresh token.
 - **Secrets:** tokens never reach logs, the journal, reports, the Mod or state views. Logs and the journal name accounts by id only; labels are scrubbed. CLI output may show labels.
-- **Groups are data approvals.** Automatic mode needs a one-time explicit approval per group; mixed identities need the disclosure.
+- **Groups are data approvals.** A new configuration's Default group starts in Automatic, approved (the welcome screen says so); any other group needs a one-time explicit approval for Automatic; an existing configuration's modes are never changed; mixed identities need the disclosure.
 - **Engine API is loopback-only with a per-run token**; the Mod speaks protocol 1 (`PROTOCOL`), engine accepts current and previous.
 
 ## Build and test

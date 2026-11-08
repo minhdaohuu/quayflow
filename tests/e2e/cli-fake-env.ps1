@@ -89,10 +89,11 @@ try {
     $o = Qf group remove Work a; Check 'group remove' ($script:code -eq 0) $o
 
     # --- modes ---
-    $o = Qf mode automatic --group Default; Check 'automatic without --approve refused' ($script:code -ne 0) "$($script:code) $o"
+    $o = Qf group list; Check 'a new Default group starts in Automatic, a created group in Suggest' (($o -match '(?m)Default.*(?i)automatic') -and ($o -match '(?m)Work.*(?i)suggest')) $o
+    $o = Qf mode automatic --group Work; Check 'automatic without --approve refused' ($script:code -ne 0) "$($script:code) $o"
     $o = Qf mode turbo; Check 'mode bad value refused' ($script:code -ne 0) "$($script:code) $o"
-    $o = Qf mode automatic --group Default --approve; Check 'automatic with approve' ($script:code -eq 0) $o
-    $o = Qf mode suggest --group Default; Check 'back to suggest' ($script:code -eq 0) $o
+    $o = Qf mode automatic --group Work --approve; Check 'automatic with approve' ($script:code -eq 0) $o
+    $o = Qf mode suggest --group Work; Check 'back to suggest' ($script:code -eq 0) $o
 
     # --- projects ---
     $proj = Join-Path $root 'proj'; New-Item -ItemType Directory $proj | Out-Null

@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- A new installation's `Default` group starts in Automatic mode: Quayflow switches its accounts before a usage limit and recovers from one, including in headless jobs (`claude -p`), with no extra step. The welcome screen in `/quay` says so. Groups you create still start in Suggest and need a one-time approval for Automatic. An existing configuration keeps its modes. To decide each switch yourself, run `quayflow mode suggest --group Default`.
+
 ## [0.3.0] - 2026-11-09
 
 Clearer wording in the `/quay` pane, `/quay` commands, the status line and the CLI; the Uninstall screen can delete all data; `quayflow policy` and `quayflow group list` print readable values.
