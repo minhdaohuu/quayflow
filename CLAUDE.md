@@ -1,6 +1,6 @@
 # Quayflow: working notes for Claude
 
-Quayflow switches a Claude Code environment between the user's approved Claude accounts in place: running sessions continue on the new account at their next request. It watches usage, suggests or makes switches, recovers a request that hit a usage limit (one switch, one retry), and is built for unattended `claude -p` jobs. It ships for Windows x64 and Linux x86_64; macOS (Keychain) is built for the next release: switching and simulated-limit recovery pass with real logins (`real-switching.ps1` 13/13); a real limit, lanes and a published release are not tested there yet (never call it Windows-only).
+Quayflow switches a Claude Code environment between the user's approved Claude accounts in place: running sessions continue on the new account at their next request. It watches usage, suggests or makes switches, recovers a request that hit a usage limit (one switch, one retry), and is built for unattended `claude -p` jobs. It ships for Windows x64 and Linux x86_64; macOS (Keychain) is built for the next release: switching and simulated-limit recovery pass with real logins (`real-switching.ps1` 13/13, `real-lanes.ps1` 8/8); a real limit and a published release are not tested there yet (never call it Windows-only).
 
 Read `CHANGELOG.md` first for what changed recently; it is kept accurate.
 

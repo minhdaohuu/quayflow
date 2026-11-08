@@ -569,6 +569,71 @@ mod tests {
         assert_eq!(read_identity(&e).as_deref(), Some("u-a"));
     }
 
+    /// macOS: an environment whose login Claude moved into the Keychain (a lane after its first
+    /// refresh) is read and retired there; other entries of the item are kept, and an item left
+    /// empty is deleted, so deleting a lane leaves no login behind. Throwaway item only.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_environment_is_read_and_retired() {
+        let d = tempfile::tempdir().unwrap();
+        let e = Env::at(qf_model::EnvId("lane".into()), d.path().join("lane"));
+        std::fs::create_dir_all(&e.config_dir).unwrap();
+        let Some(item) = keychain::new_item(&e) else {
+            eprintln!("Keychain turned off; skipped");
+            return;
+        };
+        assert_ne!(item.service, keychain::BASE_SERVICE);
+        struct Cleanup(keychain::Item);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = keychain::delete(&self.0);
+            }
+        }
+        let _c = Cleanup(item.clone());
+        let mut m = Map::new();
+        m.insert(
+            "claudeAiOauth".into(),
+            json!({"accessToken":"A1","refreshToken":"R1","expiresAt":1}),
+        );
+        if keychain::write(&item, &m).is_err() {
+            eprintln!("Keychain not writable; skipped");
+            return;
+        }
+        std::fs::write(
+            &e.claude_json,
+            json!({"oauthAccount": {"accountUuid": "u-a"}}).to_string(),
+        )
+        .unwrap();
+        assert!(matches!(store(&e).unwrap(), Store::Keychain(_)));
+        assert_eq!(read_login(&e).unwrap().unwrap().refresh_token(), Some("R1"));
+        // A switch writes the item and leaves the marker; the item's other entries stay.
+        m.insert("mcpOAuth".into(), json!({"k": 1}));
+        keychain::write(&item, &m).unwrap();
+        let out = swap(&e, &target(), Duration::from_secs(2), |_| Ok(())).unwrap();
+        assert!(out.changed);
+        let found = keychain::find(&item.service).unwrap().unwrap();
+        let now = keychain::read(&found).unwrap().unwrap();
+        assert_eq!(now["claudeAiOauth"]["refreshToken"], "RB");
+        assert_eq!(now["mcpOAuth"]["k"], 1);
+        assert!(e.credentials().exists(), "marker written");
+        // The marker goes only when it is ours (or equals the item) and old enough.
+        assert!(!sweep_marker(&e, MARKER_LIFETIME));
+        assert!(sweep_marker(&e, Duration::ZERO));
+        assert!(!e.credentials().exists());
+        // Retiring keeps the other entries, then deletes the item once nothing is left in it.
+        retire(&e, Duration::from_secs(2)).unwrap();
+        let kept = keychain::read(&keychain::find(&item.service).unwrap().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(kept.get("claudeAiOauth").is_none() && kept.contains_key("mcpOAuth"));
+        let mut only = Map::new();
+        only.insert("claudeAiOauth".into(), json!({"refreshToken": "R2"}));
+        keychain::write(&item, &only).unwrap();
+        retire(&e, Duration::from_secs(2)).unwrap();
+        assert_eq!(keychain::find(&item.service).unwrap(), None, "an empty item is deleted");
+        assert!(!e.credentials().exists(), "no empty login file is created");
+    }
+
     #[test]
     fn fresh_environment_and_retire() {
         let d = tempfile::tempdir().unwrap();
