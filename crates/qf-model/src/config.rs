@@ -408,9 +408,11 @@ impl Config {
         if t.lock_wait_s == 0 || t.lock_wait_s > 60 {
             return Err("lockWaitS must be 1-60".into());
         }
-        // A zero backoff re-polls a rate-limited endpoint on every tick.
-        if !(60..=86_400).contains(&t.backoff_max_s) {
-            return Err("backoffMaxS must be 60-86400".into());
+        // A zero backoff re-polls a rate-limited endpoint on every tick. (The simulation uses
+        // shorter timings, as for polling above.)
+        let min_backoff = if crate::sim::active() { 1 } else { 60 };
+        if !(min_backoff..=86_400).contains(&t.backoff_max_s) {
+            return Err(format!("backoffMaxS must be {min_backoff}-86400"));
         }
         // A reading must be able to stay fresh between two polls.
         if t.live_fresh_s < t.live_poll_s || t.idle_fresh_s < t.idle_poll_s {
