@@ -109,7 +109,7 @@ You need Claude Code. No administrator rights.
 irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1 | iex
 ```
 
-**Linux x86_64** (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later), and **macOS** (Apple silicon and Intel) from v0.1.6:
+**macOS** (Apple silicon and Intel) and **Linux x86_64** (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later), in Terminal:
 
 ```sh
 curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh

@@ -17,6 +17,8 @@ Contents: [Requirements](#requirements) · [Install](#install) · [First use](#f
 
 ## Install
 
+On Windows (PowerShell):
+
 ```powershell
 irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1 | iex
 ```
