@@ -16,7 +16,7 @@ in place: same conversation, same process, no restart, nothing replayed.
 
 [Why](#why-quayflow) · [Contract](#the-contract) · [Install](#install) · [Quick start](#quick-start) · [Headless jobs](#headless-jobs) · [How it works](#how-it-works) · [FAQ](#faq) · [Docs](#documentation)
 
-<img src="assets/screenshots/hero-switch.svg" alt="A Claude Code session: the status line suggests the account personal near the limit, /quay accept switches, and the next request runs on personal in the same session" width="820">
+<img src="assets/screenshots/hero-switch.svg" alt="Claude Code with Quayflow in Automatic mode: a request hits the 5-hour limit of the account work, Quayflow switches to personal and retries it once, and the answer arrives in the same session" width="820">
 
 </div>
 
@@ -29,9 +29,10 @@ If you have more than one Claude subscription, for example a work seat and a per
 
 |  | `/login` by hand | Quayflow |
 |---|---|---|
-| Interactive session near its limit | You notice when a request fails, then sign in again in the browser | The status line suggests the account with room before you hit the wall; `/quay accept` and the next request runs there |
+| Interactive session hits its limit | The request fails; you sign in again in the browser and repeat it | In Automatic mode: the same request is retried once on an account with room, and the answer arrives. You do nothing |
+| Session near its limit | You notice late | Automatic switches before the wall (85% by default); Suggest asks first |
 | Which account to use | You check each one's usage yourself | Fresh usage of every account, side by side; suggestions follow your groups and ranks |
-| `claude -p` job hits the limit | Fails with exit code 1 | In Automatic mode: one switch, one retry, normal answer, exit code 0 |
+| `claude -p` job hits the limit | Fails with exit code 1 | One switch, one retry, normal answer, exit code 0 |
 | Several jobs hit it at once | All fail | One shared switch; each job retries once |
 | Every account is at its limit | Claude's message | The same message and exit code, untouched, plus `quayflow last` telling your script when to run again |
 
@@ -39,7 +40,7 @@ Three things set it apart:
 
 - **In place.** No wrapper, no launcher, no proxy. You keep typing `claude` and `claude -p`. Quayflow swaps the login under Claude's own locks between requests and then checks that the next request really used the new account.
 - **Built for unattended work.** A headless run's stdout, stderr and exit code are always Claude's own. Nothing prompts, nothing hangs, at most one retry, never a replay.
-- **You stay in control.** Groups say which accounts may serve which projects. Suggest is the default; Automatic is opt-in per group. Fresh usage only: a reading that is out of date never counts as room.
+- **You stay in control.** Groups say which accounts may serve which projects. Automatic is approved once per group; until then Quayflow only suggests (Suggest mode) or does nothing (Manual). Fresh usage only: a reading that is out of date never counts as room.
 
 ## Same job, two outcomes
 
@@ -132,19 +133,27 @@ Details: [acceptance results](docs/acceptance.md).
 2. Type `/quay`. The welcome screen asks you to start the engine and to accept the terms reminder.
 3. **Register** the login you are signed in with, and allow Quayflow to keep it in its vault. It joins the `Default` group.
 4. **Add account.** A window opens with Claude's own sign-in. Quayflow never sees a password or asks for a token.
-5. Keep working. The status line shows the live account and its usage. Near the threshold (85%) it suggests the other account:
+5. **Turn on Automatic** for the group. Quayflow asks you to approve it once:
 
    ```text
-   Quayflow · work · Suggest · 5h 91% · 7d 40% | personal suggested
+   /quay mode automatic
    ```
 
-   Type `/quay accept`. Your next message runs on `personal`.
+   (or `quayflow mode automatic --group Default --approve` from a terminal or a script.)
 
-For unattended jobs, let Quayflow switch by itself in that group:
+6. Keep working. The status line shows the live account and its usage:
 
-```sh
-quayflow mode automatic --group Default --approve
-```
+   ```text
+   Quayflow · work · Automatic · 5h 97% · 7d 40%
+   ```
+
+   Near the threshold (85%) Quayflow switches to the account with the most room. If a request hits the limit first, it switches and retries that request once. Either way your next answer arrives in the same session, and the transcript says what happened:
+
+   ```text
+   ● quayflow: Quayflow: Switched to personal (usage-limit recovery).
+   ```
+
+Prefer to decide each time? Leave the group in Suggest, the default: the status line then says `| personal suggested` and `/quay accept` switches.
 
 Everything in the pane also works from the command line: `quayflow status`, `quayflow use <account>`, `quayflow group ...`. See the [user guide](docs/user-guide.md).
 
@@ -167,7 +176,7 @@ returns Claude's normal JSON with exit code 0: Quayflow switched to `personal` a
 19:53:51 adoption           used: personal, ok: true             <- the retry ran on personal
 ```
 
-When there is nothing to switch to, the job gets Claude's own result, unchanged. Your script asks what happened with the `session_id` from Claude's output:
+When Quayflow does not switch (every account is at its limit, or the group is not in Automatic), the job gets Claude's own result, unchanged. Your script asks what happened with the `session_id` from Claude's output:
 
 ```text
 $ quayflow last --session a04910ad-30f6-4c2a-8bd8-94a317333a02

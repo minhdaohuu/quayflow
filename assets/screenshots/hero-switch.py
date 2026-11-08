@@ -1,29 +1,30 @@
-"""Generates assets/screenshots/hero-switch.svg: a looping terminal scene of a suggested switch.
+"""Generates assets/screenshots/hero-switch.svg: a looping terminal scene of a usage-limit recovery in Automatic mode.
 
 Sample data; the wording follows the Mod's own messages and status line.
 """
 from xml.sax.saxutils import escape
 
-W, H = 820, 310
+W, H = 820, 238
 CYCLE = 14  # seconds
 BG, BAR, FG, DIM, WARN, ACC, OK = '#0F1720', '#1E2A36', '#F8FAF9', '#8A99A8', '#FBBF24', '#A7F3D0', '#34D399'
 X, Y0, LH = 24, 70, 24
 
 # (text, colour, line index or 'foot', start %, end %)
+# Automatic mode: a request hits the 5-hour limit of "work" mid-task; Quayflow switches once and
+# retries that request on "personal"; the answer arrives in the same session. The note is the
+# first sentence of the engine's own "switched" event.
 items = [
     ('> Refactor the parser to stream tokens', ACC, 0, 2, 96),
     ('● Done: the parser streams tokens; 4 files changed, tests pass.', FG, 1, 8, 96),
-    ('● quayflow: Quayflow suggests "personal": work at 91% 5h &gt;= 85%; personal at 12% 5h.', DIM, 2, 20, 96),
-    ('> /quay accept', ACC, 3, 32, 96),
-    ('  ⎿ quayflow: Switch to "personal" for environment default: requested.', DIM, 4, 38, 96),
-    ('● quayflow: Quayflow: Switched to personal (suggestion accepted).', OK, 5, 45, 96),
-    ('> Now add a benchmark for the streaming path', ACC, 6, 56, 96),
-    ('● Added bench/stream.rs and a CI job that runs it.', FG, 7, 68, 96),
-    ('Quayflow · work · Suggest · 5h 91% · 7d 40%', DIM, 'foot', 0, 18),
-    ('⚠ quayflow: Quayflow · work · Suggest · 5h 91% · 7d 40% | personal suggested', WARN, 'foot', 18, 50),
-    ('Quayflow · personal · Suggest · 5h 12% · 7d 8%', DIM, 'foot', 50, 96),
+    ('> Now add a benchmark for the streaming path', ACC, 2, 22, 96),
+    ('✻ Working…', DIM, 3, 28, 44),
+    ('● quayflow: Quayflow: Switched to personal (usage-limit recovery).', OK, 3, 44, 96),
+    ('● Added bench/stream.rs and a CI job that runs it.', FG, 4, 56, 96),
+    ('Quayflow · work · Automatic · 5h 97% · 7d 40%', DIM, 'foot', 0, 32),
+    ('Quayflow · work · Automatic · 5h 100% · 7d 41%', WARN, 'foot', 32, 44),
+    ('Quayflow · personal · Automatic · 5h 12% · 7d 8%', DIM, 'foot', 44, 96),
 ]
-FINAL = {0, 1, 2, 3, 4, 5, 6, 7, 10}  # what a still frame shows (reduced motion)
+FINAL = {0, 1, 2, 4, 5, 8}  # what a still frame shows (reduced motion)
 
 css, body = [], []
 for i, (text, colour, line, s, e) in enumerate(items):
@@ -35,7 +36,7 @@ for i, (text, colour, line, s, e) in enumerate(items):
     style = '' if i in FINAL else ' data-still="hide"'
     body.append(f'<text class="e{i}" x="{X}" y="{y}" fill="{colour}"{style}>{text}</text>')
 
-svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-label="Claude Code with Quayflow: the status line suggests the account personal near the limit, /quay accept switches, and the next request runs on personal in the same session">
+svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-label="Claude Code with Quayflow in Automatic mode: a request hits the 5-hour limit of the account work, Quayflow switches to personal and retries it once, and the answer arrives in the same session">
 <style>
 text{{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;font-size:14px;white-space:pre}}
 {''.join(css)}
