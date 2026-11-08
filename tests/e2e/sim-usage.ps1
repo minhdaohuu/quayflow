@@ -220,8 +220,8 @@ try {
     $r = Qf register --label d --group Default
     Check 'register d (token expiring in 4 min)' ($r -match 'Registered d') $r
     SimResetLog
-    Qf use b | Out-Null
-    Check 'switch away from d' (WaitFor { (LiveToken) -eq $TB }) (LiveToken)
+    $u = Qf use b
+    Check 'switch away from d' (WaitFor { (LiveToken) -eq $TB }) "$(LiveToken) $u"
     $ok = WaitFor { $l = SimLog; [int]$l.$TD2.'/api/oauth/usage' -ge 1 } 20
     $l = SimLog
     Check 'idle d: saved token refreshed, usage read with the new token' $ok ($l | ConvertTo-Json -Depth 4 -Compress)
