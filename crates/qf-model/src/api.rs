@@ -52,7 +52,7 @@ pub struct Notice {
     pub level: String,
     /// Machine kind, for example "unknown_login", "other_switcher", "paused", "incompatible_version",
     /// "managed_login", "d_org_enabled", "group_conflict", "adoption_mismatch", "vault_error",
-    /// "refresh_rejected", "suggestion".
+    /// "refresh_rejected", "suggestion", "keychain_mismatch".
     pub kind: String,
     pub text: String,
     #[serde(default)]

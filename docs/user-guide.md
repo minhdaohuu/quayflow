@@ -2,7 +2,7 @@
 
 Quayflow v0.1.6. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64, Linux x86_64 and, from v0.1.6, macOS (Apple silicon and Intel). Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
 
-Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. macOS is not released yet; on an Apple silicon Mac, switching, lanes and recovery from a simulated limit passed with real accounts, while recovery from a real limit, Intel Macs and an install from a published release have not been run. See [acceptance results](acceptance.md).
+Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. macOS is not fully tested either; on an Apple silicon Mac, switching, lanes and recovery from a simulated limit passed with real accounts, while recovery from a real limit, Intel Macs and an install from a published release have not been run. See [acceptance results](acceptance.md).
 
 > **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is not affiliated with or endorsed by Anthropic.
 
@@ -98,7 +98,7 @@ Every figure is written out beside its graphic. Usage is shown only while the re
 **Why an account is not a switch target.** Account rows (Overview and Accounts) give the reason in a word or two: *no room to gain* (it would not leave enough margin below the threshold), *usage unknown* (no current reading), *at its limit*, *not in this group*, *group conflict* (a running session's group does not allow it), *blocked by your organization* (managed login), or *plan lacks this model*. The live account, and an account whose badge already says what is wrong (SIGN IN, VAULT), get no reason. The full reason is in the account's detail and in **Why?**.
 
 - **Why?** ("Why this account?") lists every account as *Eligible*, *Excluded* or *Unknown* (no fresh reading, never 0%), with the reason and the observation age, plus the threshold, the required margin and the cooldown (with any time left).
-- **Switch** on the recommendation opens a short review (destination, scope, reason, checks, optional quiet moment) before anything is switched. Accepting does not pin. A switch shows its phases as a step track (prepared, quiet moment, apply, verify), a participant table while it waits for a quiet moment, and which clients have adopted it.
+- **Switch** on the recommendation opens a short review (destination, scope, reason, checks, an optional **Wait for idle**) before anything is switched. Accepting does not pin. A switch shows its phases as a step track (prepared, quiet moment, apply, verify), a participant table while it waits for a quiet moment, and which clients have adopted it.
 - **Home account** reads *Home account*, *Home ready*, *Home ready, return deferred (pinned)*, *Home ready, return deferred (cooldown)* or *Away from home*. **Pin** pins the live account without a switch.
 - **Sessions** lists each client of the environment with its mode, group, version and the identity of its last request.
 - **Limits** explains the recovery checks, shows the all-exhausted table (each account's exhausted-window resets and earliest usable time; unknown resets stay unknown), each account's endpoint state and next check, and states plainly that Claude's own wait setting and waiting state are not reported to Quayflow.
@@ -350,14 +350,14 @@ When the engine sees a new Claude version, it checks automatically that the part
 | Replace did nothing in this terminal | The PowerShell hook is not loaded: `quayflow shell install`, open a new terminal, check the execution policy (5.1). Other shells use Open New Session |
 | Replace said history is not ready | Run the command it printed once Claude has fully exited |
 
-Logs are in `%LOCALAPPDATA%\Quayflow\logs` (Linux and macOS: `~/.local/share/quayflow/logs`), sanitized and kept 7 days.
+Logs are in `%LOCALAPPDATA%\Quayflow\logs` (Linux and macOS: `~/.local/share/quayflow/logs`, or under `$XDG_DATA_HOME/quayflow` when that is set), sanitized and kept 7 days.
 
 ## Testing your setup
 
 The repository's `tests/e2e/` folder holds scripts that exercise the product build; [tests/e2e/README.md](../tests/e2e/README.md) lists them all and what each needs. Read each one before you run it.
 
 - **Fake environment (safe anywhere).** `smoke-fake-env.ps1`, `cli-fake-env.ps1`, `sim-usage.ps1` and, on Linux and macOS, `smoke-unix.sh` run the real program against a temporary fake Claude environment. They never touch `~/.claude` or a real login. CI runs them on every change.
-- **Real logins (owner-run).** `real-switching.ps1`, `real-lanes.ps1` and `real-headless.ps1` **switch your live Claude login** and put it back. Run them only on your own machine, never in CI. Recorded results are in [acceptance.md](acceptance.md).
+- **Real logins (owner-run).** `real-switching.ps1`, `real-lanes.ps1` and `real-headless.ps1` **switch your live Claude login** and put it back; on macOS, `real-macos-keychain.py` checks the Keychain switch in a throwaway environment, with accounts you sign in during the run. Run them only on your own machine, never in CI. Recorded results are in [acceptance.md](acceptance.md).
 
 ## Update
 
@@ -380,7 +380,7 @@ quayflow uninstall --delete-logs    # also deletes routine logs and saved report
 quayflow uninstall --delete-data    # deletes the vault, logs, settings and lanes
 ```
 
-Each deletion is a separate choice and off by default (`/quay` > Settings > **Uninstall** shows them and the matching command). An unresolved recovery record in the journal is kept and reported. Or use `install.ps1 -Uninstall [-DeleteData]` (Linux: `install.sh --uninstall [--delete-data]`). Uninstall removes the Mod, the sign-in startup entry, the PowerShell profile block and the engine. The installer also removes the PATH entry. **The login that is live at that moment stays live**, so your current account keeps working in Claude. Conversation history is never deleted.
+Each deletion is a separate choice and off by default (`/quay` > Settings > **Uninstall** shows them and the matching command). An unresolved recovery record in the journal is kept and reported. Or use `install.ps1 -Uninstall [-DeleteData]` (Linux and macOS: `install.sh --uninstall [--delete-data]`). Uninstall removes the Mod, the sign-in startup entry, the PowerShell profile block, the engine and the PATH entry (Linux and macOS: the `~/.local/bin/quayflow` link). **The login that is live at that moment stays live**, so your current account keeps working in Claude. Conversation history is never deleted.
 
 ## Linux
 
@@ -435,4 +435,4 @@ Everything lives in `%LOCALAPPDATA%\Quayflow` (Linux and macOS: `~/.local/share/
 | `shell\Quayflow.psm1` | PowerShell integration, when installed |
 | `reports\` | Support reports you saved |
 
-Quayflow changes only the login entries (`claudeAiOauth` in `.credentials.json`, `oauthAccount` in `.claude.json`) of the environment it switches. It leaves every other setting alone.
+Quayflow changes only the login entries (`claudeAiOauth` in the login store, which is `.credentials.json` or, on macOS, Claude's Keychain item; `oauthAccount` in `.claude.json`) of the environment it switches. It leaves every other setting alone.

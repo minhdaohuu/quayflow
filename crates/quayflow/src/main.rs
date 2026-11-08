@@ -888,8 +888,8 @@ fn onboard(dd: &DataDir) -> i32 {
 
 - The Mod (inside Claude) shows status and asks the engine to act. The engine (quayflow,
   one per user, no window) observes usage, decides, and swaps Claude's login in place.
-- Logins are stored locally in a vault for your user account only (Windows: DPAPI; Linux:
-  an owner-only file, as Claude Code keeps its own login there).
+- Logins are stored locally in a vault for your user account only (Windows: DPAPI;
+  Linux and macOS: an owner-only file).
   Claude refreshes the live login; Quayflow refreshes only the saved copy of an idle account
   (so its usage stays readable) and sends tokens nowhere except Anthropic's own endpoints.
 - A switch moves every session that uses the same Claude login, at each one's next request.

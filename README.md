@@ -12,7 +12,7 @@ in place: same conversation, same process, no restart, nothing replayed.
 [![CI](https://github.com/minhdaohuu/quayflow/actions/workflows/ci.yml/badge.svg)](https://github.com/minhdaohuu/quayflow/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/minhdaohuu/quayflow?include_prereleases&sort=semver)](https://github.com/minhdaohuu/quayflow/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Platforms: Windows and Linux](https://img.shields.io/badge/platforms-Windows%20x64%20%C2%B7%20Linux%20x86__64-0078D4)
+![Platforms: Windows, Linux and macOS](https://img.shields.io/badge/platforms-Windows%20x64%20%C2%B7%20Linux%20x86__64%20%C2%B7%20macOS-0078D4)
 
 [Why](#why-quayflow) · [Contract](#the-contract) · [Install](#install) · [Quick start](#quick-start) · [Headless jobs](#headless-jobs) · [How it works](#how-it-works) · [FAQ](#faq) · [Docs](#documentation)
 
@@ -132,7 +132,7 @@ Details: [acceptance results](docs/acceptance.md).
 1. Start Claude as usual: `claude`.
 2. Type `/quay`. The welcome screen asks you to start the engine and to accept the terms reminder.
 3. **Register** the login you are signed in with, and allow Quayflow to keep it in its vault. It joins the `Default` group.
-4. **Add account.** A window opens with Claude's own sign-in. Quayflow never sees a password or asks for a token.
+4. **Add account.** Pick a group and choose **Sign in with Claude**: a window opens with Claude's own sign-in. Afterwards Quayflow suggests a name from the account's e-mail address; press Enter to save. Quayflow never sees a password or asks for a token.
 5. **Turn on Automatic** for the group. Quayflow asks you to approve it once:
 
    ```text

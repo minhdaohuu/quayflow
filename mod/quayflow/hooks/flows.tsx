@@ -107,7 +107,7 @@ export function Welcome($: EngineInterface, c: Ctx): JSX.Element {
         'Welcome to Quayflow',
         Line(c, 'Watches your accounts\' usage and switches the login when you say so.'),
         Line(c, 'You keep typing claude. Logins stay on this machine.', { dim: true }),
-        Hint(c, 'A per-user engine (quayflow, no window, no admin) watches usage of the accounts you register. Credentials stay in a vault for your user only (Windows: DPAPI; Linux: an owner-only file, like Claude Code\'s own login there); nothing is uploaded. Suggest (default) proposes and switches on /quay accept; Automatic is opt-in per group; unattended headless jobs (claude -p) only switch or recover in Automatic mode.'),
+        Hint(c, 'A per-user engine (quayflow, no window, no admin) watches usage of the accounts you register. Credentials stay in a vault for your user only (Windows: DPAPI; Linux and macOS: an owner-only file); nothing is uploaded. Suggest (default) proposes and switches on /quay accept; Automatic is opt-in per group; unattended headless jobs (claude -p) only switch or recover in Automatic mode.'),
       )}
       {Alert(c, 'Shared login, shared effect', 'A switch moves every Claude session of this login at its next request.', 'note')}
       {Section(c, 'Consent', ...CONSENTS.map(k => Toggle(c, k.key, k.label, on(k.key), v => setForm($, k.key, v ? '1' : '0'))))}

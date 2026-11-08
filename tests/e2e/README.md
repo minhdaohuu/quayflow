@@ -11,7 +11,7 @@
 | `real-lanes.ps1` | **real** | no | Lanes: links, a real headless Claude job inside a lane reading and writing through the links, independent logins, the shared setup surviving lane deletion |
 | `real-macos-keychain.py` | **real**, two accounts signed in during the run | no | macOS, without Quayflow: the Keychain switch Quayflow uses ([tech spec §1b](../../docs/tech-spec.md#1b-macos)), in a throwaway environment. Two interactive sessions and a headless run follow at their next request, the item's other entries are kept, the `.credentials.json` copy is removed safely, no Keychain dialog, locks held under 3 s. Never touches your default login. `python3 tests/e2e/real-macos-keychain.py [--auto]` (`--auto` drives the sessions itself) |
 
-The real-login scripts are PowerShell and also run on Linux and macOS with PowerShell 7 (`sudo snap install powershell --classic` on Ubuntu, `brew install powershell` on macOS): `pwsh -File tests/e2e/real-switching.ps1`. `-Case` takes a comma-separated list (`-Case S,R1,R2`). They find the data folder by themselves (`~/.local/share/quayflow`, or `QUAYFLOW_HOME`).
+The real-login scripts are PowerShell and also run on Linux and macOS with PowerShell 7 (`sudo snap install powershell --classic` on Ubuntu, `brew install powershell` on macOS): `pwsh -File tests/e2e/real-switching.ps1`. `real-switching.ps1` and `real-headless.ps1` take `-Case` as a comma-separated list (`-Case S,R1,R2`). They find the data folder by themselves (`~/.local/share/quayflow`, or `QUAYFLOW_HOME`).
 
 The fake-environment scripts point `CLAUDE_CONFIG_DIR` and `QUAYFLOW_HOME` (and, for `cli-fake-env.ps1` and `sim-usage.ps1`, `USERPROFILE`) at a temporary folder, and never touch your real logins. `smoke-fake-env.ps1` and `cli-fake-env.ps1` turn network calls off (`QUAYFLOW_OFFLINE`); `sim-usage.ps1` sends usage and profile calls to its loopback fake (`QUAYFLOW_SIM_API`). Run them with `pwsh -File <script> [-Exe path\to\quayflow.exe]`; the default is `target\debug\quayflow.exe`. These three are Windows scripts. On Linux and macOS, run `sh tests/e2e/smoke-unix.sh [path/to/quayflow]` (default `target/debug/quayflow`); it points `HOME`, `CLAUDE_CONFIG_DIR` and the data folder at a temporary folder, turns the network off, and on macOS keeps Quayflow out of the Keychain (`QUAYFLOW_KEYCHAIN=off`).
 
@@ -23,7 +23,7 @@ Always run them with `pwsh -File`, never dot-sourced (`. script`): they end with
 
 ### One-time setup
 
-To test a published release (v0.1.3 or later), install it as the [user guide](../../docs/user-guide.md#install) describes and go to step 3. To test a local build, start at step 1.
+To test a published release (v0.1.3 or later on Windows, v0.1.5 on Linux, v0.1.6 on macOS), install it as the [user guide](../../docs/user-guide.md#install) describes and go to step 3. To test a local build, start at step 1.
 
 1. Stage a local build in `dist\` (ignored by git). On Windows:
 
@@ -48,13 +48,23 @@ To test a published release (v0.1.3 or later), install it as the [user guide](..
    (cd dist && sha256sum quayflow-linux-x86_64 install.sh > SHA256SUMS)
    ```
 
+   On macOS (Apple silicon; on Intel name it `quayflow-macos-x86_64`):
+
+   ```sh
+   cargo build --release --locked -p quayflow
+   mkdir -p dist
+   cp target/release/quayflow dist/quayflow-macos-arm64
+   cp installer/install.sh dist/
+   (cd dist && shasum -a 256 quayflow-macos-arm64 install.sh > SHA256SUMS)
+   ```
+
 2. Install from that folder. The installer asks for consent, verifies the hashes and adds the Mod from this repository. On Windows:
 
    ```powershell
    pwsh -File installer\install.ps1 -Source dist -MarketplaceSource (Get-Location).Path -SkipAttestation
    ```
 
-   On Linux:
+   On Linux and macOS:
 
    ```sh
    sh installer/install.sh --source dist --marketplace-source "$PWD" --skip-attestation

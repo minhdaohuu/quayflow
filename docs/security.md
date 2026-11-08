@@ -4,7 +4,7 @@ What Quayflow v0.1 touches on your machine, how it protects saved logins, where 
 
 ## What Quayflow touches
 
-The data folder is `%LOCALAPPDATA%\Quayflow` on Windows and `~/.local/share/quayflow` on Linux and macOS (macOS from v0.1.6).
+The data folder is `%LOCALAPPDATA%\Quayflow` on Windows and `$XDG_DATA_HOME/quayflow` (by default `~/.local/share/quayflow`) on Linux and macOS (macOS from v0.1.6).
 
 | Component | Reads | Writes |
 |---|---|---|
@@ -54,7 +54,7 @@ On macOS Claude Code keeps its login in a generic-password item of your login Ke
 - **Writes.** A switch replaces only `claudeAiOauth` and keeps every other entry, under Claude's own locks, then reads the item back and compares. A call that takes over 5 seconds (a Keychain dialog waiting) is ended and the switch is reported as not done.
 - **The copy in `.credentials.json`.** Right after writing the item, Quayflow writes the same JSON to `<env>/.credentials.json` (`0600`, atomic replace). Claude checks that file before each request; a change makes it drop its 30-second Keychain cache, so running sessions use the new account at once, and a retry after a usage limit goes to the new account. The file holds the real login rather than an empty object, so a Keychain read that fails meanwhile still finds the right login. The engine removes it after 35 seconds, under Claude's storage lock, and only if its content is still what Quayflow wrote or equals the Keychain item: a login Claude saved there itself (when the Keychain refused it) is never removed. For those 35 seconds the login exists as an owner-only file, as it always does on Linux.
 - **Only your own item.** The bare item name is used only for your real `~/.claude`, with your home folder taken from the system's account record, not from `$HOME`; any other folder is never mapped to it. `QUAYFLOW_KEYCHAIN=off` keeps Quayflow out of the Keychain entirely (file-backed environments only).
-- **Sign-in and lanes.** `claude auth login` in a temporary folder writes its own Keychain item; Quayflow reads the login from it and removes it when the sign-in is saved or cancelled. Deleting a lane removes the lane's item after keeping its newest token in the vault.
+- **Sign-in and lanes.** `claude auth login` in a temporary folder writes its own Keychain item; Quayflow reads the login from it and, when the sign-in is saved or cancelled, removes the login from it (and the item itself when nothing else, such as an MCP login, is in it). Deleting a lane does the same with the lane's item after keeping its newest token in the vault.
 - **The session.** The engine must run in your login session (as it does when a Claude session or the LaunchAgent starts it) to reach the Keychain; over SSH or as a system service the Keychain is not available.
 
 ## Tokens and refresh

@@ -6,7 +6,7 @@
 
 - [ ] `cargo fmt`, `cargo clippy -D warnings`, `cargo test` pass
 - [ ] Mod: `claude plugin validate` and `claude plugin test` pass (if the Mod changed)
-- [ ] `tests/e2e/smoke-fake-env.ps1` passes (if engine or CLI behavior changed)
+- [ ] `tests/e2e/smoke-fake-env.ps1` (Windows) or `tests/e2e/smoke-unix.sh` (Linux, macOS) passes (if engine or CLI behavior changed)
 - [ ] Real-login scenarios run by a maintainer (if switching behavior changed): ______
 
 ## Checklist

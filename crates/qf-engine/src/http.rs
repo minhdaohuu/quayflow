@@ -139,7 +139,11 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
                         qf_adapter::keychain::session_service(h.config_dir.as_deref(), h.secure_storage_dir.as_deref());
                     inner.session_keychain.insert(
                         sid.clone(),
-                        (service, h.secure_storage_dir.is_some(), qf_model::time::now_ms()),
+                        (
+                            service,
+                            h.secure_storage_dir.as_deref().is_some_and(|d| !d.is_empty()),
+                            qf_model::time::now_ms(),
+                        ),
                     );
                 }
             }

@@ -23,7 +23,7 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 | `mod/quayflow` | The Claude Code Mod (TypeScript) |
 | `shell/` | Opt-in PowerShell prompt hook and its self-test |
 | `installer/` | `install.ps1`, `install.sh` and their sandbox tests |
-| `tests/e2e` | Fake-environment smoke, CLI and simulation tests; owner-run real-login scenarios (`real-switching.ps1`, `real-lanes.ps1`, `real-headless.ps1`) |
+| `tests/e2e` | Fake-environment smoke, CLI and simulation tests; owner-run real-login scenarios (`real-switching.ps1`, `real-lanes.ps1`, `real-headless.ps1`, and on macOS `real-macos-keychain.py`) |
 | `tests/sim` | Loopback fake of the usage, profile and token API used by the simulation test |
 | `docs/` | Requirements, technical spec, user guide, security notes, known limits, release verification, acceptance |
 | `assets/brand/` | Logo, app icon and palette ([usage](assets/brand/README.md)) |
