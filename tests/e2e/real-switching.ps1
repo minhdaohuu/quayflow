@@ -24,6 +24,8 @@ param(
     [string]$Group = 'Default'
 )
 $ErrorActionPreference = 'Stop'
+# `pwsh -File script -Case A,B` passes "A,B" as one string: split it into the cases.
+$Case = @($Case | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_ })
 # The engine's data folder: %LOCALAPPDATA%\Quayflow on Windows, $XDG_DATA_HOME/quayflow
 # (~/.local/share/quayflow) on Linux; QUAYFLOW_HOME overrides it.
 $qfHome = if ($env:QUAYFLOW_HOME) { $env:QUAYFLOW_HOME }

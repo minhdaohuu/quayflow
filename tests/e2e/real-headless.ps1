@@ -33,6 +33,8 @@ param(
     [string]$Group = 'Default'
 )
 $ErrorActionPreference = 'Stop'
+# `pwsh -File script -Case A,B` passes "A,B" as one string: split it into the cases.
+$Case = @($Case | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_ })
 if ($MyInvocation.InvocationName -eq '.') {
     Write-Error 'Run this script with: pwsh -File <script> (dot-sourcing would close your shell when it exits).'
     return
