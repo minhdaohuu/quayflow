@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- Clearer wording across the `/quay` pane, `/quay` commands, the status line, the CLI and engine messages: one name for each thing (switch, environment, "usage unknown"), mode names capitalised (Manual, Suggest, Automatic), and errors that say what to do next. Examples in the docs and screenshots use the accounts `work-01` and `work-02`.
+
 ## [0.2.0] - 2026-11-08
 
 Fixes from a full code review, including an attestation check of the installer that `quayflow update` runs. From this release the version number follows the changes (see CONTRIBUTING.md): Linux (0.1.5) and macOS (0.1.6) would each have been a minor version.

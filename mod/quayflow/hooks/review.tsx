@@ -181,7 +181,7 @@ function RunningClients($: EngineInterface, c: Ctx): JSX.Element {
               ]),
             )
           : Line(c, 'No running session is listed.', { dim: true }),
-        Hint(c, `\u25b8 marks this session. Credential environment ${env.id} (shared login)${env.inPlace.governingVersion ? `; the oldest running Claude, ${env.inPlace.governingVersion}, must pass the version check` : ''}.`),
+        Hint(c, `\u25b8 marks this session. Environment ${env.id} (shared login)${env.inPlace.governingVersion ? `; the oldest running Claude, ${env.inPlace.governingVersion}, must pass the version check` : ''}.`),
       )}
       {Alert(c, 'Other clients may exist', 'Editor extensions may not be listed; every client of this login adopts a change at its next request.')}
       {groups.length > 1 ? Line(c, `Sessions here work in different groups (${groups.join(', ')}): a shared switch must be permitted by each.`, { tone: 'warn' }) : null}
@@ -223,7 +223,7 @@ function Limits($: EngineInterface, c: Ctx): JSX.Element {
               'In Suggest or Manual, an unattended claude -p job gets no prompt, hold, account change or transcript notice; its usage limit is handled as by Claude without Quayflow. The recommendation is recorded locally. Approve Automatic for the group before unattended switching is expected.',
             )
           : Line(c, 'A confirmed limit switches once and retries once.'),
-        recoveryLast ? KV(c, 'Last recovery', `${recoveryLast.how === 'model_fallback' ? 'model_not_found: switched back to' : 'switched to'} "${label(s, recoveryLast.to)}" ${when(recoveryLast.requestedAt)} (${recoveryLast.reason})`) : null,
+        recoveryLast ? KV(c, 'Last recovery', `${recoveryLast.how === 'model_fallback' ? 'model not available on the plan: switched back to' : 'switched to'} "${label(s, recoveryLast.to)}" ${when(recoveryLast.requestedAt)} (${recoveryLast.reason})`) : null,
       )}
       {hintsOn(c) &&
         Section(
@@ -240,11 +240,11 @@ function Limits($: EngineInterface, c: Ctx): JSX.Element {
         Hint(c, 'An unknown or generic error changes no account: Claude\'s own result stays. A transport error is never read as an exhausted quota.'),
       )}
       {!x && Pending(c, 'the accounts', error)}
-      {x && !x.allExhausted && Line(c, '\u2714 Not every account is exhausted', { dim: true })}
+      {x && !x.allExhausted && Line(c, '\u2714 Not every account is at its limit', { dim: true })}
       {x?.allExhausted &&
         Section(
         c,
-        'All exhausted',
+        'Every account at its limit',
         Table(
                 c,
                 'soonest',
@@ -258,7 +258,7 @@ function Limits($: EngineInterface, c: Ctx): JSX.Element {
                   ]
                 }),
               ),
-        Alert(c, 'Hand waiting back to Claude', `${x.soonest ? `Switch to "${label(s, x.soonest)}"` : 'No account has a known reset time'}; then Claude decides whether to wait or finish.`, 'note'),
+        Alert(c, 'Claude handles the wait', `${x.soonest ? `Switch to "${label(s, x.soonest)}"` : 'No account has a known reset time'}; then Claude decides whether to wait or finish.`, 'note'),
         Hint(c, 'An account is usable only after every exhausted window resets. Unknown reset data is shown as unknown, never as a made-up time.'),
       )}
       {hintsOn(c) &&
@@ -551,7 +551,7 @@ function HandoffOutcome($: EngineInterface, c: Ctx): JSX.Element {
       {r.command && (!r.launched || r.how !== 'open') ? Line(c, r.how === 'replace' ? 'Without the hook in this terminal, run after /exit:' : 'Run after /exit:') : null}
       {r.command && (!r.launched || r.how !== 'open') ? <Code key="ho-cmd" source={r.command} /> : null}
       {Hint(c, 'Future switches in a lane affect that lane\'s login only; linked shared settings and memory remain shared.')}
-      {Row(c, Btn(c, 'ho-done', 'Back to /quay', () => go($, { tab: 'overview' }), true), Btn(c, 'ho-lanes', 'Lane details', () => go($, { tab: 'groups', sub: 'lanes' })))}
+      {Row(c, Btn(c, 'ho-done', 'Overview', () => go($, { tab: 'overview' }), true), Btn(c, 'ho-lanes', 'Lane details', () => go($, { tab: 'groups', sub: 'lanes' })))}
     </Box>
   )
 }
@@ -658,7 +658,7 @@ function Version($: EngineInterface, c: Ctx): JSX.Element {
         Table(c, 'version', ['Check', 'Result'], [
           ['Binary lock and entry markers', rec ? (rec.staticPass ? 'Passed' : `Failed${rec.staticDetail?.length ? `: ${rec.staticDetail.join('; ')}` : ''}`) : 'Not checked yet'],
           ['Oldest running version', v || 'unknown'],
-          ['Live adoption evidence', rec?.livePass === true ? 'Passed' : rec?.livePass === false ? `Failed${rec.liveDetail ? `: ${rec.liveDetail}` : ''}` : 'On next actual switch'],
+          ['Live adoption evidence', rec?.livePass === true ? 'Passed' : rec?.livePass === false ? `Failed${rec.liveDetail ? `: ${rec.liveDetail}` : ''}` : 'Checked at the next real switch'],
           ['Latest adoption evidence', env?.adoption.length ? `${adopted} observed client(s) adopted; ${pendingN} pending request(s)` : 'none yet'],
           ['In-place switching here', env ? (env.inPlace.allowed ? 'Allowed' : `Off: ${env.inPlace.reason}`) : '?'],
         ]),
@@ -681,8 +681,8 @@ function Version($: EngineInterface, c: Ctx): JSX.Element {
         c,
         Btn(c, 've-static', 'Static check', () => void run($, 'checking this Claude version', () => actCompatCheck($), () => 'Static check done; see the table above.'), true),
         Btn(c, 've-consent', consent ? 'Withdraw live-canary consent' : 'Give live-canary consent', () => void run($, 'recording the consent', () => actConsent($, 'liveCanary', !consent), r => (r.ok ? (consent ? 'Live-canary consent withdrawn.' : 'Live-canary consent given; run quayflow canary --live in a terminal.') : (r.message ?? 'Refused.')))),
-        Btn(c, 've-fallback', 'Fallback', () => go($, { tab: 'session' })),
-        Btn(c, 've-update', 'Update pair', () => go($, { tab: 'settings', sub: 'update' })),
+        Btn(c, 've-fallback', 'Full history', () => go($, { tab: 'session' })),
+        Btn(c, 've-update', 'Update', () => go($, { tab: 'settings', sub: 'update' })),
         Btn(c, 've-back', 'Back', () => go($, { tab: 'settings' })),
       )}
     </Box>
@@ -724,8 +724,10 @@ function Uninstall($: EngineInterface, c: Ctx): JSX.Element {
   const s = c.s!
   const vault = c.form['un:vault'] === '1'
   const logs = c.form['un:logs'] === '1'
+  const all = c.form['un:data'] === '1'
   const busy = s.envs.find(e => e.transition && !['completed', 'cancelled', 'failed', 'uncertain'].includes(e.transition.state))
-  const cmd = `quayflow uninstall${vault ? ' --delete-vault' : ''}${logs ? ' --delete-logs' : ''}`
+  // --delete-data covers the vault and the logs, so it replaces those two flags.
+  const cmd = all ? 'quayflow uninstall --delete-data' : `quayflow uninstall${vault ? ' --delete-vault' : ''}${logs ? ' --delete-logs' : ''}`
   return (
     <Box flexDirection="column">
       {Section(
@@ -735,12 +737,13 @@ function Uninstall($: EngineInterface, c: Ctx): JSX.Element {
         KV(c, 'Live Claude login', 'Left exactly as active at uninstall'),
         KV(c, 'Conversation history', 'Not deleted'),
       )}
-      {Toggle(c, 'un:vault', 'Also delete Quayflow protected vault copies', vault, v => setForm($, 'un:vault', v ? '1' : ''))}
-      {Toggle(c, 'un:logs', 'Also delete Quayflow routine logs and saved reports', logs, v => setForm($, 'un:logs', v ? '1' : ''))}
-      {Alert(c, 'Resolve active transitions first', busy ? `A switch in ${busy.id} is still in progress: let it end first. Unresolved recovery records are kept and reported.` : 'Unresolved recovery records are never deleted with the logs; they are reported and kept.', 'warn')}
+      {Toggle(c, 'un:data', 'Delete all Quayflow data: vault, logs, settings and lanes (with their logins and history)', all, v => setForm($, 'un:data', v ? '1' : ''))}
+      {!all && Toggle(c, 'un:vault', 'Also delete the saved logins (vault)', vault, v => setForm($, 'un:vault', v ? '1' : ''))}
+      {!all && Toggle(c, 'un:logs', 'Also delete logs and saved support reports', logs, v => setForm($, 'un:logs', v ? '1' : ''))}
+      {Alert(c, 'Let running switches finish first', busy ? `A switch in ${busy.id} is still in progress: let it end first. Unresolved recovery records are kept and reported.` : 'Unresolved recovery records are never deleted with the logs; they are reported and kept.', 'warn')}
       {Line(c, 'Uninstall runs outside Claude (it removes this Mod). Run in a terminal:')}
       <Code key="uninstall-cmd" source={cmd} />
-      {Hint(c, '--delete-data deletes the vault, logs, settings and lanes (with their logins and history) together. Quayflow never signs you out or revokes a provider authorization.')}
+      {Hint(c, 'Quayflow never signs you out or revokes a provider authorization.')}
       {Row(c, Btn(c, 'un-keep', 'Keep Quayflow', () => go($, { tab: 'settings' }), true))}
     </Box>
   )
@@ -864,7 +867,7 @@ function PolicyChange($: EngineInterface, c: Ctx): JSX.Element {
         Alert(c, 'Restrictions may change', 'The destination\'s policy applies. Quayflow does not copy permissions or force the previous environment\'s policy onto the new login; it rechecks eligibility after each policy change.', 'note'),
         Table(c, 'policy', ['New condition', 'Result'], [
           ['Enforced login no longer matches', 'The account becomes ineligible; the administrator\'s rule is named'],
-          ['Current model or context unsupported', 'Excluded; model_not_found uses one bounded return'],
+          ['Current model or context unsupported', 'Excluded; a "model not found" answer switches back once'],
           ['Actual authentication path changed', 'Incompatible switching pauses; billing is not changed'],
         ]),
       )}

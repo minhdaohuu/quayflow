@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="820" height="238" viewBox="0 0 820 238" role="img" aria-label="Claude Code with Quayflow in Automatic mode: a request hits the 5-hour limit of the account work, Quayflow switches to personal and retries it once, and the answer arrives in the same session">
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="238" viewBox="0 0 820 238" role="img" aria-label="Claude Code with Quayflow in Automatic mode: a request hits the 5-hour limit of the account work-01, Quayflow switches to work-02 and retries it once, and the answer arrives in the same session">
 <style>
 text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;font-size:14px;white-space:pre}
 .e0{animation:k0 14s linear infinite}@keyframes k0{0%,2%{opacity:0}3%,96%{opacity:1}97%,100%{opacity:0}}.e1{animation:k1 14s linear infinite}@keyframes k1{0%,8%{opacity:0}9%,96%{opacity:1}97%,100%{opacity:0}}.e2{animation:k2 14s linear infinite}@keyframes k2{0%,22%{opacity:0}23%,96%{opacity:1}97%,100%{opacity:0}}.e3{animation:k3 14s linear infinite}@keyframes k3{0%,28%{opacity:0}29%,44%{opacity:1}45%,100%{opacity:0}}.e4{animation:k4 14s linear infinite}@keyframes k4{0%,44%{opacity:0}45%,96%{opacity:1}97%,100%{opacity:0}}.e5{animation:k5 14s linear infinite}@keyframes k5{0%,56%{opacity:0}57%,96%{opacity:1}97%,100%{opacity:0}}.e6{animation:k6 14s linear infinite}@keyframes k6{0%,0%{opacity:0}1%,32%{opacity:1}33%,100%{opacity:0}}.e7{animation:k7 14s linear infinite}@keyframes k7{0%,32%{opacity:0}33%,44%{opacity:1}45%,100%{opacity:0}}.e8{animation:k8 14s linear infinite}@keyframes k8{0%,44%{opacity:0}45%,96%{opacity:1}97%,100%{opacity:0}}
@@ -13,9 +13,9 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',mo
 <text class="e1" x="24" y="94" fill="#F8FAF9">● Done: the parser streams tokens; 4 files changed, tests pass.</text>
 <text class="e2" x="24" y="118" fill="#A7F3D0">> Now add a benchmark for the streaming path</text>
 <text class="e3" x="24" y="142" fill="#8A99A8" data-still="hide">✻ Working…</text>
-<text class="e4" x="24" y="142" fill="#34D399">● quayflow: Quayflow: Switched to personal (usage-limit recovery).</text>
+<text class="e4" x="24" y="142" fill="#34D399">● quayflow: Quayflow: Switched to work-02 (usage-limit recovery).</text>
 <text class="e5" x="24" y="166" fill="#F8FAF9">● Added bench/stream.rs and a CI job that runs it.</text>
-<text class="e6" x="24" y="216" fill="#8A99A8" data-still="hide">Quayflow · work · Automatic · 5h 97% · 7d 40%</text>
-<text class="e7" x="24" y="216" fill="#FBBF24" data-still="hide">Quayflow · work · Automatic · 5h 100% · 7d 41%</text>
-<text class="e8" x="24" y="216" fill="#8A99A8">Quayflow · personal · Automatic · 5h 12% · 7d 8%</text>
+<text class="e6" x="24" y="216" fill="#8A99A8" data-still="hide">Quayflow · work-01 · Automatic · 5h 97% · 7d 40%</text>
+<text class="e7" x="24" y="216" fill="#FBBF24" data-still="hide">Quayflow · work-01 · Automatic · 5h 100% · 7d 41%</text>
+<text class="e8" x="24" y="216" fill="#8A99A8">Quayflow · work-02 · Automatic · 5h 12% · 7d 8%</text>
 </svg>

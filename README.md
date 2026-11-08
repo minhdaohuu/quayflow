@@ -16,7 +16,7 @@ in place: same conversation, same process, no restart, nothing replayed.
 
 [Why](#why-quayflow) · [Contract](#the-contract) · [Install](#install) · [Quick start](#quick-start) · [Headless jobs](#headless-jobs) · [How it works](#how-it-works) · [FAQ](#faq) · [Docs](#documentation)
 
-<img src="assets/screenshots/hero-switch.svg" alt="Claude Code with Quayflow in Automatic mode: a request hits the 5-hour limit of the account work, Quayflow switches to personal and retries it once, and the answer arrives in the same session" width="820">
+<img src="assets/screenshots/hero-switch.svg" alt="Claude Code with Quayflow in Automatic mode: a request hits the 5-hour limit of the account work-01, Quayflow switches to work-02 and retries it once, and the answer arrives in the same session" width="820">
 
 </div>
 
@@ -144,16 +144,16 @@ Details: [acceptance results](docs/acceptance.md).
 6. Keep working. The status line shows the live account and its usage:
 
    ```text
-   Quayflow · work · Automatic · 5h 62% · 7d 40%
+   Quayflow · work-01 · Automatic · 5h 62% · 7d 40%
    ```
 
    Near the threshold (85%) Quayflow switches to the account with the most room. If a request hits the limit first, it switches and retries that request once. Either way your next answer arrives in the same session, and the transcript says what happened:
 
    ```text
-   ● quayflow: Quayflow: Switched to personal (usage-limit recovery). Each session uses it from its next request; …
+   ● quayflow: Quayflow: Switched to work-02 (usage-limit recovery). Each session uses it from its next request; …
    ```
 
-Prefer to decide each time? Leave the group in Suggest, the default: the status line then says `| personal suggested` and `/quay accept` switches.
+Prefer to decide each time? Leave the group in Suggest, the default: the status line then says `| work-02 suggested` and `/quay accept` switches.
 
 Everything in the pane also works from the command line: `quayflow status`, `quayflow use <account>`, `quayflow group ...`. See the [user guide](docs/user-guide.md).
 
@@ -161,19 +161,19 @@ Everything in the pane also works from the command line: `quayflow status`, `qua
 
 Scheduled tasks, scripts and agent pipelines that run `claude -p` get the same switching and recovery, and Quayflow stays invisible to them.
 
-A job started while the live account `sdk` is at its weekly limit:
+A job started while the live account `work-01` is at its weekly limit:
 
 ```sh
 claude -p "Reply with exactly: HEADLESS-OK" --output-format json
 ```
 
-returns Claude's normal JSON with exit code 0: Quayflow switched to `personal` and retried that request once inside the run. The engine log of such a recovery:
+returns Claude's normal JSON with exit code 0: Quayflow switched to `work-02` and retried that request once inside the run. The engine log of such a recovery:
 
 ```text
 19:53:44 failure.shape      seven_day 100%, simulated: false     <- Claude reports the limit
-19:53:44 transition.written sdk -> personal, how: recovery, lockedMs: 17
+19:53:44 transition.written work-01 -> work-02, how: recovery, lockedMs: 17
 19:53:44 recovery.decision  retry: true, switched: true          <- one switch, one retry
-19:53:51 adoption           used: personal, ok: true             <- the retry ran on personal
+19:53:51 adoption           used: work-02, ok: true              <- the retry ran on work-02
 ```
 
 When Quayflow does not switch (every account is at its limit, or the group is not in Automatic), the job gets Claude's own result, unchanged. Your script asks what happened with the `session_id` from Claude's output:
@@ -181,9 +181,9 @@ When Quayflow does not switch (every account is at its limit, or the group is no
 ```text
 $ quayflow last --session a04910ad-30f6-4c2a-8bd8-94a317333a02
 Session a04910ad-30f6-4c2a-8bd8-94a317333a02: not recovered
-  limit:        sdk at 100% 7d (resets 2026-11-08T04:00:00.000Z)
+  limit:        work-01 at 100% 7d (resets 2026-11-08T04:00:00.000Z)
   run again at: 2026-11-08T04:00:00.000Z
-  why:          Suggest mode: no automatic switch; /quay accept switches to personal
+  why:          Suggest mode: no automatic switch; /quay accept switches to work-02
 ```
 
 `--json` gives the same as JSON: `outcome` (`recovered`, `all_exhausted` or `not_recovered`) and `availableAt`, the time to run again (`null` when none applies).
@@ -268,13 +268,13 @@ flowchart LR
 Type `/quay` for the pane: each account's windows with countdowns to their reset, a chart of every account against the threshold, and the suggestion.
 
 <p align="center">
-  <img src="assets/screenshots/quay-overview.svg" alt="The /quay Overview: the live account &quot;work&quot; at 88% of its 5-hour window and 31% of its 7-day window, a chart of both accounts with the 85% threshold as a dashed line, and the suggestion &quot;Switch to personal?&quot;" width="642">
+  <img src="assets/screenshots/quay-overview.svg" alt="The /quay Overview: the live account &quot;work-01&quot; at 88% of its 5-hour window and 31% of its 7-day window, a chart of both accounts with the 85% threshold as a dashed line, and the suggestion &quot;Switch to work-02?&quot;" width="642">
 </p>
 
 Accepting a suggestion opens a review before anything changes: which sessions move, the target's usage and the checks that passed.
 
 <p align="center">
-  <img src="assets/screenshots/quay-switch-review.svg" alt="The switch review: switch to personal, moves 2 sessions in default, usage 12% 7 d, checks for groups and plan and Claude version passed, an option to wait for idle, and the Switch, Why? and Cancel buttons" width="642">
+  <img src="assets/screenshots/quay-switch-review.svg" alt="The switch review: switch to work-02, moves 2 sessions in default, usage 12% 7 d, checks for groups and plan and Claude version passed, an option to wait for idle, and the Switch, Why? and Cancel buttons" width="642">
 </p>
 
 <sub>Rendered from the Mod's own drawing code with sample data. The desktop app and IDE panels show the same figures as text gauges.</sub>

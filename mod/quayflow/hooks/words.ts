@@ -55,7 +55,7 @@ export function candidateWord(status: string): string {
 
 /** "47% 7 d · 4 min ago" for a candidate, or "usage unknown". */
 export function candidateUsage(c: CandidateView): string {
-  if (c.pct === undefined || c.pct === null) return 'usage unknown (never read as 0%)'
+  if (c.pct === undefined || c.pct === null) return 'usage unknown (not read yet)'
   if (!c.fresh) return `usage unknown${c.ageS !== undefined && c.ageS !== null ? ` (read ${age(c.ageS)} ago)` : ''}`
   return `${pct(c.pct)} ${windowName(c.window ?? '?')}${c.ageS !== undefined && c.ageS !== null ? ` · ${age(c.ageS)} ago` : ''}${c.fresh ? '' : ' · stale'}`
 }
@@ -116,7 +116,7 @@ export function switchHeading(s: StateView, t: Transition): string {
     case 'return_home':
       return `Return to "${label(s, t.to)}" (home account)`
     case 'model_fallback':
-      return `Plan rejection (model_not_found): back to "${label(s, t.to)}"`
+      return `Model not available on that plan: back to "${label(s, t.to)}"`
     case 'recovery':
       return `Usage-limit recovery: switch to "${label(s, t.to)}"`
     case 'automatic':

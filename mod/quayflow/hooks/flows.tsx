@@ -70,7 +70,7 @@ async function startEngine($: EngineInterface, c: Ctx): Promise<void> {
     await establish($, { allowStart: true, explicit: true })
     await refresh($)
     return Q.link.on
-  }, on => (on ? 'Engine running.' : `Engine not available: ${linkOffText(Q.link)}.`))
+  }, on => (on ? 'Engine running.' : `The engine did not start: ${linkOffText(Q.link)}.`))
 }
 
 // ------------------------------------------------------------ first use
@@ -175,7 +175,7 @@ function Readiness($: EngineInterface, c: Ctx): JSX.Element {
       'Current login identity',
       !env ? 'Not detected yet' : env.live.signedOut ? 'Signed out: sign in first' : env.live.known ? `Known: ${label(s, env.live.account)}` : `Not registered (#${env.live.account ?? '?'}${env.live.kind ? `, ${kindText(env.live.kind, env.live.subscription)}` : ''})`,
     ],
-    ['Live adoption', compat?.livePass === true ? 'Passed' : compat?.livePass === false ? 'Failed: in-place switching off' : 'On next actual switch'],
+    ['Live adoption', compat?.livePass === true ? 'Passed' : compat?.livePass === false ? 'Failed: in-place switching off' : 'Checked at the next real switch'],
     ['Managed login', managed ? 'Enforced: other accounts not eligible' : 'None'],
   ]
   const register = !!env && !env.live.known && !env.live.signedOut
@@ -536,8 +536,8 @@ function Ready($: EngineInterface, c: Ctx): JSX.Element {
       )}
       {Row(
         c,
-        Btn(c, 'done-overview', 'Open /quay', () => go($, { tab: 'overview' }), true),
-        Btn(c, 'done-automatic', 'Automatic', () => go($, { tab: 'groups', sub: 'group', arg: s ? myGroup(s) : undefined })),
+        Btn(c, 'done-overview', 'Overview', () => go($, { tab: 'overview' }), true),
+        Btn(c, 'done-automatic', 'Group mode', () => go($, { tab: 'groups', sub: 'group', arg: s ? myGroup(s) : undefined })),
         Btn(c, 'done-add', 'Add account', () => go($, { tab: 'onboarding', sub: 'add' })),
       )}
     </Box>
@@ -633,7 +633,7 @@ export function SwitchProgress($: EngineInterface, c: Ctx): JSX.Element {
   const t = env?.transition ?? env?.lastSwitch
   if (!t) return (
     <Box flexDirection="column">
-      {Line(c, 'No transition for this environment.')}
+      {Line(c, 'No switch recorded for this environment yet.')}
       {Row(c, Btn(c, 'sp-back', 'Back', () => go($, { tab: 'overview' })))}
     </Box>
   )
@@ -673,7 +673,7 @@ export function SwitchProgress($: EngineInterface, c: Ctx): JSX.Element {
         ? Hint(c, 'The home account\'s binding window reset and fresh usage is below the threshold minus the margin; pin, cooldown, plan and group checks passed.')
         : null}
       {t.how === 'model_fallback'
-        ? Alert(c, 'Plan rejection: model_not_found', `The model is unavailable there; switched back to "${label(s, t.to)}".`, 'warn')
+        ? Alert(c, 'Model not available on that plan', `The account's plan cannot serve the model; switched back to "${label(s, t.to)}".`, 'warn')
         : null}
       {mine.length > 0 &&
         Section(
@@ -727,7 +727,7 @@ async function cancelTransition($: EngineInterface, c: Ctx, id: string): Promise
     await flash(
       $,
       r.started ? 'warn' : 'info',
-      r.started ? 'Transition already started; checking state.' : r.ok ? 'Cancelled before a write; the login is unchanged.' : (r.message ?? 'The engine did not cancel.'),
+      r.started ? 'Switch already started; checking its state.' : r.ok ? 'Cancelled before a write; the login is unchanged.' : (r.message ?? 'The engine did not cancel.'),
     )
   } catch (err) {
     await flash($, 'error', `Cancel not confirmed: ${(err as Error).message}. Checking state.`)
@@ -757,7 +757,7 @@ export function Conflict($: EngineInterface, c: Ctx): JSX.Element {
         c,
         Btn(c, 'cf-lanes', 'Move to lane', () => go($, { tab: 'switch', sub: 'lanemove', arg: to }), true),
         Btn(c, 'cf-keep', 'Keep shared', () => go($, { tab: 'overview' })),
-        Btn(c, 'cf-policy', 'Policy', () => go($, { tab: 'groups' })),
+        Btn(c, 'cf-policy', 'Groups', () => go($, { tab: 'groups' })),
       )}
     </Box>
   )
@@ -778,7 +778,7 @@ export function Trust($: EngineInterface, c: Ctx): JSX.Element {
         {Alert(c, 'Live login is not registered', `A native /login, a sign-out or another tool changed environment ${env.id}. Automatic switching and recovery are paused here.`, 'warn')}
         {KV(c, 'Environment', `${env.id} (shared login)`)}
         {KV(c, 'Live login', `account #${env.live.account ?? '?'}${env.live.kind ? ` (${kindText(env.live.kind, env.live.subscription)})` : ''}`)}
-        {KV(c, 'Current task', 'Native Claude behavior remains in control')}
+        {KV(c, 'Current task', 'Continues as usual under Claude')}
         {Line(c, 'Register it (/quay register) to resume, or ignore the notice: automation then stays paused while this login is live.')}
         {Hint(c, 'A manual switch stays possible only after a protected backup of this login is confirmed; Quayflow refuses the switch if it cannot store one. Ignore never authorizes overwriting it in the background.')}
         {Row(
@@ -797,8 +797,8 @@ export function Trust($: EngineInterface, c: Ctx): JSX.Element {
       <Box flexDirection="column">
         {Alert(c, 'Automation paused for this environment', n?.text ?? 'The login changed repeatedly outside Quayflow. Another account manager may be switching the same store.', 'error')}
         {Line(c, 'Stop the competing automation and review the current identity. Quayflow will not keep switching it back.')}
-        {KV(c, 'Native Claude task', 'Not terminated by this warning')}
-        {KV(c, 'Resume condition', 'Explicit reconciliation, not a blind retry')}
+        {KV(c, 'Current task', 'Continues as usual; this warning does not stop it')}
+        {KV(c, 'Resumes', 'After you review the live login; never by retrying blindly')}
         {Row(
           c,
           Btn(c, 'sw-live', 'Live login', () => go($, env.live.known ? { tab: 'accounts', sub: 'detail', arg: env.live.account ?? undefined } : { tab: 'trust', sub: 'unknown' }), true),
@@ -856,7 +856,7 @@ function DOrg($: EngineInterface, c: Ctx): JSX.Element {
           c,
           Btn(c, 'dorg-disable', 'Disable', () => void run($, 'turning the exception off', () => actDorg($, false, s.dOrg.confirmedOrg ?? '', ''), r => (r.ok ? 'Managed-login exception setting is off.' : (r.message ?? 'Refused.'))), true),
           Btn(c, 'dorg-activity', 'Affected switches', () => go($, { tab: 'activity' })),
-          Btn(c, 'dorg-back', 'Back to /quay', () => go($, { tab: 'overview' })),
+          Btn(c, 'dorg-back', 'Overview', () => go($, { tab: 'overview' })),
         )}
       </Box>
     )

@@ -111,7 +111,7 @@ impl Engine {
         let (home_state, home_detail) = match &home {
             None => (
                 "none",
-                "No home account: Quayflow stays on the current account until a normal trigger.".to_string(),
+                "No home account: Quayflow stays on the current account until a threshold or a usage limit triggers a switch.".to_string(),
             ),
             Some(h) if live.as_ref() == Some(h) => ("home", format!("{} is the home account and is live.", label(h))),
             Some(h) => {

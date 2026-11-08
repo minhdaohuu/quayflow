@@ -101,9 +101,7 @@ impl Engine {
         set(consents.get("liveCanary"), &mut c.live_canary);
         if complete {
             if inner.config.consents.terms.is_none() {
-                return Err(ApiErr::refused(
-                    "the terms and organization-rules notice must be acknowledged first",
-                ));
+                return Err(ApiErr::refused("accept the terms notice first (quayflow onboard)"));
             }
             inner.config.onboarded_at.get_or_insert(now);
         }
@@ -218,7 +216,7 @@ impl Engine {
         let envx = {
             let inner = self.lock();
             if inner.config.consents.credential_storage.is_none() {
-                return Err(ApiErr::refused("credential storage was not consented to (onboarding)"));
+                return Err(ApiErr::refused("credential storage is not consented to; allow it in onboarding or with quayflow consent credential-storage on"));
             }
             if inner.config.group(group).is_none() {
                 return Err(ApiErr::invalid(format!("no group \"{group}\"; a group is required")));
@@ -350,7 +348,7 @@ impl Engine {
         let mut out = vec![];
         let mut inner = self.lock();
         if inner.config.consents.credential_storage.is_none() {
-            return Err(ApiErr::refused("credential storage was not consented to (onboarding)"));
+            return Err(ApiErr::refused("credential storage is not consented to; allow it in onboarding or with quayflow consent credential-storage on"));
         }
         let gname = inner
             .config
@@ -483,7 +481,7 @@ impl Engine {
     pub fn signin_start(&self, reauth: Option<&str>) -> Result<SigninStatus, ApiErr> {
         let mut inner = self.lock();
         if inner.config.consents.credential_storage.is_none() {
-            return Err(ApiErr::refused("credential storage was not consented to (onboarding)"));
+            return Err(ApiErr::refused("credential storage is not consented to; allow it in onboarding or with quayflow consent credential-storage on"));
         }
         let reauth = match reauth {
             Some(k) => Some(self.find_account(&inner, k)?),
@@ -808,7 +806,7 @@ impl Engine {
         let msg = match op {
             "create" => {
                 if inner.config.group(&group).is_some() {
-                    return Err(ApiErr::invalid("a group with that name exists"));
+                    return Err(ApiErr::invalid("a group with that name already exists"));
                 }
                 inner.config.groups.push(Group::new(&group));
                 format!("group \"{group}\" created")
@@ -855,7 +853,7 @@ impl Engine {
                     Some("preferred") => Rank::Preferred,
                     Some("normal") => Rank::Normal,
                     Some("backup") => Rank::Backup,
-                    _ => return Err(ApiErr::invalid("rank is preferred, normal or backup")),
+                    _ => return Err(ApiErr::invalid("rank must be preferred, normal or backup")),
                 };
                 let g = inner
                     .config
@@ -878,7 +876,7 @@ impl Engine {
             }
             "mode" => {
                 let mode = Mode::parse(&s("mode").unwrap_or_default())
-                    .ok_or_else(|| ApiErr::invalid("mode is manual, suggest or automatic"))?;
+                    .ok_or_else(|| ApiErr::invalid("mode must be manual, suggest or automatic"))?;
                 let approve = body.get("approveAutomatic").and_then(|v| v.as_bool()).unwrap_or(false);
                 let g = inner
                     .config
@@ -889,13 +887,18 @@ impl Engine {
                         return Err(ApiErr::new(
                             409,
                             "needs_approval",
-                            "Automatic mode switches accounts of this group without asking, including in unattended headless jobs. Approve it explicitly (approveAutomatic).",
+                            "Automatic mode switches accounts of this group without asking, including in unattended headless jobs. It needs your approval once for this group.",
                         ));
                     }
                     g.automatic_approved_at = Some(now_ms());
                 }
                 g.mode = mode;
-                format!("group \"{group}\" mode: {}", mode.as_str())
+                let m = mode.as_str();
+                format!(
+                    "Group \"{group}\" is now in {}{} mode.",
+                    m[..1].to_ascii_uppercase(),
+                    &m[1..]
+                )
             }
             "tuning" => {
                 let g = inner

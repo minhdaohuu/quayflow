@@ -33,7 +33,7 @@ export const HELP = [
   '/quay                         open the Quayflow pane (interactive) or print status',
   '/quay status                  accounts, usage, recommendation and running sessions',
   '/quay accept                  accept the current suggestion',
-  '/quay use <account>           switch this environment to an account (pins it)',
+  '/quay use <account> [--idle-wait]  switch this environment to an account (pins it)',
   '/quay unpin                   end a manual pin',
   '/quay mode <manual|suggest|automatic> [group] [--approve]',
   '/quay group [list] | create <G> | delete <G> | add <G> <acct..> | remove <G> <acct..>',
@@ -48,10 +48,11 @@ export const HELP = [
   '/quay open <lane>             open this session in a lane in a new window',
   '/quay report [--save]         preview the local support report; --save saves it after review',
   '/quay whoami                  which account this session uses now',
-  '/quay canary                  live version canary status',
+  '/quay ignore                  leave an unknown live login unregistered (automation stays paused)',
+  '/quay canary                  whether the live canary is recording',
   '/quay migrate-poc [group]     import the PoC vault (once)',
   '/quay start                   start the engine (after an intentional stop)',
-  '/quay help',
+  '/quay help                    this list',
 ].join('\n')
 
 export function statusReport(s: StateView, now: number): string {
@@ -59,7 +60,7 @@ export function statusReport(s: StateView, now: number): string {
   const lines: string[] = []
   const g = myGroup(s)
   lines.push(`Quayflow ${MOD_VERSION} · engine ${s.engine.version} (protocol ${s.engine.protocol}) · ${s.engine.integrity}`)
-  if (!env) return [...lines, 'No credential environment is known yet.'].join('\n')
+  if (!env) return [...lines, 'No environment is known yet.'].join('\n')
   const verified = s.session?.verifiedAccount
   lines.push(
     `This session: ${verified ? `last request verified on "${label(s, verified)}"${s.session?.verifiedAt ? ` at ${when(s.session.verifiedAt)}` : ''}` : 'no verified request yet'} · environment ${env.id} · group ${g} (${s.session?.groupSource === 'assigned' ? 'project assignment' : 'default'}) · mode ${env.mode}${env.automationPaused ? ' (automation paused)' : ''}`,
@@ -78,9 +79,9 @@ export function statusReport(s: StateView, now: number): string {
   if (env.suggestion) lines.push(`Recommendation: switch to "${label(s, env.suggestion.to)}" (${env.suggestion.reason}) — /quay accept`)
   if (env.pin) lines.push(`Pinned: "${label(s, env.pin.account)}" until ${when(env.pin.until)} — /quay unpin`)
   const t = env.transition
-  if (t && !isTerminal(t)) lines.push(`Transition to "${label(s, t.to)}": ${transitionWords(t.state)}`)
+  if (t && !isTerminal(t)) lines.push(`Switch to "${label(s, t.to)}": ${transitionWords(t.state)}`)
   if (env.adoption.length) {
-    lines.push('Adoption per client (stored destination vs last request identity):')
+    lines.push('Switch progress per session (the stored account, and the account its last request used):')
     for (const c of env.adoption) lines.push(`  pid ${c.pid}: ${adoptionWords(c.state)}${c.lastRequestAccount ? ` (last request: ${label(s, c.lastRequestAccount)})` : ''}`)
   }
   lines.push(`Running sessions of ${env.id} (other clients, such as editor extensions, may not be listed):`)
@@ -106,6 +107,11 @@ function parseArgs(args: string): string[] {
 
 function resolveAccount(s: StateView, ref: string): string {
   return findAccount(s, ref)?.id ?? ref
+}
+
+/** "Suggest", "Manual", "Automatic": mode names as the user guide writes them. */
+function modeName(mode: string): string {
+  return mode ? mode[0]!.toUpperCase() + mode.slice(1) : mode
 }
 
 function automaticQuestion(group: string): string {
@@ -161,7 +167,7 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
     await paintStatus($)
     // Still shaking hands (the engine is starting): not "off", just not ready yet.
     if (Q.link.reason === 'connecting') return `Quayflow is still connecting to the engine${Q.link.message ? ` (${Q.link.message})` : ''}; try again in a moment. Claude works as usual.`
-    return `Quayflow is off:${linkOffText(Q.link)}${Q.link.message && Q.link.reason !== 'start_failed' ? ` (${Q.link.message})` : ''}. Claude works as usual.`
+    return `Quayflow is off: ${linkOffText(Q.link)}${Q.link.message && Q.link.reason !== 'start_failed' ? ` (${Q.link.message})` : ''}. Claude works as usual.`
   }
 
   try {
@@ -179,7 +185,7 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
       }
       case 'use':
       case 'switch': {
-        if (!rest[0]) return 'usage: /quay use <account> [--idle-wait]'
+        if (!rest[0]) return 'Usage: /quay use <account> [--idle-wait]'
         const r = await actSwitchTo($, resolveAccount(s, rest.join(' ')), flags.has('--idle-wait'))
         return switchOutcome(Q.state, r, true)
       }
@@ -189,7 +195,7 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
       }
       case 'mode': {
         const mode = (rest[0] ?? '').toLowerCase().replace(/^auto$/, 'automatic') as Mode
-        if (!['manual', 'suggest', 'automatic'].includes(mode)) return 'usage: /quay mode <manual|suggest|automatic> [group] [--approve]'
+        if (!['manual', 'suggest', 'automatic'].includes(mode)) return 'Usage: /quay mode <manual|suggest|automatic> [group] [--approve]'
         const g = findGroup(s, rest[1] ?? myGroup(s))
         if (!g) return `Quayflow: no group named "${rest[1] ?? myGroup(s)}".`
         // Automatic is approved once per group; the engine refuses it unapproved (409 needs_approval).
@@ -200,12 +206,12 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
         }
         try {
           const r = await actSetMode($, g.name, mode, approve)
-          return r.ok ? `Quayflow: group "${g.name}" is now in ${mode} mode.` : `Quayflow: ${r.message ?? 'refused'}.`
+          return r.ok ? `Quayflow: group "${g.name}" is now in ${modeName(mode)} mode.` : `Quayflow: ${r.message ?? 'refused'}.`
         } catch (err) {
           if (!hasCode(err, 'needs_approval')) throw err
           if (!(flags.has('--approve') || (await confirm($, automaticQuestion(g.name), 'Approve Automatic')))) return notApproved(g.name)
           await actSetMode($, g.name, mode, true)
-          return `Quayflow: group "${g.name}" is now in automatic mode.`
+          return `Quayflow: group "${g.name}" is now in Automatic mode.`
         }
       }
       case 'group':
@@ -218,16 +224,16 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
         if (verb === 'pause') return 'Quayflow: automatic switching and recovery are paused. Manual switches still work. /quay resume to resume.'
         // Resume ends a pause by you or a hold; another cause keeps automation paused.
         const after = Q.state ? myEnv(Q.state) : undefined
-        return after?.automationPaused ? `Quayflow: still paused: ${after.pausedReason ?? 'another cause'}. /quay shows its remedy.` : 'Quayflow: automation resumed.'
+        return after?.automationPaused ? `Quayflow: automation is still paused: ${after.pausedReason ?? 'another cause'}. Open /quay to see what ends it.` : 'Quayflow: automation resumed.'
       }
       case 'register': {
         if (!rest.length && !Q.headless) return 'pane:register'
         const labelText = rest[0]
         const group = findGroup(s, rest[1] ?? s.defaultGroup)?.name
-        if (!labelText) return 'usage: /quay register <label> [group] [--accept-disclosure]'
+        if (!labelText) return 'Usage: /quay register <label> [group] [--accept-disclosure]'
         if (!group) return `Quayflow: no group named "${rest[1]}". Create it first: /quay group create ${rest[1]}`
         if (!s.consents.credentialStorage) {
-          return "Registering stores a reusable copy of this login in Quayflow's protected vault, which needs your consent first: open /quay (interactive) or run quayflow consent credential-storage on."
+          return "Registering stores a reusable copy of this login in Quayflow's protected vault, which needs your consent first: open /quay (interactive) or run in a terminal: quayflow consent credential-storage on"
         }
         const saved = (a: { label: string; id: string; kind: string; subscription?: string | null; note?: string }): string =>
           `Saved "${a.label}" (account #${a.id}, ${a.kind}${a.subscription ? `, ${a.subscription}` : ''}) to the vault in group ${group}. Nothing was switched.${a.note ? ` ${a.note}` : ''}`
@@ -253,7 +259,7 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
       case 'replace':
       case 'open': {
         const lane = rest[0]
-        if (!lane) return `usage: /quay ${verb} <lane>`
+        if (!lane) return `Usage: /quay ${verb} <lane>`
         const what =
           verb === 'open'
             ? `Open this session in lane "${lane}" with its full history, in a new window? It continues there once this session ends; keep only one of the two working on the task.`
@@ -275,7 +281,7 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
         const actual = await liveAccountHash($).catch(() => undefined)
         const a = account(s, actual)
         const env = myEnv(s)
-        return `This session's credential: ${actual ? `account #${actual}` : 'unknown (no first-party login)'} = ${a ? `"${a.label}"` : 'not registered'}. Stored login of ${env?.id ?? '?'}: ${env?.live.known ? `"${label(s, env.live.account)}"` : 'unknown'}.`
+        return `This session uses ${actual ? `account #${actual}` : 'an unknown account (no first-party login)'}${actual ? (a ? ` ("${a.label}")` : ' (not registered)') : ''}. Stored login of ${env?.id ?? '?'}: ${env?.live.known ? `"${label(s, env.live.account)}"` : 'unknown'}.`
       }
       case 'poll': {
         const r = await actPoll($)
@@ -334,7 +340,7 @@ async function groupCommand($: EngineInterface, s: StateView, rest: string[], fl
     }
     case 'create':
     case 'delete': {
-      if (!name) return `usage: /quay group ${sub} <name>`
+      if (!name) return `Usage: /quay group ${sub} <name>`
       const r = sub === 'create' ? await actGroupCreate($, name) : await actGroupDelete($, need(name) ?? name)
       return r.ok ? `Quayflow: group "${name}" ${sub === 'create' ? 'created' : 'deleted'}.` : `Quayflow: ${r.message ?? 'refused'}.`
     }
@@ -342,7 +348,7 @@ async function groupCommand($: EngineInterface, s: StateView, rest: string[], fl
     case 'remove': {
       const g = need(name)
       const accounts = rest.slice(2).map(r => resolveAccount(s, r))
-      if (!g || !accounts.length) return `usage: /quay group ${sub} <group> <account..>`
+      if (!g || !accounts.length) return `Usage: /quay group ${sub} <group> <account..>`
       const add = sub === 'add' ? accounts : []
       const remove = sub === 'remove' ? accounts : []
       let r = await actMembers($, g, add, remove, false)
@@ -361,7 +367,7 @@ async function groupCommand($: EngineInterface, s: StateView, rest: string[], fl
     case 'home': {
       const g = need(name)
       const who = rest[2]
-      if (!g || !who) return 'usage: /quay group preferred <group> <account|none>'
+      if (!g || !who) return 'Usage: /quay group preferred <group> <account|none>'
       const r = await actPreferred($, g, who.toLowerCase() === 'none' ? null : resolveAccount(s, who))
       return r.ok ? `Quayflow: home of "${g}" set to ${who.toLowerCase() === 'none' ? 'none' : `"${label(s, resolveAccount(s, who))}"`}.` : `Quayflow: ${r.message ?? 'refused'}.`
     }
@@ -369,13 +375,13 @@ async function groupCommand($: EngineInterface, s: StateView, rest: string[], fl
       const g = need(name)
       const who = rest[2]
       const rank = (rest[3] ?? '').toLowerCase()
-      if (!g || !who || !['preferred', 'normal', 'backup'].includes(rank)) return 'usage: /quay group rank <group> <account> <preferred|normal|backup>'
+      if (!g || !who || !['preferred', 'normal', 'backup'].includes(rank)) return 'Usage: /quay group rank <group> <account> <preferred|normal|backup>'
       const r = await actRank($, g, resolveAccount(s, who), rank)
       return r.ok ? `Quayflow: "${label(s, resolveAccount(s, who))}" ranked ${rank} in "${g}".` : `Quayflow: ${r.message ?? 'refused'}.`
     }
     case 'default': {
       const g = need(name)
-      if (!g) return 'usage: /quay group default <group>'
+      if (!g) return 'Usage: /quay group default <group>'
       const r = await actSetDefault($, g)
       return r.ok ? `Quayflow: "${g}" is now the default group for projects without an assignment.` : `Quayflow: ${r.message ?? 'refused'}.`
     }
@@ -384,14 +390,14 @@ async function groupCommand($: EngineInterface, s: StateView, rest: string[], fl
       const threshold = rest[2] !== undefined ? Number(rest[2]) : undefined
       const margin = rest[3] !== undefined ? Number(rest[3]) : undefined
       if (!g || (threshold !== undefined && !Number.isFinite(threshold)) || (margin !== undefined && !Number.isFinite(margin))) {
-        return 'usage: /quay group tuning <group> [threshold%] [margin]'
+        return 'Usage: /quay group tuning <group> [threshold%] [margin]'
       }
       const r = await actTuning($, g, threshold, margin)
       return r.ok ? `Quayflow: "${g}" tuning saved.` : `Quayflow: ${r.message ?? 'refused'}.`
     }
     case 'assign': {
       const g = need(name)
-      if (!g) return 'usage: /quay group assign <group>  (assigns this project folder)'
+      if (!g) return 'Usage: /quay group assign <group>  (assigns this project folder)'
       const r = await actAssign($, Q.cwd, g)
       return r.ok ? `Quayflow: ${Q.cwd} now uses group "${g}". Running jobs keep the destinations they started with.` : `Quayflow: ${r.message ?? 'refused'}.`
     }
@@ -409,16 +415,16 @@ async function laneCommand($: EngineInterface, rest: string[]): Promise<string> 
   const name = rest[1]
   if (sub === 'list') {
     const lanes = await actLanes($)
-    if (!lanes.length) return 'No lanes. A lane is a separate credential environment for sessions that need a different account: /quay lanes create <name>.'
+    if (!lanes.length) return 'No lanes. A lane is a separate Claude environment, with its own login, for sessions that need a different account: /quay lanes create <name>.'
     return [
       'Lanes (each has its own login and session folder, and links your shared Claude setup):',
       ...lanes.map(
         l =>
-          `  ${l.name}: ${l.live ? `login "${label(Q.state, l.live)}"` : 'no login yet'} · ${l.sessions} session(s) listed · links ${l.linksOk ? 'ok' : `need repair (${l.linkDetail.join('; ')})`} · in-place switching ${l.canaryPassed ? 'enabled (canary passed)' : 'off until its canary passes'}`,
+          `  ${l.name}: ${l.live ? `login "${label(Q.state, l.live)}"` : 'no login yet'} · ${l.sessions} session(s) listed · links ${l.linksOk ? 'ok' : `need repair (${l.linkDetail.join('; ')})`} · in-place switching ${l.canaryPassed ? 'enabled (check passed)' : 'off until its check passes'}`,
       ),
     ].join('\n')
   }
-  if (!name) return `usage: /quay lanes ${sub} <name>`
+  if (!name) return `Usage: /quay lanes ${sub} <name>`
   if (sub === 'create') {
     const l = await actLaneCreate($, name)
     return `Lane "${l.name}" created at ${l.configDir}; links ${l.linksOk ? 'ok' : `need repair (${l.linkDetail.join('; ')})`}. Move a session into it with /quay replace ${l.name} or /quay open ${l.name}.`

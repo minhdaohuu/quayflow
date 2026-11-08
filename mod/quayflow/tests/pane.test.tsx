@@ -102,9 +102,9 @@ describe('switch progress', () => {
     await ui.unmount()
   })
 
-  test('cancel after the write says "Transition already started; checking state"', async ($, on) => {
+  test('cancel after the write says "Switch already started; checking its state"', async ($, on) => {
     const state: StateView = { ...STATE, envs: [{ ...STATE.envs[0]!, transition: { ...transition, state: 'preparing' } }] }
-    const w = world(on, { state, routes: { '/v1/transition/cancel': { ok: true, message: 'Transition already started; checking state', started: true } } })
+    const w = world(on, { state, routes: { '/v1/transition/cancel': { ok: true, message: 'Switch already started; checking its state', started: true } } })
     await start($, w, true)
     await quay($, '')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -113,7 +113,7 @@ describe('switch progress', () => {
     expect(await ui.find({ type: 'Text', text: /^Prepared/ })).toBeDefined()
     await ui.press({ key: 'sp-cancel' })
     expect(w.bodies('/v1/transition/cancel')).toEqual([{ id: 'tr-9' }])
-    expect(await ui.find({ type: 'Text', text: /Transition already started; checking state\./ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Switch already started; checking its state\./ })).toBeDefined()
     await ui.unmount()
   })
 })

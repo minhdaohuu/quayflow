@@ -58,7 +58,10 @@ impl Engine {
                 .get(env)
                 .ok_or_else(|| Refusal::new("not_found", format!("no environment \"{env}\"")))?;
             if st.blocking_transition() {
-                return Err(Refusal::new("conflict", "Transition already started; checking state"));
+                return Err(Refusal::new(
+                    "conflict",
+                    "another switch of this environment is in progress; wait for it to finish",
+                ));
             }
             let account = inner
                 .config
@@ -153,7 +156,7 @@ impl Engine {
             ) {
                 return Err(Refusal::new(
                     "refused",
-                    "the journal cannot be written; no transition without a record",
+                    "the journal cannot be written, so no switch was made (every switch is recorded first)",
                 ));
             }
             tid = t.id.clone();
@@ -519,6 +522,10 @@ impl Engine {
         self.emit(&mut inner, "switched", Some(env), &text);
     }
 
+    /// The answer to a cancel that came too late: the login is being written. `/v1/transition/cancel`
+    /// sets `started` when `cancel` returns exactly this.
+    pub const CANCEL_TOO_LATE: &'static str = "Switch already started; checking its state";
+
     pub fn cancel(&self, tid: &str) -> Result<String, String> {
         let inner = self.lock();
         for st in inner.envs.values() {
@@ -528,12 +535,12 @@ impl Engine {
                         st.cancel.store(true, Ordering::SeqCst);
                         Ok("Cancellation requested".into())
                     }
-                    s if s.is_terminal() => Ok("This transition has already ended".into()),
-                    _ => Ok("Transition already started; checking state".into()),
+                    s if s.is_terminal() => Ok("This switch has already ended".into()),
+                    _ => Ok(Self::CANCEL_TOO_LATE.into()),
                 };
             }
         }
-        Err("no such transition".into())
+        Err("no such switch".into())
     }
 
     /// After every request: whether this client should report the identity its request used.

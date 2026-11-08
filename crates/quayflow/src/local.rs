@@ -600,7 +600,7 @@ pub fn handoff_resume(dd: &DataDir, session: &str, to: &str, wait_pid: Option<u3
         }
     }
     let Some(claude) = qf_adapter::process::find_claude() else {
-        eprintln!("Claude Code (claude) not found on PATH");
+        eprintln!("quayflow: Claude Code (claude) was not found on PATH");
         return 1;
     };
     let mut c = std::process::Command::new(claude);
@@ -616,7 +616,7 @@ pub fn handoff_resume(dd: &DataDir, session: &str, to: &str, wait_pid: Option<u3
     match c.status() {
         Ok(s) => s.code().unwrap_or(0),
         Err(e) => {
-            eprintln!("could not start claude: {e}");
+            eprintln!("quayflow: could not start Claude Code: {e}");
             1
         }
     }
@@ -732,7 +732,7 @@ fn latest_tag(gh_ready: bool) -> Result<String, String> {
     v["tag_name"]
         .as_str()
         .map(String::from)
-        .ok_or_else(|| fail("no tag_name in the answer".into()))
+        .ok_or_else(|| fail("GitHub's answer names no release tag".into()))
 }
 
 fn download(assets: &[&str], dest: &Path, tag: &str, gh_ready: bool) -> Result<(), String> {

@@ -32,7 +32,7 @@ impl Engine {
                     "warn",
                     "unknown_login",
                     format!(
-                        "The live login (#{u}) is not registered. Automatic switching and recovery are paused here. Register it (/quay register) or ignore.{}",
+                        "The live login (#{u}) is not registered. Automatic switching and recovery are paused here. Register it (/quay register) or ignore it (/quay ignore).{}",
                         if cfg.ignored_unknown.contains(u) { " Notice acknowledged." } else { "" }
                     ),
                     true,

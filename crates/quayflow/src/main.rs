@@ -18,47 +18,61 @@ use qf_engine::DataDir;
 use serde_json::{json, Value};
 use std::time::Duration;
 
-const HELP: &str = "Quayflow: account groups, usage-aware switching and recovery for Claude Code.
+const HELP: &str =
+    "Quayflow: switch Claude Code between your approved accounts by usage, and recover from usage limits.
 
 Usage: quayflow <command> [options]
 
 Engine
   start [--if-consented]       start the engine in the background (no window)
   stop | pause | resume        stop the engine; pause or resume automation
-  status [--json]              environments, accounts, usage and decisions
-  last --session ID [--json]   what Quayflow did for one Claude session (headless jobs:
-                               recovered, all accounts at their limit, or why not; when to run again)
+  status [--json]              show environments, accounts, usage and decisions
+  last --session ID [--json]   show what Quayflow did for one Claude session: recovered, every
+                               account at its limit, or why not, and when to run again
   serve                        run the engine in the foreground
 
 Accounts and groups
-  onboard                      first-use consents (interactive)
+  onboard                      give the first-use consents (interactive)
   register --label L --group G [--accept-disclosure]
-  add --label L --group G [--accept-disclosure]    sign in to another account (new window)
+                               register the login that is live now
+  add --label L --group G [--accept-disclosure]
+                               sign in to another account (opens a window)
   reauth <account>             sign in again for an account that was set aside
-  remove <account> [--yes] | label <account> <new label>
-  use <account> [--idle-wait] [--env E]            switch now (pins your choice)
-  accept | unpin
+  remove <account> [--yes]     remove an account and its saved copy
+  label <account> <new label>  rename an account
+  use <account> [--idle-wait] [--env E]
+                               switch now and pin your choice
+  accept                       make the suggested switch
+  unpin                        clear your pin
   mode <manual|suggest|automatic> [--group G] [--approve]
-  group list | create G | delete G | default G | add G <acct..> [--accept-disclosure]
-        | remove G <acct..> | preferred G <acct|none> | rank G <acct> <preferred|normal|backup>
-        | tuning G [--threshold N] [--margin N]
+                               set a group's mode (Automatic needs --approve once)
+  group list | create G | delete G | default G
+  group add G <account..> [--accept-disclosure] | remove G <account..>
+  group preferred G <account|none> | rank G <account> <preferred|normal|backup>
+  group tuning G [--threshold N] [--margin N]
   project list | assign <path> <G> | unassign <path>
+                               choose the group a project folder uses
   unknown ignore [--env E]     acknowledge an unregistered live login (automation stays paused)
 
 Lanes and sessions
   lanes list | create N | check N | delete N
+                               separate Claude environments with their own login
   handoff prepare|open|replace --session ID --to ENV
-  shell install | uninstall | refresh   PowerShell prompt hook for same-terminal Replace (Windows)
+                               move a session and its history to another environment
+  shell install | uninstall | refresh
+                               PowerShell prompt hook for same-terminal Replace (Windows)
 
 Maintenance
-  canary [--live]              version check (static); --live runs the synthetic adoption job
-  policy [--json]              managed login enforcement per environment
-  report [--preview]           local support report for review (--preview: print, save nothing)
+  canary [--live]              check this Claude version's compatibility; --live also runs a
+                               test job that switches accounts (needs the live-canary consent)
+  policy [--json]              show managed login enforcement per environment
+  report [--preview]           save a support report locally to review (--preview: print only)
   migrate-poc [--group G] [--accept-disclosure]
   consent <engine-start|signin-startup|credential-storage|terms|prompt-hook|live-canary> <on|off>
   update [--check] [--version vX.Y.Z | --source DIR] [--skip-attestation]
+                               install a newer release after verifying it
   uninstall [--delete-vault] [--delete-logs] [--delete-data] [--yes]
-  version
+  version                      print the version
 ";
 
 struct Args {
@@ -209,11 +223,11 @@ fn say(v: Result<Value, ClientError>) -> i32 {
             0
         }
         Err(ClientError::Api { code, message, .. }) if code == "needs_disclosure" => {
-            outln!("{message}\n\nRepeat the command with --accept-disclosure to accept this once for the group.");
+            outln!("{message}\n\nTo accept this once for the group, run the command again with --accept-disclosure.");
             2
         }
         Err(ClientError::Api { code, message, .. }) if code == "needs_approval" => {
-            outln!("{message}\n\nRepeat with --approve to enable it.");
+            outln!("{message}\n\nTo turn it on for this group, run the command again with --approve.");
             2
         }
         Err(e) => fail(e),
@@ -320,7 +334,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         "onboard" => onboard(dd),
         "register" => {
             let (Some(label), Some(group)) = (a.val("label"), a.val("group")) else {
-                return fail("register --label L --group G");
+                return fail("usage: quayflow register --label L --group G");
             };
             let r = connect(dd).and_then(|c| {
                 c.post(
@@ -345,7 +359,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         "add" | "reauth" => signin(dd, a),
         "remove" => {
             let Some(acct) = a.p(1) else {
-                return fail("remove <account>");
+                return fail("usage: quayflow remove <account> [--yes]");
             };
             if !a.has("yes")
                 && !ask_yes(&format!(
@@ -359,12 +373,14 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         }
         "label" => {
             let (Some(acct), Some(l)) = (a.p(1), a.p(2)) else {
-                return fail("label <account> <new label>");
+                return fail("usage: quayflow label <account> <new label>");
             };
             say(connect(dd).and_then(|c| c.post("/v1/accounts/label", json!({"account": acct, "label": l}))))
         }
         "use" => {
-            let Some(to) = a.p(1) else { return fail("use <account>") };
+            let Some(to) = a.p(1) else {
+                return fail("usage: quayflow use <account> [--idle-wait] [--env E]");
+            };
             switch_result(connect(dd).and_then(|c| {
                 c.post(
                     "/v1/switch",
@@ -376,7 +392,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         "unpin" => say(connect(dd).and_then(|c| c.post("/v1/unpin", json!({"env": a.val("env")})))),
         "mode" => {
             let Some(m) = a.p(1) else {
-                return fail("mode <manual|suggest|automatic>");
+                return fail("usage: quayflow mode <manual|suggest|automatic> [--group G] [--approve]");
             };
             // No --group: the engine applies the configured default group.
             say(connect(dd).and_then(|c| {
@@ -390,7 +406,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         "project" => match a.p(1) {
             Some("assign") => {
                 let (Some(p), Some(g)) = (a.p(2), a.p(3)) else {
-                    return fail("project assign <path> <group>");
+                    return fail("usage: quayflow project assign <path> <group>");
                 };
                 let p = std::path::absolute(p)
                     .map(|x| x.display().to_string())
@@ -399,7 +415,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             }
             Some("unassign") => {
                 let Some(p) = a.p(2) else {
-                    return fail("project unassign <path>");
+                    return fail("usage: quayflow project unassign <path>");
                 };
                 let p = std::path::absolute(p)
                     .map(|x| x.display().to_string())
@@ -440,7 +456,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             },
             op @ ("create" | "check" | "delete") => {
                 let Some(n) = a.p(2) else {
-                    return fail(format!("lanes {op} <name>"));
+                    return fail(format!("usage: quayflow lanes {op} <name>"));
                 };
                 let r = connect(dd).and_then(|c| c.post(&format!("/v1/lanes/{op}"), json!({"name": n})));
                 match r {
@@ -451,7 +467,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
                     r => say(r),
                 }
             }
-            _ => fail("lanes list|create|check|delete"),
+            _ => fail("usage: quayflow lanes list | create <name> | check <name> | delete <name>"),
         },
         "handoff" => {
             let op = a.p(1).unwrap_or("");
@@ -466,7 +482,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
                 );
             }
             if !matches!(op, "prepare" | "open" | "replace") {
-                return fail("handoff prepare|open|replace --session ID --to ENV");
+                return fail("usage: quayflow handoff prepare|open|replace --session ID --to ENV");
             }
             let r = connect(dd).and_then(|c| {
                 c.post(
@@ -477,7 +493,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             match r {
                 Ok(v) => {
                     outln!("{}", v["message"].as_str().unwrap_or(""));
-                    outln!("Files copied with integrity check: {}", v["fileCount"]);
+                    outln!("Files copied and verified: {}", v["fileCount"]);
                     outln!("Command: {}", v["command"].as_str().unwrap_or(""));
                     0
                 }
@@ -487,7 +503,7 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
         "shell" => match a.p(1) {
             Some("install") if !cfg!(windows) => {
                 eprintln!(
-                    "quayflow: the prompt hook is for PowerShell on Windows; on Linux and macOS use Open New Session"
+                    "quayflow: the prompt hook is for PowerShell on Windows; on Linux and macOS use Open New Session in /quay"
                 );
                 1
             }
@@ -548,12 +564,12 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
                     0
                 }
                 Ok(false) => {
-                    outln!("Shell module not installed or already current.");
+                    outln!("Shell module not installed, or already up to date.");
                     0
                 }
                 Err(e) => fail(e),
             },
-            _ => fail("shell install|uninstall|refresh|claim --pid N"),
+            _ => fail("usage: quayflow shell install | uninstall | refresh"),
         },
         "canary" => {
             if a.has("live") {
@@ -582,9 +598,20 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
                         "{}: {}",
                         e["env"].as_str().unwrap_or("?"),
                         if enforced {
+                            let strs = |x: &Value| -> Vec<String> {
+                                x.as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(Value::as_str)
+                                    .map(String::from)
+                                    .collect()
+                            };
+                            let orgs: Vec<String> = strs(&m["forceOrg"]).iter().map(|o| format!("#{o}")).collect();
                             format!(
-                                "enforced by {} (organization #{:?}, method {})",
-                                m["sources"], m["forceOrg"], m["forceMethod"]
+                                "enforced by {} (organization {}; login method {})",
+                                strs(&m["sources"]).join(", "),
+                                if orgs.is_empty() { "any".into() } else { orgs.join(", ") },
+                                m["forceMethod"].as_str().unwrap_or("any")
                             )
                         } else {
                             "no managed login enforcement".into()
@@ -630,15 +657,15 @@ Quayflow does not change it for you. PowerShell 7 is not affected.");
         })),
         "consent" => {
             let (Some(name), Some(state)) = (a.p(1), a.p(2)) else {
-                return fail("consent <name> <on|off>");
+                return fail("usage: quayflow consent <name> <on|off>");
             };
             let Some(field) = local::consent_field(name) else {
-                return fail("unknown consent name");
+                return fail(format!("unknown consent \"{name}\" (quayflow help lists them)"));
             };
             let on = match state {
                 "on" => true,
                 "off" => false,
-                _ => return fail("consent <name> <on|off>"),
+                _ => return fail(format!("consent {name} takes on or off, not \"{state}\"")),
             };
             if let Err(e) = local::set_consent(dd, field, on) {
                 return fail(e);
@@ -729,7 +756,7 @@ Continue?",
             }
         }
         _ => {
-            eprintln!("unknown command \"{cmd}\"\n");
+            eprintln!("quayflow: unknown command \"{cmd}\"\n");
             outln!("{HELP}");
             2
         }
@@ -739,7 +766,7 @@ Continue?",
 /// `last --session ID [--json]`: read from the journal, so it works with the engine stopped.
 fn last_cmd(dd: &DataDir, a: &Args) -> i32 {
     let Some(session) = a.val("session").or_else(|| a.p(1).map(str::to_string)) else {
-        return fail("last --session <id>  (the session_id from Claude's JSON output)");
+        return fail("usage: quayflow last --session ID (the session_id in Claude's JSON output)");
     };
     let events: Vec<Value> = std::fs::read_to_string(dd.journal())
         .unwrap_or_default()
@@ -789,12 +816,12 @@ fn group_cmd(dd: &DataDir, a: &Args) -> i32 {
             ) {
                 Ok(v) if v["needsDisclosure"] == json!(true) => {
                     outln!(
-                        "{}\n\nRepeat with --accept-disclosure to accept this once for the group.",
+                        "{}\n\nTo accept this once for the group, run the command again with --accept-disclosure.",
                         v["disclosure"].as_str().unwrap_or("")
                     );
                     2
                 }
-                r => say(r.map(|_| json!({"message": "membership updated"}))),
+                r => say(r.map(|_| json!({"message": format!("Group \"{g}\" membership updated.")}))),
             }
         }
         "preferred" => say(c.post("/v1/groups/preferred", json!({"group": g, "account": a.p(3)}))),
@@ -818,14 +845,14 @@ fn group_cmd(dd: &DataDir, a: &Args) -> i32 {
                 (Err(e), _) | (_, Err(e)) => return fail(e),
             };
             if threshold.is_none() && margin.is_none() {
-                return fail("group tuning G [--threshold N] [--margin N]");
+                return fail("usage: quayflow group tuning G [--threshold N] [--margin N]");
             }
             say(c.post(
                 "/v1/groups/tuning",
                 json!({"group": g, "threshold": threshold, "margin": margin}),
             ))
         }
-        _ => fail("group list|create|delete|default|add|remove|preferred|rank|tuning"),
+        _ => fail("usage: quayflow group list|create|delete|default|add|remove|preferred|rank|tuning (quayflow help shows each)"),
     }
 }
 
@@ -836,14 +863,17 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
     };
     let reauth = (a.p(0) == Some("reauth")).then(|| a.p(1).unwrap_or("").to_string());
     if reauth.is_none() && (a.val("label").is_none() || a.val("group").is_none()) {
-        return fail("add --label L --group G");
+        return fail("usage: quayflow add --label L --group G [--accept-disclosure]");
     }
     let s = match c.post("/v1/accounts/signin/start", json!({"reauth": reauth})) {
         Ok(v) => v,
         Err(e) => return fail(e),
     };
     let id = s["id"].as_str().unwrap_or("").to_string();
-    outln!("A sign-in window opened. Sign in there with the account to add.");
+    outln!(
+        "A sign-in window opened. Sign in there with the account to {}.",
+        if reauth.is_some() { "reauthenticate" } else { "add" }
+    );
     if let Some(m) = s["message"].as_str() {
         outln!("{m}");
     }
@@ -873,7 +903,7 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
                 return 1;
             }
             if let Some(d) = ident["duplicateOf"].as_str() {
-                outln!("This account is already registered as \"{d}\"; its protected copy will be updated (not added as extra capacity).");
+                outln!("This account is already registered as \"{d}\". Its protected copy will be updated; it adds no capacity.");
             }
             if !ask_yes("Store this account in Quayflow's protected vault?") {
                 let _ = c.post("/v1/accounts/signin/cancel", json!({"id": id}));
@@ -909,7 +939,7 @@ fn signin(dd: &DataDir, a: &Args) -> i32 {
         }
         if std::time::Instant::now() > deadline {
             let _ = c.post("/v1/accounts/signin/cancel", json!({"id": id}));
-            return fail("sign-in timed out; your current login is unchanged");
+            return fail("the sign-in did not finish within 15 minutes; your current login is unchanged");
         }
     }
 }
@@ -951,7 +981,9 @@ fn onboard(dd: &DataDir) -> i32 {
         consents.insert(k.into(), json!(ask_yes(q)));
     }
     if consents["terms"] != json!(true) {
-        outln!("Onboarding stopped: the terms notice must be accepted.");
+        outln!(
+            "Onboarding stopped: Quayflow needs the terms notice accepted. Run quayflow onboard again to accept it."
+        );
         return 1;
     }
     let startup = consents["signinStartup"] == json!(true);
@@ -973,10 +1005,10 @@ fn onboard(dd: &DataDir) -> i32 {
     }
     if startup {
         if let Err(e) = local::set_startup(true) {
-            eprintln!("startup entry not created: {e}");
+            eprintln!("quayflow: startup entry not created: {e}");
         }
     }
-    outln!("Saved. Next: quayflow register --label <name> --group Default");
+    outln!("Saved. Next, register the login that is live now: quayflow register --label <name> --group Default");
     0
 }
 

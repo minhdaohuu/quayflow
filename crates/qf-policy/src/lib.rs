@@ -60,7 +60,7 @@ impl Exclusion {
             Exclusion::Health(Health::Ok) => "ok".into(),
             Exclusion::PlanIncompatible { model } => format!("plan cannot serve model {model}"),
             Exclusion::NoObservation => "usage not observed yet".into(),
-            Exclusion::Stale { age_s } => format!("usage observation {} old (stale is never zero)", fmt_age(*age_s)),
+            Exclusion::Stale { age_s } => format!("usage unknown: last read {} ago, too old to count as room", fmt_age(*age_s)),
             Exclusion::AtLimit { pct, window } => format!("at its limit ({pct:.0}% {window})"),
             Exclusion::NoHeadroom { pct, window, needed } => {
                 format!("{pct:.0}% {window}; needs {needed:.0}% or less to be worth a switch")

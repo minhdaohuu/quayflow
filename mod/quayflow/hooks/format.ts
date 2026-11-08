@@ -97,13 +97,13 @@ export function when(ms: number | null | undefined): string {
 /** "62% 5 h" with the observation age when stale; never 0% for missing usage. */
 export function usageText(a: AccountView, long = false): string {
   const u = a.usage
-  if (!u || !u.binding) return a.usageNote ? `usage unavailable (${a.usageNote})` : 'usage not observed yet'
+  if (!u || !u.binding) return a.usageNote ? `usage unavailable (${a.usageNote})` : 'usage not read yet'
   // An old reading is never shown as a figure: only that it is not current.
   if (!u.fresh) return `usage unknown (last read ${age(u.ageS)} ago)`
   const b = u.binding
   const base = `${pct(b.pct)} ${windowName(b.key)}`
   const stale = u.fresh ? '' : `, stale`
-  const ageText = long || !u.fresh ? ` (observed ${age(u.ageS)} ago${stale})` : ''
+  const ageText = long || !u.fresh ? ` (read ${age(u.ageS)} ago${stale})` : ''
   return base + ageText
 }
 
@@ -144,7 +144,7 @@ export function transitionWords(state: TransitionState): string {
     case 'failed':
       return 'did not apply; login unchanged'
     case 'uncertain':
-      return 'transition already started; checking state'
+      return 'switch already started; checking its state'
   }
 }
 
@@ -209,7 +209,7 @@ export function linkOffText(link: QuayLink): string {
     case 'connecting':
       return link.message ?? 'connecting to the engine'
     case 'unreachable':
-      return 'engine not running; Claude works as usual'
+      return 'engine not running'
     case 'not_installed':
       return 'engine not installed (run the Quayflow installer)'
     case 'no_consent':
@@ -419,7 +419,7 @@ function statusTails(s: StateView, env: EnvView, showUsage: boolean, model: stri
 
   // 8. Stale usage: the figures are not current enough to act on.
   const u = liveAccount?.usage
-  if (u && u.binding && !u.fresh) return one(`usage stale (${age(u.ageS)})`)
+  if (u && u.binding && !u.fresh) return one(`usage unknown (read ${age(u.ageS)} ago)`)
 
   // 9. Home or away, when the group has a Preferred account.
   const group = s.groups.find(g => g.name === myGroup(s))

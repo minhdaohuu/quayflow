@@ -28,7 +28,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'quay',
       description: 'Quayflow: accounts, usage and switching (/quay help)',
-      argumentHint: '[status|accept|use <account>|unpin|mode|group|pause|resume|register|add|lanes|report|whoami|help]',
+      argumentHint: '[status|accept|use <account>|unpin|mode|group|pause|resume|poll|register|add|ignore|lanes|replace|open|start|canary|report|whoami|help]',
     }).catch(() => {})
     // Off the startup path: the session never waits for the engine.
     let settle: () => void = () => {}

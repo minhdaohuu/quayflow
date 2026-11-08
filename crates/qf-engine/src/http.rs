@@ -294,7 +294,7 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
         }
         ("POST", "/v1/transition/cancel") => {
             let msg = e.cancel(s(body, "id").unwrap_or("")).map_err(ApiErr::not_found)?;
-            let started = msg.starts_with("Transition already started");
+            let started = msg == Engine::CANCEL_TOO_LATE;
             Ok(json!({"ok": true, "message": msg, "started": started}))
         }
         ("POST", "/v1/unpin") => {
@@ -313,7 +313,9 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
             let env = env_param(e, body);
             match s(body, "action") {
                 Some("ignore") => ok(OkResponse::ok(e.ignore_unknown(&env)?)),
-                _ => Err(ApiErr::invalid("action: ignore (register uses /v1/accounts/register)")),
+                _ => Err(ApiErr::invalid(
+                    "the only action here is ignore; to register the login, use quayflow register",
+                )),
             }
         }
         ("GET", "/v1/lanes") => ok(e.lane_views()),

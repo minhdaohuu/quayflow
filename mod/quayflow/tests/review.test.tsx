@@ -89,7 +89,7 @@ describe('overview and decisions', () => {
     await ui.press({ key: 'ov-resume' })
     expect(w.bodies('/v1/engine')).toEqual([{ action: 'resume' }])
     // The engine still reports the pause (the mocked state does not change): no false "resumed".
-    expect(await ui.find({ type: 'Text', text: /Still paused: automation paused by you/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Automation is still paused: automation paused by you/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -385,6 +385,10 @@ describe('activity, report and lifecycle', () => {
     expect((await ui.find({ key: 'un:logs' }))?.text).toMatch(/^\[ \] /)
     await ui.press({ key: 'un:logs' })
     expect(await ui.find({ type: 'Code' })).toMatchObject({ props: { source: 'quayflow uninstall --delete-logs' } })
+    // Deleting all data replaces the two separate choices.
+    await ui.press({ key: 'un:data' })
+    expect(await ui.find({ type: 'Code' })).toMatchObject({ props: { source: 'quayflow uninstall --delete-data' } })
+    expect(await ui.find({ key: 'un:vault' })).toBeUndefined()
     await ui.unmount()
   })
 
@@ -454,6 +458,6 @@ describe('/quay text', () => {
     const paused: StateView = { ...STATE, envs: [{ ...ENV, automationPaused: true, pausedBy: 'other_switcher', pausedReason: 'the login changed repeatedly without Quayflow' }] }
     const w = world(on, { state: paused })
     await start($, w, false)
-    expect(await quay($, 'resume')).toContain('still paused: the login changed repeatedly')
+    expect(await quay($, 'resume')).toContain('automation is still paused: the login changed repeatedly')
   })
 })

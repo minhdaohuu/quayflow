@@ -165,7 +165,7 @@ function Overview($: EngineInterface, c: Ctx): JSX.Element {
   const { Box, Text } = c.els
   const s = c.s!
   const env = myEnv(s)
-  if (!env) return Line(c, 'No credential environment is known yet.')
+  if (!env) return Line(c, 'No environment is known yet.')
   const warnings = persistentWarnings(s, env)
   const unknown = !env.live.known && !env.live.signedOut
   const switcher = env.notices.some(n => n.kind === 'other_switcher')
@@ -196,7 +196,7 @@ function Overview($: EngineInterface, c: Ctx): JSX.Element {
           Row(
             c,
             unknown && Btn(c, 'ov-unknown', 'Review login', () => go($, { tab: 'trust', sub: 'unknown' }), true),
-            switcher && Btn(c, 'ov-switcher', 'Switcher', () => go($, { tab: 'trust', sub: 'switcher' })),
+            switcher && Btn(c, 'ov-switcher', 'Other switcher', () => go($, { tab: 'trust', sub: 'switcher' })),
             managed && Btn(c, 'ov-managed', 'Managed login', () => go($, { tab: 'trust', sub: 'managed' })),
             s.dOrg.enabled && Btn(c, 'ov-dorg', 'Exception', () => go($, { tab: 'trust', sub: 'dorg' })),
             paused?.resume && Btn(c, 'ov-resume', 'Resume', () => void resume($), true),
@@ -242,7 +242,7 @@ function Overview($: EngineInterface, c: Ctx): JSX.Element {
         {Btn(c, 'ov-sessions', 'Sessions', () => go($, { tab: 'overview', sub: 'sessions' }))}
         {Btn(c, 'ov-actions', 'Actions', () => go($, { tab: 'session' }))}
         {Btn(c, 'ov-limits', 'Limits', () => go($, { tab: 'overview', sub: 'limits' }))}
-        {Btn(c, 'ov-home', 'Home', () => go($, { tab: 'groups', sub: 'group', arg: myGroup(s) }))}
+        {Btn(c, 'ov-home', 'Group', () => go($, { tab: 'groups', sub: 'group', arg: myGroup(s) }))}
       </Box>
       {Hint(c, 'Other clients of this login (for example editor extensions) may not be listed. A switch moves the environment, not just this terminal; LIVE is the stored login, not proof of what each session used.')}
     </Box>
@@ -386,7 +386,7 @@ export function notTarget(reason: string): { text: string; warn?: boolean } | un
   if (r.startsWith('plan cannot')) return { text: 'plan lacks this model' }
   if (r.startsWith('at its limit')) return { text: 'at its limit', warn: true }
   if (r.includes('worth a switch')) return { text: 'no room to gain' }
-  if (r.includes('not observed') || r.includes('stale') || r.includes('expired while idle') || r === 'unknown') return { text: 'usage unknown' }
+  if (r.startsWith('usage unknown') || r.includes('not observed') || r.includes('stale') || r.includes('expired while idle') || r === 'unknown') return { text: 'usage unknown' }
   return { text: 'not a target now' }
 }
 
@@ -505,7 +505,7 @@ async function resume($: EngineInterface): Promise<void> {
     r => {
       if (!r.ok) return r.message ?? 'Refused.'
       const env = Q.state ? myEnv(Q.state) : undefined
-      return env?.automationPaused ? `Still paused: ${env.pausedReason ?? 'another cause'}.` : 'Automation resumed.'
+      return env?.automationPaused ? `Automation is still paused: ${env.pausedReason ?? 'another cause'}.` : 'Automation resumed.'
     },
   )
 }
@@ -710,7 +710,7 @@ function GroupDetail($: EngineInterface, c: Ctx, name: string): JSX.Element {
       {Field($, c, `mar:${g.name}`, `Margin points (now ${g.margin})`, { placeholder: String(g.margin), submitLabel: 'save', onSubmit: v => void saveTuning($, c, g.name, undefined, v) })}
       {Field($, c, 'cooldown', `Cooldown seconds, every group (now ${t.cooldownS})`, { placeholder: String(t.cooldownS), submitLabel: 'save', onSubmit: v => void saveGlobal($, 'cooldown', v) })}
       {g.mode !== 'automatic' && Alert(c, 'Before enabling Automatic', 'This group approves its accounts for assigned project context. Shared-session conflicts, plan compatibility, version checks and managed login still apply.', 'note')}
-      {Hint(c, 'All exhausted: Quayflow selects the soonest-available eligible account, then Claude\'s own usage-limit behavior applies. There is no Quayflow availability hold.')}
+      {Hint(c, 'When every account is at its limit, Quayflow switches to the eligible account that becomes available soonest, then Claude\'s own usage-limit behavior applies. Quayflow never holds requests.')}
       {Section(
         c,
         'Members',
@@ -731,7 +731,7 @@ function GroupDetail($: EngineInterface, c: Ctx, name: string): JSX.Element {
         c,
         !g.isDefault && Btn(c, 'gd-default', 'Make default', () => void run($, 'setting the default', () => actSetDefault($, g.name), r => (r.ok ? `"${g.name}" is the default group now.` : (r.message ?? 'Refused.')))),
         g.preferred && Btn(c, 'gd-nohome', 'Clear home', () => void run($, 'clearing home', () => actPreferred($, g.name, null), r => (r.ok ? 'No home account: Quayflow stays on the current account until a trigger.' : (r.message ?? 'Refused.')))),
-        g.preferred && Btn(c, 'gd-home', 'Return home', () => go($, { tab: 'overview' })),
+        g.preferred && !s.envs.some(e => e.live?.account === g.preferred) && Btn(c, 'gd-home', 'Switch home', () => go($, { tab: 'switch', sub: 'review', arg: g.preferred! })),
         !g.isDefault && Btn(c, 'gd-delete', 'Delete group', () => void run($, 'deleting the group', () => actGroupDelete($, g.name), r => (r.ok ? `Group "${g.name}" deleted.` : (r.message ?? 'Refused.'))).then(r => r?.ok && go($, { tab: 'groups' }))),
         Btn(c, 'gd-back', 'Back', () => go($, { tab: 'groups' })),
       )}
@@ -746,7 +746,7 @@ async function changeMode($: EngineInterface, c: Ctx, group: string, mode: Mode)
     $,
     'saving the mode',
     () => actSetMode($, group, mode, false),
-    r => (r.ok ? `Group "${group}" is in ${mode} mode.` : (r.message ?? 'Refused.')),
+    r => (r.ok ? `Group "${group}" is in ${mode[0]!.toUpperCase()}${mode.slice(1)} mode.` : (r.message ?? 'Refused.')),
     async err => {
       if (!hasCode(err, 'needs_approval')) return false
       go($, { tab: 'groups', sub: 'automatic', arg: group })
@@ -902,7 +902,7 @@ function Lanes($: EngineInterface, c: Ctx): JSX.Element {
   const rows = s.envs.map(e => {
     const lane = s.lanes.find(l => l.name === e.id)
     return [
-      `${e.id === 'default' ? 'Default shared' : `Lane ${e.id}`}${e.id === env?.id ? ' (this session)' : ''}`,
+      `${e.id === 'default' ? 'Default (shared)' : `Lane ${e.id}`}${e.id === env?.id ? ' (this session)' : ''}`,
       `${e.live.known ? label(s, e.live.account) : e.live.signedOut ? 'no login yet' : 'not registered'} / ${e.governingGroups.join(', ') || '?'}`,
       e.id === 'default' ? (e.inPlace.allowed ? 'In-place allowed' : `Off: ${e.inPlace.reason}`) : lane?.canaryPassed ? 'Check passed' : 'Not checked',
     ]
@@ -994,7 +994,7 @@ function Settings($: EngineInterface, c: Ctx): JSX.Element {
   const tune = c.form['ui:tune'] === 'on'
   const consentList: [string, number | null | undefined][] = [
     ['engine start', consents.engineStart],
-    ['sign-in start', consents.signinStartup],
+    ['start at sign-in', consents.signinStartup],
     ['vault', consents.credentialStorage],
     ['terms', consents.terms],
     ['prompt hook', consents.promptHook],
@@ -1054,13 +1054,13 @@ function Settings($: EngineInterface, c: Ctx): JSX.Element {
         'Consents',
         on.length ? Line(c, `On: ${on.join(', ')}`) : null,
         off.length ? Line(c, `Off: ${off.join(', ')}`, { dim: true }) : null,
-        Hint(c, `${consentList.filter(([, at]) => at).map(([n, at]) => `${n} since ${when(at)}`).join('; ')}. Change one in a terminal: quayflow consent <engine-start|signin-startup|credential-storage|terms|live-canary> <on|off>`),
+        Hint(c, `${consentList.filter(([, at]) => at).map(([n, at]) => `${n} since ${when(at)}`).join('; ')}. Change one in a terminal: quayflow consent <engine-start|signin-startup|credential-storage|terms|prompt-hook|live-canary> <on|off>`),
       )}
       {Section(
         c,
         'Privacy',
         Line(c, `Logins: ${s.engine.dataDir.includes('\\') ? 'DPAPI, this Windows user' : 'owner-only files, this user'} \u00b7 logs ${s.tuning.logRetentionDays} days`),
-        Hint(c, `No separate vault password. Logs at most ${s.tuning.logMaxMb} MB per day; unresolved journal records kept until reconciled; history-transfer copies only while a handoff needs them.`),
+        Hint(c, `No separate vault password. Logs at most ${s.tuning.logMaxMb} MB per day; unresolved journal records kept until reconciled; copies of a session's history only while a move to another environment needs them.`),
         Hint(c, 'No cloud vault, export or sync; protected-storage failure never falls back to plaintext. Before a manual switch away from an unknown login, a protected backup of it is stored.'),
         Hint(c, 'This does not protect against malware running as the same user.'),
         Hint(c, 'Update the engine and this Mod together (hash-verified; never during a transition): quayflow update'),

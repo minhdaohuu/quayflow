@@ -40,7 +40,7 @@ pub fn live(dd: &DataDir) -> i32 {
         return crate::fail(e);
     }
     let Some(claude) = qf_adapter::process::find_claude() else {
-        return crate::fail("Claude Code (claude) not found");
+        return crate::fail("Claude Code (claude) was not found on PATH");
     };
     let prompt = "This is a connectivity check. Run this single Bash command: sleep 10 && echo c1 . After it finishes, reply with exactly OK.";
     let mut child = match qf_adapter::process::hidden(&claude)

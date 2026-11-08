@@ -90,10 +90,10 @@ The **Overview** shows, top to bottom:
 - anything that needs your attention (an unknown login, another switcher, a pause and its remedy), and a switch in progress;
 - a card for the **live account** with its 5-hour and 7-day usage gauges (and a per-model weekly gauge when there is one), colored by the group's threshold, with the threshold marked on each gauge and a countdown to each reset (`↻ 2 h 10 min`);
 - the other accounts. In the terminal they are a **fleet chart**: a 5-hour and a 7-day column per account, the threshold as a dashed line, **▼** over the live account and **★** over the recommended one, and the account names under it as buttons. Elsewhere, and when the accounts do not fit the width, they are rows with small gauges, a ★ before the recommended one, LIVE and HOME badges, and a short reason when the account is not a switch target now (see below);
-- the **recommendation**: *Switch to Personal?* with **Switch** and **Why?**, or *Staying on Work*;
+- the **recommendation**: *Switch to work-02?* with **Switch** and **Why?**, or *Staying on work-01*;
 - a pin, if any, with **Unpin**, and the last switch;
 - the **home account's** state when you are away from it (see below);
-- the number of sessions on this environment, and **Sessions**, **Actions**, **Limits** and **Home**.
+- the number of sessions on this environment, and **Sessions**, **Actions**, **Limits** and **Group**.
 
 Every figure is written out beside its graphic. Usage is shown only while the reading is current: otherwise the account says *reading…*, *not read yet*, *usage unknown*, or *unreadable:* and the reason, never 0%. The true-color graphics are drawn in the terminal; other surfaces show text gauges.
 
@@ -109,9 +109,9 @@ Every figure is written out beside its graphic. Usage is shown only while the re
 
 ## Accounts
 
-**Register the login you are using now.** In `/quay`, choose **Register login** (Accounts), or run `quayflow register --label "Work" --group Default`. Quayflow shows the identity of the live login (its e-mail address and organization, read locally for your review and never stored or logged), with a name suggested from the e-mail address (change it if you like) and the group; **+ New group** creates one there. The first time you save a login anywhere, Quayflow asks once for the credential storage consent (a box on the screen); after that, Enter on the name or **Save** saves. The identity is verified by a profile lookup when you save, and a problem (a name already in use, the box not ticked) stays on the screen until you fix it. Registering does not switch anything, does not change your running work, and does not turn on Automatic mode.
+**Register the login you are using now.** In `/quay`, choose **Register login** (Accounts), or run `quayflow register --label work-01 --group Default`. Quayflow shows the identity of the live login (its e-mail address and organization, read locally for your review and never stored or logged), with a name suggested from the e-mail address (change it if you like) and the group; **+ New group** creates one there. The first time you save a login anywhere, Quayflow asks once for the credential storage consent (a box on the screen); after that, Enter on the name or **Save** saves. The identity is verified by a profile lookup when you save, and a problem (a name already in use, the box not ticked) stays on the screen until you fix it. Registering does not switch anything, does not change your running work, and does not turn on Automatic mode.
 
-**Add another account.** In `/quay` choose Add account (or run `/quay add`), or run `quayflow add --label "Personal" --group Default`. You sign in first and name the account after: pick the group (or **+ New group**), tick the credential storage box if Quayflow has never asked for it, and choose **Sign in with Claude**. A new window opens with Claude's own sign-in (`claude auth login`) in a temporary environment; Quayflow never asks you to paste a token, and the pane follows the sign-in by itself. If you are signed in to an account Quayflow does not know yet, the screen also offers to register it. After you sign in, the pane shows the account (its e-mail address, for your review only) with a name suggested from it; change the name if you like, and press Enter or **Save**. If the identity is already registered, the screen says so, and **Update** refreshes that registration under its existing name; this never counts as extra capacity. Saving retires the temporary sign-in copy without signing out, because signing out could revoke the token Quayflow just saved. Cancelling or failing the sign-in leaves your current login unchanged. With `quayflow add` you give the name and group first.
+**Add another account.** In `/quay` choose Add account (or run `/quay add`), or run `quayflow add --label work-02 --group Default`. You sign in first and name the account after: pick the group (or **+ New group**), tick the credential storage box if Quayflow has never asked for it, and choose **Sign in with Claude**. A new window opens with Claude's own sign-in (`claude auth login`) in a temporary environment; Quayflow never asks you to paste a token, and the pane follows the sign-in by itself. If you are signed in to an account Quayflow does not know yet, the screen also offers to register it. After you sign in, the pane shows the account (its e-mail address, for your review only) with a name suggested from it; change the name if you like, and press Enter or **Save**. If the identity is already registered, the screen says so, and **Update** refreshes that registration under its existing name; this never counts as extra capacity. Saving retires the temporary sign-in copy without signing out, because signing out could revoke the token Quayflow just saved. Cancelling or failing the sign-in leaves your current login unchanged. With `quayflow add` you give the name and group first.
 
 **Other account actions:**
 
@@ -170,12 +170,12 @@ In the terminal, the everyday line (usage, home or away, a pin, a switch under w
 |---|---|---|
 | 1. Problem | `mixed login files: switch to an account to repair`, `in-place switching off for this Claude version`, `a session did not adopt the switch: /quay` | Quayflow cannot switch safely here until this is fixed |
 | 2. Live login | `not registered: /quay register`, `sign in to Claude (/login)`, `another switcher may be active`, `automation paused (/quay resume)` | The login is not one Quayflow knows, or automation is paused |
-| 3. Switch | `switching to Personal`, `pending next request` | A switch is in progress, or this session adopts it at its next request |
-| 4. Suggestion | `5h 91% · 7d 40% \| Personal suggested` | The live account's usage, and the account `/quay accept` would switch to |
+| 3. Switch | `switching to work-02`, `pending next request` | A switch is in progress, or this session adopts it at its next request |
+| 4. Suggestion | `5h 91% · 7d 40% \| work-02 suggested` | The live account's usage, and the account `/quay accept` would switch to |
 | 5. Pin | `pinned until 16:32` | A manual switch holds this account until then |
 | 6. Override | `managed-login override ON` | The managed-login override setting is on (see [Security notes](security.md#managed-login-enforcement-and-the-override-setting)) |
-| 7. Warning | `Personal needs a new sign-in` | An account needs attention |
-| 8. Stale usage | `usage stale (25 min)` | The live account's usage reading is too old to act on |
+| 7. Warning | `work-02 needs a new sign-in` | An account needs attention |
+| 8. Usage unknown | `usage unknown (read 25 min ago)` | The live account's usage reading is too old to act on |
 | 9. Home | `Home account · 5h 45% · 7d 30%`, `Away from home · 5h 45% · 7d 30%` | Whether the live account is the group's Preferred account (only when the group has one), with its usage when there is room |
 | 10. Usage | `5h 45% · 7d 30%` | The live account's usage |
 
@@ -203,7 +203,7 @@ Informational notices (for example that your organization enforces its login) ar
 
 ## Return home
 
-When Quayflow has moved away from a group's Preferred account and that account's window has reset, Automatic mode switches back and Suggest mode suggests it. "Reset" means a fresh reading below the threshold minus the margin. Pin, cooldown, plan compatibility and group conflicts still apply. Without a Preferred account, Quayflow stays on the current account until something triggers a switch.
+When Quayflow has moved away from a group's Preferred account and that account's window has reset, Automatic mode switches back and Suggest mode suggests it. "Reset" means a fresh reading below the threshold minus the margin. Pin, cooldown, plan compatibility and group conflicts still apply. Without a Preferred account, Quayflow stays on the current account until something triggers a switch. To go back now, open the group in `/quay` and choose **Switch home**: it opens the switch review for the Preferred account.
 
 ## When a request hits a usage limit
 

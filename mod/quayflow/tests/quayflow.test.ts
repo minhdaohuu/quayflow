@@ -299,7 +299,7 @@ describe('headless runs', () => {
     expect(status).toContain('Recommendation: switch to "personal"')
     expect(await quay($, 'mode automatic Default')).toContain('/quay mode automatic Default --approve')
     expect(w.routes()).not.toContain('/v1/groups/mode')
-    expect(await quay($, 'mode automatic Default --approve')).toContain('now in automatic mode')
+    expect(await quay($, 'mode automatic Default --approve')).toContain('now in Automatic mode')
     expect(w.bodies('/v1/groups/mode')).toEqual([{ group: 'Default', mode: 'automatic', approveAutomatic: true }])
     expect(w.ui).toEqual([])
   })

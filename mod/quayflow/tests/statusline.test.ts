@@ -122,7 +122,7 @@ describe('status line: one tail by priority', () => {
     [
       'stale usage',
       st({ suggestion: null }, { accounts: [{ ...WORK, usage: { ...WORK.usage!, fresh: false, ageS: 1500 } }, STATE.accounts[1]!] }),
-      'Quayflow · work · Suggest · usage stale (25 min)',
+      'Quayflow · work · Suggest · usage unknown (read 25 min ago)',
     ],
     ['home account', st({ suggestion: null }), 'Quayflow · work · Suggest · Home account · 5h 91% · 7d 40%'],
     [

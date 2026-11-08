@@ -109,7 +109,7 @@ pub fn status(v: &Value) {
                 .map(|a| match a["state"].as_str() {
                     Some("pending_next_request") => " · Pending next request".to_string(),
                     Some("adopted") => " · adopted".to_string(),
-                    Some("mismatch") => " · DID NOT ADOPT".to_string(),
+                    Some("mismatch") => " · did not adopt the switch (see notices)".to_string(),
                     _ => String::new(),
                 })
                 .unwrap_or_default();
@@ -162,6 +162,18 @@ pub fn status(v: &Value) {
     }
 }
 
+/// An account's label from a state view, or `#id` when it is not registered.
+fn account_label(v: &Value, id: &str) -> String {
+    v["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|x| x["id"] == id)
+        .and_then(|x| x["label"].as_str())
+        .map(String::from)
+        .unwrap_or_else(|| format!("#{id}"))
+}
+
 pub fn groups(v: &Value) {
     let default = v["defaultGroup"].as_str().unwrap_or("");
     for g in v["groups"].as_array().into_iter().flatten() {
@@ -175,7 +187,7 @@ pub fn groups(v: &Value) {
             g["margin"],
             g["preferred"]
                 .as_str()
-                .map(|p| format!("#{p}"))
+                .map(|p| account_label(v, p))
                 .unwrap_or_else(|| "none".into()),
             if g["mixed"] == true {
                 if g["mixedCovered"] == true {
@@ -188,15 +200,7 @@ pub fn groups(v: &Value) {
             }
         );
         for a in g["accounts"].as_array().into_iter().flatten() {
-            let id = a.as_str().unwrap_or("");
-            let l = v["accounts"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|x| x["id"] == id)
-                .and_then(|x| x["label"].as_str())
-                .unwrap_or(id);
-            outln!("    {l}");
+            outln!("    {}", account_label(v, a.as_str().unwrap_or("")));
         }
     }
 }
@@ -212,7 +216,7 @@ pub fn lanes(v: &Value) {
             l["name"].as_str().unwrap_or("?"),
             match (l["liveLabel"].as_str(), l["live"].as_str()) {
                 (Some(label), _) => format!("live: {label}"),
-                (None, Some(x)) => format!("live #{x}"),
+                (None, Some(x)) => format!("live: #{x}"),
                 _ => "no login".into(),
             },
             if l["linksOk"] == true { "ok" } else { "need repair" },

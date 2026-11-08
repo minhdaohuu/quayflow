@@ -54,7 +54,8 @@ describe('account rows: why not a switch target', () => {
     expect(notTarget('sign-in expired (refresh rejected); reauthenticate')).toBeUndefined()
     expect(notTarget('81% 5h; needs 75% or less to be worth a switch')).toEqual({ text: 'no room to gain' })
     expect(notTarget('at its limit (100% 5h)')).toEqual({ text: 'at its limit', warn: true })
-    expect(notTarget('usage observation 2 h old (stale is never zero)')).toEqual({ text: 'usage unknown' })
+    expect(notTarget('usage unknown: last read 2 h ago, too old to count as room')).toEqual({ text: 'usage unknown' })
+    expect(notTarget('usage observation 2 h old (stale is never zero)')).toEqual({ text: 'usage unknown' }) // an engine before 0.3
     expect(notTarget('refused by this environment\'s managed login enforcement (x)')?.warn).toBe(true)
   })
 })
