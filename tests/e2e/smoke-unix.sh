@@ -63,6 +63,28 @@ check "$(printf '%s' "$OUT" | grep -q 'The Mod was left as it is'; echo $?)" 'up
 NEW=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$ROOT/engine.json")
 check "$([ -n "$NEW" ] && [ "$NEW" != "$PID" ] && kill -0 "$NEW" 2>/dev/null; echo $?)" 'a new engine process runs after the update'
 
+# A tampered release: its installer was replaced and SHA256SUMS rewritten to match (what
+# someone able to replace release assets could do). A fake gh serves it and reports that the
+# installer's attestation does not verify: the update must refuse before running anything.
+T="$W/tampered"; mkdir -p "$T" "$W/fakebin"
+{ head -n 1 "$REPO/installer/install.sh"; printf 'touch "%s/PWNED"\n' "$W"; tail -n +2 "$REPO/installer/install.sh"; } > "$T/install.sh"
+( cd "$T" && { printf '%064d  %s\n' 0 "$ASSET"; sha install.sh; } > SHA256SUMS )
+cat > "$W/fakebin/gh" <<GH
+#!/bin/sh
+case "\$1 \$2" in
+  "auth status") exit 0 ;;
+  "release download") shift 2; dest=; pats=
+    while [ \$# -gt 0 ]; do case "\$1" in -D) dest=\$2; shift ;; -p) pats="\$pats \$2"; shift ;; esac; shift; done
+    for p in \$pats; do cp "$T/\$p" "\$dest/" || exit 1; done ;;
+  "attestation verify") echo "no attestation matched the policy" >&2; exit 1 ;;
+  *) exit 1 ;;
+esac
+GH
+chmod +x "$W/fakebin/gh"
+OUT=$(env -u QUAYFLOW_OFFLINE PATH="$W/fakebin:$PATH" "$Q" update --version v9.9.9 2>&1); CODE=$?
+check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'REFUSED: attestation verification failed for install.sh'; echo $?)" 'update refuses an installer whose attestation does not verify' "$OUT"
+check "$([ ! -e "$W/PWNED" ]; echo $?)" 'the tampered installer never ran'
+
 OUT=$("$Q" stop 2>&1); sleep 1
 check "$(! kill -0 "$NEW" 2>/dev/null; echo $?)" 'quayflow stop ends the engine' "$OUT"
 OUT=$("$Q" start --if-consented 2>&1)

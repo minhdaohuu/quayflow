@@ -35,7 +35,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// suffix hashes the folder exactly as given, unresolved: a trailing slash or a path through a
 /// symbolic link names another item, as in Claude.
 pub fn service_name(env: &Env) -> Option<String> {
-    if enabled_by_env() == Some(false) {
+    if enabled_by_env() == Some(false) && !faked() {
         return None;
     }
     service_name_for(env, account_home().as_deref())
@@ -128,9 +128,36 @@ pub struct Item {
     pub modified: String,
 }
 
+// Test builds only: a stand-in for `security` with scripted faults (tests-support/
+// fake-security.py), per thread, so error paths are tested without the real Keychain.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FAKE: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Whether this thread uses the fake `security` (always false outside tests).
+pub(crate) fn faked() -> bool {
+    #[cfg(test)]
+    {
+        FAKE.with(|f| f.borrow().is_some())
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+fn program() -> std::path::PathBuf {
+    #[cfg(test)]
+    if let Some(p) = FAKE.with(|f| f.borrow().clone()) {
+        return p;
+    }
+    std::path::PathBuf::from(SECURITY)
+}
+
 /// Run `security` with an optional stdin, giving up after `CALL_TIMEOUT`.
 fn run(args: &[&str], stdin: Option<&str>) -> Result<(i32, String, String), String> {
-    let mut child = Command::new(SECURITY)
+    let mut child = Command::new(program())
         .args(args)
         .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())

@@ -1,0 +1,28 @@
+#!/bin/sh
+# Fast checks before anything reaches GitHub. Enable once per clone:
+#   git config core.hooksPath .githooks
+# Skip in an emergency with `git push --no-verify` (CI still runs everything).
+set -e
+cd "$(git rev-parse --show-toplevel)"
+say() { printf '\n== pre-push: %s\n' "$1"; }
+say 'docs'
+python3 tests/docs/check-docs.py
+# rustup without its proxies on PATH (Homebrew's rustup): use the pinned toolchain's cargo.
+if ! command -v cargo >/dev/null 2>&1 && command -v rustup >/dev/null 2>&1; then
+  PATH="$(dirname "$(rustup which cargo)"):$PATH"
+fi
+if command -v cargo >/dev/null 2>&1; then
+  say 'cargo fmt'
+  cargo fmt --all --check
+  say 'cargo clippy'
+  cargo clippy --workspace --all-targets --locked -q -- -D warnings
+  say 'cargo test'
+  # Never the live login's Keychain item (CLAUDE.md).
+  QUAYFLOW_KEYCHAIN=off cargo test --workspace --locked -q
+else
+  echo 'cargo not found: Rust checks skipped (CI runs them)'
+fi
+if command -v claude >/dev/null 2>&1; then
+  say 'Mod tests'
+  (cd mod/quayflow && claude plugin test .)
+fi

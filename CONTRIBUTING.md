@@ -75,6 +75,10 @@ claude plugin test mod/quayflow
 
 **Type check (optional).** It needs Claude Code's own declaration file, which belongs to Claude Code and is not in this repository. Copy it to `mod/host-types/claude-code-2.1.316.d.ts` (where to find it: [Mod README](mod/quayflow/README.md#check-type-check-and-test)), then run `npx -y -p typescript@5.6.3 tsc -p mod/tsconfig.ci.json`. The folder is gitignored; never commit the file. CI skips the type check with a warning when the file is absent.
 
+**Before pushing,** enable the repository's pre-push hook once per clone: `git config core.hooksPath .githooks`. It runs the docs check (`python3 tests/docs/check-docs.py`), fmt, clippy, the Rust tests and the Mod tests. CI also requires a `CHANGELOG.md` line when code changes; an internal-only change says `[no changelog]` in its commit message.
+
+**With Claude Code,** the repository's `.claude/` folder sets permissions, a hook that blocks commands which could touch your live login (`.claude/hooks/guard.py`), and the skills `review`, `release`, `real-test` and `docs-sync`. Folders with their own risks have a `CLAUDE.md` with rules for that code.
+
 **On a Mac with your own Claude login,** run the Rust tests with `QUAYFLOW_KEYCHAIN=off` unless you are working on the Keychain backend. The tests never use the item of your real login (only your real `~/.claude` maps to it) and create only throwaway items, but `QUAYFLOW_KEYCHAIN=off` keeps them out of the Keychain entirely. `smoke-unix.sh` sets it itself.
 
 The PowerShell fake-environment scripts take `-Exe <path>` to test a particular build; `smoke-unix.sh` takes the path as its argument. The `tests/e2e/real-*.ps1` scripts switch your real Claude login; never run them in CI.

@@ -1,0 +1,56 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo build:*)",
+      "Bash(QUAYFLOW_KEYCHAIN=off cargo test:*)",
+      "Bash(claude plugin test:*)",
+      "Bash(claude plugin validate:*)",
+      "Bash(sh tests/e2e/smoke-unix.sh:*)",
+      "Bash(sh installer/test-install.sh:*)",
+      "Bash(python3 tests/docs/check-docs.py)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run watch:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git tag:*)",
+      "Bash(gh release:*)"
+    ],
+    "deny": [
+      "Bash(pwsh -File tests/e2e/real-switching.ps1:*)",
+      "Bash(pwsh -File tests/e2e/real-headless.ps1:*)",
+      "Bash(pwsh -File tests/e2e/real-lanes.ps1:*)",
+      "Bash(python3 tests/e2e/real-macos-keychain.py:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(command -v python3 || command -v python)\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(command -v python3 || command -v python)\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/changelog.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

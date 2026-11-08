@@ -57,7 +57,22 @@ Fake-environment end-to-end (safe anywhere, run in CI): `pwsh -File tests/e2e/sm
 
 Linux (CI job `linux`, or a Linux machine): `cargo clippy`/`cargo test` as above, `sh installer/test-install.sh`, `sh tests/e2e/smoke-unix.sh target/debug/quayflow`, `shellcheck -S warning installer/*.sh tests/e2e/*.sh`, `claude plugin test mod/quayflow`. macOS (CI job `macos`): the same except ShellCheck, plus an Intel compile check (`--target x86_64-apple-darwin`) and the Keychain backend (`qf-adapter/src/keychain.rs`, `login.rs` `Store`). On a Mac with your real login, run tests with `QUAYFLOW_KEYCHAIN=off` unless you are working on the Keychain: an environment that resolves to the bare `Claude Code-credentials` item is your live login (only your real `~/.claude` may resolve to it). Platform code is behind `cfg(windows)` / `cfg(not(windows))`: Linux paths and facts are in `qf-adapter` (`process.rs`, `env.rs`, `lock.rs`, `lanes.rs`, `policy.rs`), `qf-engine/src/paths.rs`, `qf-vault` and `quayflow/src/local.rs`; the Mod picks the layout in `hooks/engine.ts` (`layout`).
 
-Real-login scripts (`tests/e2e/real-*.ps1`) switch the user's live login. Never run them; give the user the command and read the results they paste.
+Real-login scripts (`tests/e2e/real-*.ps1`, `real-macos-keychain.py`) switch the user's live login. Never run them; give the user the command and read the results they paste. A hook blocks them (`.claude/hooks/guard.py`).
+
+Also: `python3 tests/docs/check-docs.py` (links, anchors, versions, platform lists; CI job `docs`, which also requires a CHANGELOG line when code changes). The pre-push hook (`.githooks/pre-push`, enabled with `git config core.hooksPath .githooks`) runs fmt, clippy, the Rust tests, the docs check and the Mod tests.
+
+## Working rules
+
+These come from bugs a full review found that tests and earlier reviews had missed. Each folder with its own risks has a `CLAUDE.md` with the details: `crates/qf-adapter`, `crates/qf-engine`, `crates/qf-policy`, `mod` (the Mod), `installer`.
+
+- **A flaky test is a bug until shown otherwise.** Read the log before re-running; a check that fails prints the output of the command it checked. (The one flake so far was an engine race.)
+- **Error paths are tested, not only success.** Every call to `security`, `gh`, a lock or the file system handles each outcome; an error is never read as "not there".
+- **Tests run the code as production does**: the engine's `tick()`, a restart, two callers at once, non-ASCII and hex output, a tampered download.
+- **Anything downloaded and executed is attested** before it runs, with a negative test.
+- **Docs name all three platforms** (Windows, Linux, macOS) and say a version, never "the next release".
+- **Before a release**, run the `review` skill; ship with the `release` skill. Record real-login results with the `real-test` skill; keep docs in step with the `docs-sync` skill.
+
+Harness (`.claude/`): `settings.json` (permissions, hooks), `hooks/guard.py` (blocks commands that can touch the live login), `hooks/changelog.py` (reminds when code changed without a CHANGELOG line), `skills/` (`review`, `release`, `real-test`, `docs-sync`), `agents/` (read-only reviewers per area and a `verifier`).
 
 ## Mod notes
 
@@ -69,6 +84,6 @@ Real-login scripts (`tests/e2e/real-*.ps1`) switch the user's live login. Never 
 ## Conventions
 
 - Plain, precise English in docs, UI text and commits; short sentences; no marketing, no emoji. Name things the way the user guide does (environment, lane, group, Suggest/Manual/Automatic, live account).
-- Every user-visible change gets a `CHANGELOG.md` line under `[Unreleased]`, written for users.
+- Every user-visible change gets a `CHANGELOG.md` line under `[Unreleased]`, written for users. An internal-only change says `[no changelog]` in its commit message.
 - Version lives in: `Cargo.toml` (workspace), `Cargo.lock`, `mod/quayflow/.claude-plugin/plugin.json`, `mod/quayflow/hooks/context.ts` (`MOD_VERSION`), `mod/quayflow/README.md`, and the `modVersion` expectation in `mod/quayflow/tests/quayflow.test.ts`.
 - Releases: CI must pass on `main`, then an annotated tag `vX.Y.Z` runs `.github/workflows/release.yml` (reproducible double build, assets `install.ps1`, `quayflow.exe`, `quayflow-bg.exe`, `Quayflow.psm1`, `install.sh`, `quayflow-linux-x86_64`, `quayflow-macos-arm64`, `quayflow-macos-x86_64`, `SHA256SUMS`, `SOURCE_COMMIT`).

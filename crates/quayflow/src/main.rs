@@ -989,6 +989,34 @@ mod tests {
     }
 
     #[test]
+    fn every_option_in_the_help_is_known_and_others_are_refused() {
+        let mut named = vec![];
+        for (i, _) in HELP.match_indices("--") {
+            let name: String = HELP[i + 2..]
+                .chars()
+                .take_while(|c| c.is_ascii_lowercase() || *c == '-')
+                .collect();
+            if !name.is_empty() {
+                named.push(name);
+            }
+        }
+        assert!(named.len() > 10, "{named:?}");
+        for n in &named {
+            assert!(known_flag(n), "--{n} is in the help but not accepted");
+        }
+        for typo in ["chek", "if-consnted", "skip-attestaton", "delete-dat"] {
+            assert!(!known_flag(typo), "--{typo} must be refused");
+        }
+        assert_eq!(
+            run(
+                &parse(&["update", "--chek"]),
+                &DataDir::at(std::path::Path::new("/nonexistent-qf"))
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn value_flags_never_swallow_the_next_flag() {
         let a = parse(&["add", "--label", "--group", "G"]);
         assert_eq!(a.val("label"), None);

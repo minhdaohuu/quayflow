@@ -30,6 +30,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Dry run from main (Actions > Release > Run workflow): the same double builds and
+  # comparisons, without publishing anything. Use it to test a change to this workflow.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -53,8 +56,16 @@ jobs:
         shell: pwsh
         env:
           TAG: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
         run: |
           $tag = $env:TAG
+          if ($env:EVENT -eq 'workflow_dispatch') {
+            # Dry run: the workspace version stands in for the tag; nothing is published.
+            $cargo = Get-Content Cargo.toml -Raw
+            if ($cargo -notmatch '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"') { throw 'No [workspace.package] version in Cargo.toml' }
+            $tag = "v$($Matches[1])"
+            Write-Host "Dry run for $tag (nothing is published)"
+          }
           if ($tag -notmatch '^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') { throw "Tag $tag is not vX.Y.Z" }
           $version = $Matches[1]
           $cargo = Get-Content Cargo.toml -Raw
@@ -212,6 +223,7 @@ jobs:
 
   publish:
     needs: [prepare, build, build-linux, build-macos]
+    if: github.event_name == 'push'
     runs-on: windows-latest
     permissions:
       contents: write
@@ -333,6 +345,7 @@ jobs:
 
   verify:
     needs: publish
+    if: github.event_name == 'push'
     runs-on: windows-latest
     permissions:
       contents: read

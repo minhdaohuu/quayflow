@@ -67,6 +67,37 @@ jobs:
           pwsh -NoProfile -File tests/e2e/sim-usage.ps1 -Exe target\debug\quayflow.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  docs:
+    name: Docs and CHANGELOG
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Docs match the repository (links, anchors, versions, platform lists)
+        run: python3 tests/docs/check-docs.py
+      - name: The Claude Code guard hook blocks what it must (.claude/hooks)
+        run: python3 .claude/hooks/test_guard.py
+      - name: A user-visible change has a CHANGELOG line
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            echo "no range to compare"; exit 0
+          fi
+          files=$(git diff --name-only "$BASE" "$HEAD")
+          code=$(printf '%s\n' "$files" | grep -E '^(crates/[^/]+/src/|mod/quayflow/hooks/|installer/install\.(sh|ps1)$|shell/Quayflow\.psm1$)' | grep -v '/tests\?\.rs$' || true)
+          if [ -z "$code" ] || printf '%s\n' "$files" | grep -qx CHANGELOG.md; then exit 0; fi
+          if git log --format=%B "$BASE..$HEAD" | grep -qF '[no changelog]'; then
+            echo "skipped: a commit says [no changelog]"; exit 0
+          fi
+          echo "::error::Code changed without a CHANGELOG.md line under [Unreleased] (or say [no changelog] in a commit message for internal-only changes):"
+          printf '%s\n' "$code"
+          exit 1
+
   linux:
     name: Linux (clippy, test, smoke, installer, Mod)
     runs-on: ubuntu-24.04

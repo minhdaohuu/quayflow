@@ -549,3 +549,6 @@ pub fn recovery_target(ctx: &Ctx) -> RecoveryTarget {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod invariants;

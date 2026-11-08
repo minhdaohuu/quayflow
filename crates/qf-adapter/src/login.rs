@@ -29,7 +29,7 @@ pub enum Store {
 /// one exists; an environment without one is read from `.credentials.json`, as Claude does,
 /// and stays file-backed until Claude itself moves it into the Keychain at its next save.
 pub fn store(env: &Env) -> Result<Store, String> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(target_os = "macos") && !keychain::faked() {
         return Ok(Store::File);
     }
     let Some(service) = keychain::service_name(env) else {
@@ -657,5 +657,163 @@ mod tests {
         assert_eq!(read_login(&e).unwrap().unwrap().account_uuid(), Some("u-b"));
         retire(&e, Duration::from_secs(1)).unwrap();
         assert!(read_login(&e).unwrap().is_none());
+    }
+}
+
+/// Error paths of the Keychain store against a fake `security` with scripted faults
+/// (tests-support/fake-security.py). Never the real Keychain; runs on every Unix CI job.
+#[cfg(all(test, unix))]
+mod keychain_faults {
+    use super::*;
+    use serde_json::json;
+
+    struct Fake {
+        dir: tempfile::TempDir,
+        env: Env,
+    }
+
+    impl Drop for Fake {
+        fn drop(&mut self) {
+            keychain::FAKE.with(|f| *f.borrow_mut() = None);
+        }
+    }
+
+    impl Fake {
+        /// A lane-style environment whose Keychain item holds A's login and an MCP login
+        /// with a non-ASCII name (which `security` prints as hex).
+        fn new() -> Fake {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("security");
+            let src = concat!(env!("CARGO_MANIFEST_DIR"), "/tests-support/fake-security.py");
+            std::fs::copy(src, &script).unwrap();
+            keychain::FAKE.with(|f| *f.borrow_mut() = Some(script));
+            let env = Env::at(qf_model::EnvId("lane".into()), dir.path().join("lane"));
+            std::fs::create_dir_all(&env.config_dir).unwrap();
+            std::fs::write(
+                &env.claude_json,
+                json!({"oauthAccount": {"accountUuid": "u-a"}}).to_string(),
+            )
+            .unwrap();
+            let fake = Fake { dir, env };
+            let item = keychain::new_item(&fake.env).expect("the fake Keychain is on");
+            keychain::write(&item, &fake.before()).unwrap();
+            fake
+        }
+        fn before(&self) -> Map<String, Value> {
+            let mut m = Map::new();
+            m.insert(
+                "claudeAiOauth".into(),
+                json!({"accessToken": "A1", "refreshToken": "RA", "expiresAt": 1}),
+            );
+            m.insert("mcpOAuth".into(), json!({"server": "caf\u{e9}"}));
+            m
+        }
+        fn fault(&self, line: &str) {
+            let p = self.dir.path().join("FAULTS");
+            let mut t = std::fs::read_to_string(&p).unwrap_or_default();
+            t.push_str(line);
+            t.push('\n');
+            std::fs::write(p, t).unwrap();
+        }
+        fn item(&self) -> Option<Map<String, Value>> {
+            let found = keychain::find(&keychain::new_item(&self.env).unwrap().service).unwrap()?;
+            keychain::read(&found).unwrap()
+        }
+        fn record(&self) -> String {
+            let c = read_json(&self.env.claude_json).unwrap();
+            c["oauthAccount"]["accountUuid"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        }
+    }
+
+    fn target() -> Login {
+        Login {
+            oauth: json!({"accessToken": "B1", "refreshToken": "RB", "expiresAt": 2}),
+            account: json!({"accountUuid": "u-b"}),
+        }
+    }
+
+    #[test]
+    fn a_login_printed_as_hex_is_read_and_switched() {
+        let f = Fake::new();
+        assert_eq!(read_login(&f.env).unwrap().unwrap().refresh_token(), Some("RA"));
+        swap(&f.env, &target(), Duration::from_secs(2), |_| Ok(())).unwrap();
+        let now = f.item().unwrap();
+        assert_eq!(now["claudeAiOauth"]["refreshToken"], "RB");
+        assert_eq!(now["mcpOAuth"]["server"], "caf\u{e9}", "other entries kept");
+        assert_eq!(f.record(), "u-b");
+    }
+
+    #[test]
+    fn a_write_that_does_not_read_back_is_rolled_back() {
+        let f = Fake::new();
+        f.fault("write silent");
+        let r = swap(&f.env, &target(), Duration::from_secs(2), |_| Ok(()));
+        assert!(matches!(r, Err(SwapError::PreWrite(_))), "{r:?}");
+        assert_eq!(f.item().unwrap(), f.before());
+        assert_eq!(f.record(), "u-a", "the account record was not written");
+    }
+
+    #[test]
+    fn a_failed_read_back_is_rolled_back() {
+        let f = Fake::new();
+        // The pre-switch read, then the read-back after the write fails.
+        f.fault("read ok");
+        f.fault("read fail");
+        let r = swap(&f.env, &target(), Duration::from_secs(2), |_| Ok(()));
+        assert!(matches!(r, Err(SwapError::PreWrite(_))), "{r:?}");
+        assert_eq!(f.item().unwrap(), f.before());
+        assert_eq!(f.record(), "u-a");
+    }
+
+    #[test]
+    fn a_write_reported_failed_is_never_called_a_success() {
+        let f = Fake::new();
+        f.fault("write stderr");
+        let r = swap(&f.env, &target(), Duration::from_secs(2), |_| Ok(()));
+        assert!(r.is_err(), "{r:?}");
+        assert_eq!(f.record(), "u-a");
+    }
+
+    #[test]
+    fn retire_with_an_unanswered_keychain_is_an_error_not_no_item() {
+        let f = Fake::new();
+        f.fault("find fail");
+        assert!(retire(&f.env, Duration::from_secs(2)).is_err());
+        assert_eq!(
+            f.item().unwrap(),
+            f.before(),
+            "the login is still where it can be found"
+        );
+    }
+
+    #[test]
+    fn retire_keeps_other_entries_and_deletes_an_empty_item() {
+        let f = Fake::new();
+        retire(&f.env, Duration::from_secs(2)).unwrap();
+        let left = f.item().unwrap();
+        assert!(!left.contains_key("claudeAiOauth"));
+        assert_eq!(left["mcpOAuth"]["server"], "caf\u{e9}");
+        // Nothing else in it: the item goes.
+        let item = keychain::new_item(&f.env).unwrap();
+        let mut only = Map::new();
+        only.insert("claudeAiOauth".into(), json!({"refreshToken": "RA"}));
+        keychain::write(&item, &only).unwrap();
+        retire(&f.env, Duration::from_secs(2)).unwrap();
+        assert!(f.item().is_none());
+    }
+
+    #[test]
+    fn a_keychain_that_does_not_answer_times_out() {
+        let f = Fake::new();
+        f.fault("read timeout");
+        let t = std::time::Instant::now();
+        assert!(read_login(&f.env).is_err());
+        assert!(
+            t.elapsed() < Duration::from_secs(8),
+            "ended at the 5 s limit, not when security returned"
+        );
     }
 }

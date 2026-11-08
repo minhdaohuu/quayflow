@@ -1689,3 +1689,89 @@ fn mixed_login_files_are_held_again_after_a_restart() {
     }
     assert!(paused(&e).unwrap().contains("inconsistent"));
 }
+
+// ---------------- helpers that run the engine as in production ----------------
+
+/// Stop the engine and start a new one on the same data folder and environment, as after a
+/// crash or a sign-out. Use it for any new state the engine keeps in memory.
+fn restart(w: &World, e: Shared) -> Shared {
+    drop(e);
+    Engine::new(w.dd.clone(), w.env.clone(), true).unwrap()
+}
+
+#[test]
+fn the_tick_notices_a_login_changed_outside_quayflow() {
+    // Tests elsewhere call watch() by hand; production only has the tick.
+    let w = world();
+    let e = engine_with_accounts(&w);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    login_files(&w.env, "uuid-personal", "P1", "max");
+    e.tick();
+    assert_eq!(e.lock().envs[&EnvId::default_env()].live, Some(id("uuid-personal")));
+}
+
+#[test]
+fn pins_and_modes_survive_a_restart() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_mode(&e, "automatic");
+    e.start_switch(
+        &EnvId::default_env(),
+        &id("uuid-personal"),
+        SwitchHow::Manual,
+        "test",
+        false,
+        true,
+    )
+    .unwrap();
+    let e = restart(&w, e);
+    let inner = e.lock();
+    assert_eq!(inner.envs[&EnvId::default_env()].live, Some(id("uuid-personal")));
+    assert_eq!(inner.config.group("Default").unwrap().mode, Mode::Automatic);
+}
+
+#[test]
+fn simultaneous_failures_share_one_switch_and_both_retry() {
+    for round in 0..10 {
+        let w = world();
+        let e = engine_with_accounts(&w);
+        set_mode(&e, "automatic");
+        set_obs(&e, "uuid-personal", 10.0, None);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let threads: Vec<_> = ["main", "sub"]
+            .into_iter()
+            .map(|agent| {
+                let (e, b) = (e.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    b.wait();
+                    e.recover(&RecoverRequest {
+                        session_id: SID.into(),
+                        turn_id: Some("t".into()),
+                        index: Some(1),
+                        agent_id: Some(agent.into()),
+                        rate_limits: vec![SessionRateLimit {
+                            kind: Some("five_hour".into()),
+                            percent_used: Some(100.0),
+                            resets_at: None,
+                        }],
+                        ..Default::default()
+                    })
+                })
+            })
+            .collect();
+        let rs: Vec<RecoverResponse> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        let switches = rs.iter().filter(|r| r.switched).count();
+        assert_eq!(
+            switches,
+            1,
+            "round {round}: {:?}",
+            rs.iter().map(|r| &r.why).collect::<Vec<_>>()
+        );
+        assert!(
+            rs.iter().all(|r| r.retry),
+            "round {round}: {:?}",
+            rs.iter().map(|r| &r.why).collect::<Vec<_>>()
+        );
+        assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+    }
+}
