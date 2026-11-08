@@ -1,6 +1,6 @@
 # Quayflow user guide
 
-Quayflow v0.2.0. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64, Linux x86_64 and, from v0.1.6, macOS (Apple silicon and Intel). Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
+Quayflow v0.3.0. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64, Linux x86_64 and, from v0.1.6, macOS (Apple silicon and Intel). Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
 
 Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. macOS is not fully tested either; on an Apple silicon Mac, switching, lanes and recovery from a simulated limit passed with real accounts, while recovery from a real limit, Open New Session, Intel Macs and an install from a published release have not been run. See [acceptance results](acceptance.md).
 

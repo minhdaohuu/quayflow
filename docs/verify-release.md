@@ -29,7 +29,7 @@ The installer checks (1) always, and (2) unless you pass `-SkipAttestation` (`in
 Windows, in PowerShell:
 
 ```powershell
-$v = 'v0.2.0'
+$v = 'v0.3.0'
 $base = "https://github.com/minhdaohuu/quayflow/releases/download/$v"
 foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64', 'quayflow-macos-arm64', 'quayflow-macos-x86_64', 'install.ps1', 'install.sh', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
     try { Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f } catch { "$f is not in this release" }   # Linux files from v0.1.5, macOS from v0.1.6; SOURCE_COMMIT from v0.1.1
@@ -45,7 +45,7 @@ Get-Content SHA256SUMS | ForEach-Object {
 Linux, in `sh`:
 
 ```sh
-v=v0.2.0
+v=v0.3.0
 base=https://github.com/minhdaohuu/quayflow/releases/download/$v
 for f in quayflow-linux-x86_64 install.sh SOURCE_COMMIT SHA256SUMS; do
   curl -fsSLO "$base/$f"
@@ -95,7 +95,7 @@ On Windows with Visual Studio Build Tools (MSVC) and rustup:
 
 ```powershell
 git clone https://github.com/minhdaohuu/quayflow; cd quayflow
-git checkout v0.2.0
+git checkout v0.3.0
 rustup toolchain install          # installs the version pinned in rust-toolchain.toml
 $env:SOURCE_DATE_EPOCH = git log -1 --format=%ct
 $env:CARGO_INCREMENTAL = '0'
@@ -112,7 +112,7 @@ On Linux with rustup, a C toolchain and the OpenSSL development files (`pkg-conf
 
 ```sh
 git clone https://github.com/minhdaohuu/quayflow && cd quayflow
-git checkout v0.2.0
+git checkout v0.3.0
 rustup toolchain install          # installs the version pinned in rust-toolchain.toml
 SOURCE_DATE_EPOCH=$(git log -1 --format=%ct); export SOURCE_DATE_EPOCH
 export CARGO_INCREMENTAL=0

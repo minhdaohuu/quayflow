@@ -4,8 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-09
+
+Clearer wording in the `/quay` pane, `/quay` commands, the status line and the CLI; the Uninstall screen can delete all data; `quayflow policy` and `quayflow group list` print readable values.
+
 ### Changed
 - Clearer wording across the `/quay` pane, `/quay` commands, the status line, the CLI and engine messages: one name for each thing (switch, environment, "usage unknown"), mode names capitalised (Manual, Suggest, Automatic), and errors that say what to do next. Examples in the docs and screenshots use the accounts `work-01` and `work-02`.
+- The Uninstall screen in `/quay` can choose to delete all Quayflow data (`--delete-data`), not only the vault and the logs.
+- On a group page, **Switch home** opens the switch review for the group's home account. Before, the button was called "Return home" and only opened the Overview. The Overview's button to the group page is now called **Group** instead of "Home".
+
+### Fixed
+- `quayflow policy` printed raw JSON and Rust debug text for the managed-login rules; it now prints the sources, organizations and login method plainly.
+- `quayflow group list` showed the home account's id instead of its name.
 
 ## [0.2.0] - 2026-11-08
 
@@ -175,7 +185,8 @@ First release: a private pilot for Windows 10/11 x64 (Quayflow targets every pla
 - Release assets are not attested while the repository is private; install with `-SkipAttestation`.
 - An idle account's access token expires, so it is not observed until it is used again (see `docs/known-limits.md`).
 
-[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/minhdaohuu/quayflow/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/minhdaohuu/quayflow/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/minhdaohuu/quayflow/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/minhdaohuu/quayflow/compare/v0.1.4...v0.1.5
