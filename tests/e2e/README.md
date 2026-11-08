@@ -10,6 +10,8 @@
 | `real-headless.ps1` | **real**, with one account at a real usage limit | no | Headless `claude -p`: Automatic recovery (X1), three parallel runs sharing one switch (X2), Suggest leaves Claude's result (X3), engine stopped (X4), a run failing at the limit then a fresh `claude -p` succeeding on another account after `quayflow last` names a time to run again (X5). `quayflow last --session <id> --json` is checked after X1, X3 and X5. In every case stdout is exactly Claude's own JSON and no Quayflow line appears |
 | `real-lanes.ps1` | **real** | no | Lanes: links, a real headless Claude job inside a lane reading and writing through the links, independent logins, the shared setup surviving lane deletion |
 
+The real-login scripts are PowerShell and also run on Linux with PowerShell 7 (`sudo snap install powershell --classic`): `pwsh -File tests/e2e/real-switching.ps1`. They find the data folder by themselves (`~/.local/share/quayflow`, or `QUAYFLOW_HOME`).
+
 The fake-environment scripts point `CLAUDE_CONFIG_DIR` and `QUAYFLOW_HOME` (and, for `cli-fake-env.ps1` and `sim-usage.ps1`, `USERPROFILE`) at a temporary folder, and never touch your real logins. `smoke-fake-env.ps1` and `cli-fake-env.ps1` turn network calls off (`QUAYFLOW_OFFLINE`); `sim-usage.ps1` sends usage and profile calls to its loopback fake (`QUAYFLOW_SIM_API`). Run them with `pwsh -File <script> [-Exe path\to\quayflow.exe]`; the default is `target\debug\quayflow.exe`.
 
 ## Running the real-login scenarios

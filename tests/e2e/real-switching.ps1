@@ -24,9 +24,14 @@ param(
     [string]$Group = 'Default'
 )
 $ErrorActionPreference = 'Stop'
-$qfHome = if ($env:QUAYFLOW_HOME) { $env:QUAYFLOW_HOME } else { Join-Path $env:LOCALAPPDATA 'Quayflow' }
+# The engine's data folder: %LOCALAPPDATA%\Quayflow on Windows, $XDG_DATA_HOME/quayflow
+# (~/.local/share/quayflow) on Linux; QUAYFLOW_HOME overrides it.
+$qfHome = if ($env:QUAYFLOW_HOME) { $env:QUAYFLOW_HOME }
+elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Quayflow' }
+elseif ($env:XDG_DATA_HOME) { Join-Path $env:XDG_DATA_HOME 'quayflow' }
+else { Join-Path $HOME '.local/share/quayflow' }
 $qf = (Get-Command quayflow -ErrorAction SilentlyContinue).Source
-if (-not $qf) { $qf = Join-Path $qfHome 'bin\quayflow.exe' }
+if (-not $qf) { $qf = Join-Path (Join-Path $qfHome 'bin') $(if ($IsWindows -or $env:LOCALAPPDATA) { 'quayflow.exe' } else { 'quayflow' }) }
 $claude = (Get-Command claude -CommandType Application | Select-Object -First 1).Source
 
 if ($MyInvocation.InvocationName -eq '.') {
