@@ -4,7 +4,7 @@ The functional requirements Quayflow v0.1 is built and tested against. Code comm
 
 ## Platform scope
 
-Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. v0.1 ships for Windows 10/11 x64 and Linux x86_64; the requirements below name Windows mechanisms (DPAPI, PowerShell, `%LOCALAPPDATA%`). Linux meets them with owner-only files for the vault (as Claude Code stores its own login there), `~/.local/share/quayflow`, a systemd user unit and `install.sh`; same-terminal replacement is not available on Linux yet. Later platforms meet the same requirements with their own equivalents: OS credential protection for the vault, the platform's shell for same-terminal replacement and the platform's per-user data folder. New code should keep platform-specific parts behind the existing module boundaries (vault, adapter paths and locks, shell integration, installer) so that the policy, engine and Mod stay shared.
+Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. v0.1 ships for Windows 10/11 x64 and Linux x86_64; the requirements below name Windows mechanisms (DPAPI, PowerShell, `%LOCALAPPDATA%`). Linux meets them with owner-only `0600` files for the vault (the same protection Claude Code gives its own login file), `~/.local/share/quayflow`, a systemd user unit and `install.sh`; same-terminal replacement is not available on Linux yet. Linux is not fully tested; see [Known limits](known-limits.md#platform-and-scope). Later platforms meet the same requirements with their own equivalents: OS credential protection for the vault, the platform's shell for same-terminal replacement and the platform's per-user data folder. New code should keep platform-specific parts behind the existing module boundaries (vault, adapter paths and locks, shell integration, installer) so that the policy, engine and Mod stay shared.
 
 ## Onboarding and accounts
 
@@ -13,7 +13,7 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. v
 | FR-01 | One-command install without administrator rights; the user keeps typing `claude`. Before anything is stored, explain roles, local credential handling, the shared-login scope and the modes, show the terms and organization-rules notice, and obtain explicit consent. A `Default` group exists from the start. |
 | FR-02 | Register the current login without reauthentication: show the verified identity, a label and a mandatory group; registration never activates another account or enables Automatic mode. |
 | FR-03 | Add another account through Claude's native sign-in in a separate temporary environment; group selection is mandatory; a cancelled sign-in leaves the live login unchanged; the temporary copy is retired without signing out. |
-| FR-04 | Detect duplicates; reauthentication verifies identity; removal is blocked while an account is live; a rejected refresh token sets the account aside; an unknown live login pauses automation and is backed up (encrypted) before a manual switch; no plaintext fallback. |
+| FR-04 | Detect duplicates; reauthentication verifies identity; removal is blocked while an account is live; a rejected refresh token sets the account aside; an unknown live login pauses automation and is backed up in the vault's protected form before a manual switch; no plaintext fallback. |
 
 ## Groups and policy
 
@@ -59,7 +59,7 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. v
 
 | ID | Requirement |
 |---|---|
-| FR-19 | One engine per Windows user, started on demand after consent, no visible windows, intentional stop respected, crash reconciliation without replay; matched engine and Mod updates; uninstall leaves the current login working. |
+| FR-19 | One engine per user, started on demand after consent, no windows except those the user asks for (sign-in, Open New Session), intentional stop respected, crash reconciliation without replay; matched engine and Mod updates; uninstall leaves the current login working. |
 | FR-20 | Loopback API with a per-run token and a versioned handshake (current and previous protocol); an incompatible pair disables switching and recovery. Detect another tool switching the same login. |
 | FR-21 | Credentials sealed with Windows DPAPI (current user plus application entropy); on Linux, owner-only files with the same protection as Claude Code's own login file; captures Claude's refreshes of live logins; refreshes only the saved copy of an idle account (held by the vault alone); no plaintext fallback. |
 | FR-22 | Sanitized local logs (7 days, size cap) and a durable journal; no tokens, prompts, responses, emails or labels in records. |
@@ -74,5 +74,5 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. v
 - Claude's own usage-limit wait adopts a login switched during the wait.
 - Claude reads and writes correctly through lane links.
 - Crash reconciliation, version gating and dead-refresh-token handling pass on the product build.
-- Every release artifact has a SHA-256 hash, a build attestation and a reproducible build; the installer and updater refuse a mismatch.
+- Every release artifact has a SHA-256 hash, a build attestation and a reproducible build; the installer and updater refuse a mismatch. Attestations exist from v0.1.5; v0.1.0 to v0.1.4 are not attested.
 - The terms disclaimer is published.

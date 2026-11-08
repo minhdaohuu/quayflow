@@ -1,68 +1,86 @@
 # Acceptance status (Quayflow v0.1)
 
-The [release conditions](requirements.md#release-conditions-for-v01) require recorded results on Windows against the **product build**. This table keeps three kinds of evidence apart. They are not interchangeable.
+The [release conditions](requirements.md#release-conditions-for-v01) require recorded results against a **release build**. This page keeps four kinds of evidence apart. They are not interchangeable.
 
-- **Logic:** Rust unit and scenario tests on a fake Claude environment (`cargo test`; scenarios in `crates/qf-engine/tests/engine.rs`). They prove decisions and file handling. They cannot prove client adoption, isolation or refresh behavior.
-- **Smoke:** `tests/e2e/smoke-fake-env.ps1`, which runs the real `quayflow.exe` process against a fake environment (21 checks), and `tests/e2e/cli-fake-env.ps1`, which covers CLI argument validation and error paths the same way (78 checks).
-- **Linux:** the same Rust tests, the Mod tests, `installer/test-install.sh` (43 checks) and `tests/e2e/smoke-linux.sh` (16 checks: the real Linux program installed, started, updated and removed in a fake environment) pass in CI and on an Ubuntu 24.04 machine. Real logins on Linux: see the status below.
+## Kinds of evidence
+
+- **Logic:** Rust unit and scenario tests on a fake Claude environment (`cargo test`; scenarios in `crates/qf-engine/tests/engine.rs`), and the Mod tests (`claude plugin test mod/quayflow`). They prove decisions and file handling. They cannot prove client adoption, isolation or refresh behavior.
+- **Smoke:** `tests/e2e/smoke-fake-env.ps1`, which runs the real `quayflow.exe` process against a fake environment (21 checks), and `tests/e2e/cli-fake-env.ps1`, which covers CLI argument validation and error paths the same way (78 checks). On Linux, `tests/e2e/smoke-linux.sh` installs, starts, updates and removes the real Linux program in a fake environment (16 checks), and `installer/test-install.sh` tests the Linux installer (43 checks).
 - **Simulation:** `tests/e2e/sim-usage.ps1` scripts usage over time from a loopback fake of the usage, profile and token API (`tests/sim/fake_api.py`) and checks observation, suggestion, Automatic switching, return home, stale data, backoff, rejected tokens, hard-limit recovery, concurrent failures, the all-exhausted case and idle-account token refresh (33 checks). It proves Quayflow's logic against these fakes, not that the real service behaves the same.
-- **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1`, `tests/e2e/real-lanes.ps1`, `tests/e2e/real-headless.ps1` and the manual steps below). Only this kind of evidence can pass a scenario.
+- **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1`, `tests/e2e/real-lanes.ps1`, `tests/e2e/real-headless.ps1`) and manual steps. Only this kind of evidence can pass a scenario. Each result below names its date, script, case and build.
 
-**Status on 2026-11-07:** Logic, Smoke and Simulation pass in CI. A real usage limit has now been handled end to end, with three real accounts, one of them at 100% of its 7-day window:
+Logic, Smoke and Simulation run in CI on every change: the Rust and Mod tests on Windows and Linux, the PowerShell suites on Windows, the shell suites on Linux.
 
-- interactive: Suggest mode suggested a switch at the limit and accepting it switched; Automatic mode recovered with one switch and one retry;
-- headless: `tests/e2e/real-headless.ps1` cases X1 to X5, 42/42 checks, on a local build of the v0.1.3 code. X1: Automatic recovery, one switch, one retry, one clean JSON result. X2: three parallel runs share one switch and every run answers. X3: Suggest mode, no switch, no question, no hang; Claude's own result stands. X4: engine stopped; `claude -p` behaves as without Quayflow. X5: a run fails at the limit, `quayflow last` names a time to run again, and a fresh `claude -p` succeeds on another account. In every case stdout was exactly Claude's JSON and no Quayflow line appeared on stdout or stderr.
-- update: `quayflow update --source` with a local build of the v0.1.4 code handed the install to `install.ps1 -Update`: engine stopped and restarted, consents and PATH unchanged, the Mod installed from a local folder left as it was; against the published v0.1.3 it refused with "no update mode" and changed nothing.
+## Real runs
 
-- Linux (2026-11-08, Ubuntu 24.04 x86_64, Claude Code 2.1.319, a local build of the `linux` branch, two real accounts: one personal, one organization; the same PowerShell scripts run with PowerShell 7):
-  - `real-switching.ps1`: 13/13. H: a mid-job switch, requests before it on the first account and after it on the second, same process, one JSON result. S: the same during two parallel subagents. R1: simulated limit in Automatic, one switch, one retry, one JSON result. R2: Suggest, no switch in headless.
-  - `real-lanes.ps1`: 8/8. Lane links (symbolic links on Linux) created and checked, a real headless job inside the lane on the second account, the default login unchanged, the shared setup intact after deleting the lane.
-  - `real-headless.ps1 -Case X4`: 7/7. With the engine stopped, `claude -p` behaves as without Quayflow; with it running, stdout is exactly one JSON result and no Quayflow text appears.
-  - After every switch, `~/.claude/.credentials.json` and `~/.claude.json` stayed `0600`; vault files `0600` in a `0700` folder.
-  - Manual, in an interactive session on the desktop: adding both accounts through the sign-in window; a switch from the `/quay` pane and back; a suggestion (threshold lowered to 5%) shown pinned, accepted with `/quay accept`, and verified on the next request.
-  - Not run on Linux: X1, X2, X3 and X5, which need an account at a real usage limit; Open New Session; an install and update from a published release; any other distribution.
+### Windows, 2026-11-03
 
-Still open: Claude's own in-process usage-limit wait adopting a login switched during the wait (AC-23).
-
-**Status on 2026-11-03:** The first real-login runs passed on 2026-11-03: `real-switching.ps1` (cases H, S, R1, R2) 13/13 and `real-lanes.ps1` 8/8, with two real accounts (one organization, one personal) on Claude Code 2.1.316. That run used a **local build of commit `0e657ca`** (GNU toolchain), not a published release, so the rows below say "Passed (local build)"; they must be repeated on the release build before v0.1 ships.
+`real-switching.ps1` (cases H, S, R1, R2) 13/13 and `real-lanes.ps1` 8/8, with two real accounts (one organization, one personal) on Claude Code 2.1.316, on a **local build of commit `0e657ca`** (GNU toolchain), not a published release.
 
 An earlier real run the same day found a defect, fixed in `0e657ca`: a request that was already in flight when a switch was written finished on the previous account (as designed) and was taken as proof that Claude does not adopt a switched login, which turned in-place switching off. Requests are now classified by when they started.
 
-| ID | Scenario | Logic / Smoke evidence | Real (product build) | How to run |
+### Windows, 2026-11-07: a real usage limit
+
+Three real accounts, one of them at 100% of its 7-day window:
+
+- Interactive (build not recorded): Suggest mode suggested a switch at the limit and accepting it switched; Automatic mode recovered with one switch and one retry.
+- Headless, on a **local build of the v0.1.3 code**: `tests/e2e/real-headless.ps1` cases X1 to X5, 42/42 checks. X1: Automatic recovery, one switch, one retry, one clean JSON result. X2: three parallel runs share one switch and every run answers. X3: Suggest mode, no switch, no question, no hang; Claude's own result stands. X4: engine stopped; `claude -p` behaves as without Quayflow. X5: a run fails at the limit, `quayflow last` names a time to run again, and a fresh `claude -p` succeeds on another account. In every case stdout was exactly Claude's JSON and no Quayflow line appeared on stdout or stderr.
+- Update, on a **local build of the v0.1.4 code**: `quayflow update --source` handed the install to `install.ps1 -Update`: engine stopped and restarted, consents and PATH unchanged, the Mod installed from a local folder left as it was. Against the published v0.1.3 it refused with "no update mode" and changed nothing.
+
+### Linux, 2026-11-08
+
+Ubuntu 24.04 x86_64, Claude Code 2.1.319, a **local build of commit `cc80dba`** (released in v0.1.5), two real accounts (one personal, one organization). The PowerShell scripts ran with PowerShell 7.
+
+- `real-switching.ps1`: 13/13. H: a mid-job switch, requests before it on the first account and after it on the second, same process, one JSON result. S: the same during two parallel subagents. R1: simulated limit in Automatic, one switch, one retry, one JSON result. R2: Suggest, no switch in headless.
+- `real-lanes.ps1`: 8/8. Lane links (symbolic links on Linux) created and checked, a real headless job inside the lane on the second account, the default login unchanged, the shared setup intact after deleting the lane.
+- `real-headless.ps1 -Case X4`: 7/7. With the engine stopped, `claude -p` behaves as without Quayflow; with it running, stdout is exactly one JSON result and no Quayflow text appears.
+- After every switch, `~/.claude/.credentials.json` and `~/.claude.json` stayed `0600`; vault files `0600` in a `0700` folder.
+- Manual, in an interactive session on the desktop, on later local builds of the same branch: adding both accounts through the sign-in window; a switch from the `/quay` pane and back; a suggestion (threshold lowered to 5%) shown pinned, accepted with `/quay accept`, and verified on the next request.
+
+**Linux is not fully tested.** Not run on Linux: X1, X2, X3 and X5, which need an account at a real usage limit; Open New Session; an install and update from a published release; any distribution other than Ubuntu 24.04.
+
+### Still open
+
+- Every result above ran on a local build. The scenarios must be repeated on a release build before v0.1 leaves the pilot.
+- Claude's own in-process usage-limit wait adopting a login switched during the wait (AC-23).
+
+## Scenarios
+
+| ID | Scenario | Logic / Smoke evidence | Real evidence | How to run |
 |---|---|---|---|---|
 | AC-01 | Ordinary interactive launch | Smoke: engine start, single instance, no window | Not run | Install, run `claude`, check status line |
-| AC-02 | Ordinary headless launch | — | Passed (local build, 2026-11-03): cases H, S, R1 each exited 0 with one JSON result. Passed (2026-11-07): `real-headless.ps1` X1 to X5, including X4 with the engine stopped (behaves as without Quayflow) | `real-switching.ps1 -Case H` (one JSON result); `real-headless.ps1 -Case X4` |
+| AC-02 | Ordinary headless launch | — | Passed (local build, 2026-11-03): cases H, S, R1 each exited 0 with one JSON result. Passed (local build of v0.1.3 code, 2026-11-07): `real-headless.ps1` X1 to X5, including X4 with the engine stopped (behaves as without Quayflow). Linux (local build `cc80dba`, 2026-11-08): cases H, S, R1 and X4 | `real-switching.ps1 -Case H` (one JSON result); `real-headless.ps1 -Case X4` |
 | AC-03 | Register existing login | Logic `register_requires_consent_and_group`; Smoke | Not run | `/quay register` or `quayflow register` |
 | AC-04 | Add or cancel another login | — (needs sign-in window) | Not run | `quayflow add`, cancel once, complete once |
 | AC-05 | Reauthenticate, duplicate, remove, dead refresh | Logic: duplicate, `model_not_found`/auth fallback | Not run | `quayflow reauth`, `remove`; dead token needs a revoked login |
 | AC-06 | Unassigned project uses Default | Logic `project_resolution_longest_match` | Not run | Start Claude in an unassigned folder; `/quay status` |
 | AC-07 | Explicit project / hostile repository | Logic (assignments only from the engine's config) | Not run | Assign a folder; add `.claude/` content in the repo; check the group |
-| AC-08 | Suggest in headless | Logic `recovery_refuses_unconfirmed_limits_and_suggest_mode_only_records` | Passed (local build, 2026-11-03): case R2, no switch, live account unchanged. Passed with a real limit (2026-11-07): `real-headless.ps1` X3, no switch, no question, no hang, Claude's own result stands; X5, `quayflow last` names a time to run again | `real-switching.ps1 -Case R2`; `real-headless.ps1 -Case X3,X5` |
+| AC-08 | Suggest in headless | Logic `recovery_refuses_unconfirmed_limits_and_suggest_mode_only_records` | Passed (local build, 2026-11-03): case R2, no switch, live account unchanged. Passed with a real limit (local build of v0.1.3 code, 2026-11-07): `real-headless.ps1` X3, no switch, no question, no hang, Claude's own result stands; X5, `quayflow last` names a time to run again | `real-switching.ps1 -Case R2`; `real-headless.ps1 -Case X3,X5` |
 | AC-09 | Threshold and stale usage | Policy tests `stale_is_never_zero`, `threshold_switches_to_lowest_fresh_with_margin` | Not run | Watch `quayflow status` over a session |
 | AC-10 | Account ranking | Policy `ranks_break_close_choices_only`, exclusions explained in status | Not run | `quayflow status` eligibility column |
 | AC-11 | Group conflict | Logic `group_conflict_names_the_blocking_session` | Not run | Two sessions in different groups; `/quay use` |
-| AC-12 | Lanes | Logic `create_check_delete_keeps_shared_setup`, `lanes_switch_independently` | Passed (local build, 2026-11-03): `real-lanes.ps1` 8/8. Links created and checked, second account switched into the lane, a real Claude session in the lane saw a linked skill, lane login was the target account, default login unchanged, links intact after the session, shared skills survived deletion | `quayflow lanes create work`; run Claude with plugins in the lane |
-| AC-13 | Mid-job switch | Logic `manual_switch_pins_and_tracks_adoption`, `request_in_flight_at_the_switch_is_not_adoption_evidence` | Passed (local build, 2026-11-03): case H, 2 requests before the swap on the first account, 3 after on the second | `real-switching.ps1 -Case H` |
-| AC-14 | Concurrent requests and subagents | Logic: concurrent recovery shares one switch | Passed (local build, 2026-11-03): case S, two parallel subagents, 4 requests before and 4 after the swap on the expected accounts. Passed with a real limit (2026-11-07): `real-headless.ps1` X2, three parallel runs share one switch and every run answers | `real-switching.ps1 -Case S`; `real-headless.ps1 -Case X2` |
+| AC-12 | Lanes | Logic `create_check_delete_keeps_shared_setup`, `lanes_switch_independently` | Passed (local build, 2026-11-03): `real-lanes.ps1` 8/8. Links created and checked, second account switched into the lane, a real Claude session in the lane saw a linked skill, lane login was the target account, default login unchanged, links intact after the session, shared skills survived deletion. Linux (local build `cc80dba`, 2026-11-08): 8/8, with symbolic links | `quayflow lanes create work`; run Claude with plugins in the lane |
+| AC-13 | Mid-job switch | Logic `manual_switch_pins_and_tracks_adoption`, `request_in_flight_at_the_switch_is_not_adoption_evidence` | Passed (local build, 2026-11-03): case H, 2 requests before the swap on the first account, 3 after on the second. Linux (local build `cc80dba`, 2026-11-08): case H | `real-switching.ps1 -Case H` |
+| AC-14 | Concurrent requests and subagents | Logic: concurrent recovery shares one switch | Passed (local build, 2026-11-03): case S, two parallel subagents, 4 requests before and 4 after the swap on the expected accounts. Passed with a real limit (local build of v0.1.3 code, 2026-11-07): `real-headless.ps1` X2, three parallel runs share one switch and every run answers. Linux (local build `cc80dba`, 2026-11-08): case S | `real-switching.ps1 -Case S`; `real-headless.ps1 -Case X2` |
 | AC-15 | Local tools and user input | — | Passed (local build, 2026-11-03): case H, sequential tools continued across the swap in the same process | Case H (tools continue; no replay) |
 | AC-16 | Lock held before write | Logic `held_lock_leaves_login_unchanged`; Smoke | Not run | Covered by Smoke on the real binary; repeat with real login optional |
 | AC-17 | Post-write uncertainty | Logic: uncertain path reconciled from file state | Not run | Kill the engine during a switch (manual) |
-| AC-18 | Account adoption | Logic adoption tracking | Passed (local build, 2026-11-03): cases H and S, per-request identity matched the switch | Cases H and S (per-request identity) |
+| AC-18 | Account adoption | Logic adoption tracking | Passed (local build, 2026-11-03): cases H and S, per-request identity matched the switch. Linux (local build `cc80dba`, 2026-11-08): cases H and S | Cases H and S (per-request identity) |
 | AC-19 | Synthetic pre-request verification | Not built: out-of-group switches are refused | n/a | — |
 | AC-20 | Refresh race | Logic `native_refresh_is_captured_into_the_vault` | Not run | Long session across a token refresh; vault stays valid |
-| AC-21 | Hard-limit recovery | Logic `recovery_automatic_switches_once_and_retries_once`; Simulation | Simulated limit passed (local build, 2026-11-03): case R1, one recovery decision with a switch and one retry. Real limit passed (2026-11-07): interactive Automatic recovery with one switch and one retry, and interactive Suggest with accept; headless `real-headless.ps1` X1, one switch, one retry, one clean JSON result, `quayflow last` reports `recovered` | `real-switching.ps1 -Case R1` (simulated); `real-headless.ps1 -Exhausted <label> -Case X1` (real limit) |
+| AC-21 | Hard-limit recovery | Logic `recovery_automatic_switches_once_and_retries_once`; Simulation | Simulated limit passed (local build, 2026-11-03): case R1, one recovery decision with a switch and one retry. Real limit passed (2026-11-07): interactive (build not recorded) Automatic recovery with one switch and one retry, and interactive Suggest with accept; headless `real-headless.ps1` X1, one switch, one retry, one clean JSON result, `quayflow last` reports `recovered` (local build of v0.1.3 code). Linux: simulated limit only (case R1, local build `cc80dba`, 2026-11-08) | `real-switching.ps1 -Case R1` (simulated); `real-headless.ps1 -Exhausted <label> -Case X1` (real limit) |
 | AC-22 | Unknown side effect | Logic: one retry of the failed request only | Not run | Review journal after R1 |
 | AC-23 | All accounts exhausted | Logic `all_exhausted_switches_to_soonest_without_retry`; Simulation (switch to the soonest, no retry) | Not run (**release condition**: Claude's wait adopts a switch) | Needs all accounts at a limit |
 | AC-24 | Deadline, cancellation, exited process | Logic: aborted requests never retried (Mod tests) | Not run | Ctrl+C during a held job |
-| AC-25 | Headless output | — | Passed (local build, 2026-11-03): cases H, S, R1, one JSON result each. Passed with a real limit (2026-11-07): `real-headless.ps1` X1 to X5, stdout exactly Claude's JSON and no Quayflow line on stdout or stderr | Cases H, S, R1 check one JSON result; `real-headless.ps1` |
+| AC-25 | Headless output | — | Passed (local build, 2026-11-03): cases H, S, R1, one JSON result each. Passed with a real limit (local build of v0.1.3 code, 2026-11-07): `real-headless.ps1` X1 to X5, stdout exactly Claude's JSON and no Quayflow line on stdout or stderr. Linux (local build `cc80dba`, 2026-11-08): cases H, S, R1, X4 | Cases H, S, R1 check one JSON result; `real-headless.ps1` |
 | AC-26 | Open or replace with full history | Logic history copy tests | Not run | `/quay replace <lane>` in PowerShell 7 and 5.1 |
 | AC-27 | Failed handoff | Logic `refuses_diverged_destination` | Not run | Diverge a lane copy; retry handoff |
-| AC-28 | Engine stop, crash, restart | Logic `crash_reconciliation_never_replays`; Smoke stop respected | Partly: with the engine stopped, `claude -p` behaves as without Quayflow (2026-11-07, `real-headless.ps1` X4). Crash mid-switch and restart not run (release condition) | Kill the engine mid-switch; restart; read journal |
+| AC-28 | Engine stop, crash, restart | Logic `crash_reconciliation_never_replays`; Smoke stop respected | Partly: with the engine stopped, `claude -p` behaves as without Quayflow (local build of v0.1.3 code, 2026-11-07, `real-headless.ps1` X4; Linux (local build `cc80dba`, 2026-11-08)). Crash mid-switch and restart not run (release condition) | Kill the engine mid-switch; restart; read journal |
 | AC-29 | Vault inaccessible | Logic `protect_failure_writes_nothing` | Not run | Copy the vault to another Windows user and try to load |
 | AC-30 | Diagnostics and cleanup | Logic `journal_and_report_hold_no_secrets`; Smoke | Not run | `quayflow report`; `quayflow uninstall --delete-data` |
 | AC-31 | Unknown version | Logic: static check per version | Not run | Install a new Claude version; check `quayflow canary` |
 | AC-32 | Denied capability | No bypass code exists | n/a | — |
-| AC-33 | Update or mixed runtimes | Logic: oldest running version governs | Not run | Run two Claude versions; update |
+| AC-33 | Update or mixed runtimes | Logic: oldest running version governs; Smoke (`smoke-linux.sh` update) | Partly: `quayflow update` from a local v0.1.4 build (2026-11-07); mixed Claude versions not run | Run two Claude versions; update |
 | AC-34 | Long-duration and fault testing | — | Not run | 24 h run with `quayflow status` sampling |
 | AC-35 | Mixed-identity group | Logic and Smoke: disclosure once | Not run | Register org + personal in Default |
 | AC-36 | Manual pin | Policy `pin_holds_until_release_level`; Smoke | Not run | `/quay use`, observe no suggestions |
@@ -78,11 +96,11 @@ An earlier real run the same day found a defect, fixed in `0e657ca`: a request t
 
 | Condition | Status |
 |---|---|
-| All scenarios pass against the product build | Open |
-| Real usage-limit failure observed end to end; Claude's own retry does not compete | Passed (2026-11-07): interactive Automatic recovery and Suggest with accept, and `real-headless.ps1` X1 to X5 (42/42), each with one switch and at most one retry |
+| All scenarios pass against a release build | Open |
+| Real usage-limit failure observed end to end; Claude's own retry does not compete | Passed on Windows (2026-11-07): interactive Automatic recovery and Suggest with accept, and `real-headless.ps1` X1 to X5 (42/42, local build of v0.1.3 code), each with one switch and at most one retry. Not run on Linux |
 | Claude's own usage-limit wait adopts a login switched during the wait | Open |
-| Claude reads and writes correctly through lane links | Passed on a local build (2026-11-03, `real-lanes.ps1` 8/8); repeat on the release build |
+| Claude reads and writes correctly through lane links | Passed on local builds: Windows (2026-11-03) and Linux (2026-11-08), `real-lanes.ps1` 8/8 each; repeat on a release build |
 | Crash reconciliation, version gating, dead-refresh-token handling built and passing | Built; logic passes (dead refresh token of an idle account also in Simulation); real runs open |
-| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (latest v0.1.5); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attested from v0.1.5: on 2026-11-08 `gh attestation verify` passed for `quayflow.exe`, `quayflow-linux-x86_64` and `install.sh` of v0.1.5, with the release workflow as signer, the tag as source ref and `SOURCE_COMMIT` as source digest. v0.1.0 to v0.1.4 were built while the repository was private and are not attested |
+| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (Linux programs since v0.1.5; latest v0.1.5); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attested from v0.1.5: on 2026-11-08 `gh attestation verify` passed for `quayflow.exe`, `quayflow-linux-x86_64` and `install.sh` of v0.1.5, with the release workflow as signer, the tag as source ref and `SOURCE_COMMIT` as source digest. v0.1.0 to v0.1.4 were built while the repository was private and are not attested |
 | Disclaimer published | Done (README, installer, onboarding) |
 | Managed-login override documented with its risk | Done (`docs/security.md`); override not implemented in this build |

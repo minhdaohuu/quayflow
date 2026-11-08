@@ -1,6 +1,6 @@
 # Quayflow v0.1 technical specification
 
-> Scope: this specification describes v0.1 on Windows x64 and Linux x86_64 as of v0.1.5. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated so that macOS can provide its own. See [requirements.md](requirements.md#platform-scope).
+> Scope: this specification describes v0.1 on Windows x64 and Linux x86_64 as of v0.1.5. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated so that macOS can provide its own. See [requirements.md](requirements.md#platform-scope). Linux is not fully tested; see [Known limits](known-limits.md#platform-and-scope).
 
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
@@ -20,7 +20,7 @@ Companion to [requirements.md](requirements.md). This file holds the engineering
 |---|---|
 | Program | Release asset `quayflow-linux-x86_64`, installed as `~/.local/share/quayflow/bin/quayflow` and linked as `~/.local/bin/quayflow`; no `quayflow-bg` (no console window to hide) |
 | Data folder | `$XDG_DATA_HOME/quayflow`, default `~/.local/share/quayflow`, made `0700` (`qf_engine::paths::default_root`) |
-| Vault | `vault/<account-id>.login`: base64 of `{"oauth": ..., "account": ...}`, no encryption, `0600` (`qf_vault::OwnerOnly`) |
+| Vault | `vault/<account-id>.login`: base64 of `{"oauth": ..., "account": ...}`, no encryption, `0600` (`qf_vault::OwnerOnly`); backups of an unknown login are `backups/unknown-<hash>-<ts>.login` in the same form |
 | File writes | `qf_vault::atomic_write` creates the temp file with the target's mode, or `0600` for a new file |
 | Single instance | `flock` on `engine.lock` (`File::try_lock`) |
 | Process facts | `/proc/<pid>/stat` (parent, start time from `btime` + start ticks), `/proc/<pid>/comm` |
@@ -29,7 +29,7 @@ Companion to [requirements.md](requirements.md). This file holds the engineering
 | Lanes | Folder links are symbolic links (junctions on Windows); shared files are hard links |
 | Managed settings | `/etc/claude-code` (`managed-settings.json`, `managed-settings.d`) |
 | Sign-in startup | systemd user unit `~/.config/systemd/user/quayflow.service` (`Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=<program> start`) |
-| New console | First of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `xterm`, with the engine's own `DISPLAY`/`WAYLAND_DISPLAY` or else the desktop variables the latest interactive session sent in `/v1/hello` (`desktop`: `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`, kept in memory only); otherwise the caller shows the command (POSIX syntax on Linux) |
+| New console | First of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `xterm`, with the engine's own desktop variables when they name a display, or else those the latest interactive session sent in `/v1/hello` (`desktop`, kept in memory only). The variables are listed in `qf_adapter::process::DESKTOP_VARS`: `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`, `XDG_CURRENT_DESKTOP`, `XDG_SESSION_TYPE`, `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION`, `XDG_DATA_DIRS`, `XDG_CONFIG_DIRS`, `BROWSER`; otherwise the caller shows the command (POSIX syntax on Linux) |
 | Shell integration | None yet (the prompt hook is PowerShell) |
 | Mod | Finds the engine through `$XDG_DATA_HOME` or `$HOME` when `LOCALAPPDATA` is not set (`hooks/engine.ts` `layout`) |
 | Installer, update | `install.sh` (POSIX `sh`); `quayflow update` runs `sh install.sh --update ...` |
@@ -100,13 +100,13 @@ PoC data in `%USERPROFILE%\.quayflow-poc` is imported once with `quayflow migrat
 
 **Headless contract (owner requirement):** Quayflow never changes the stdout, stderr or exit code of `claude -p`. The Mod prints nothing in a headless run and never asks a question. Recovery in a job happens only in Automatic mode, and only as one switch and at most one retry of the failed request in the same process. A job learns afterwards what Quayflow did with `quayflow last --session <id>` (section 7).
 
-**Usage polling (`qf_provider::Schedule`, defaults in `qf_model::Tuning`):** live account every 60 s (`livePollS`), idle accounts every 600 s (`idlePollS`); the minimum outside simulation is 30 s live and 60 s idle. A 429 from the usage endpoint backs off by `Retry-After` or by doubling from 2 min, at most 15 min (`backoffMaxS`), and puts the account on a slower pace for 1 hour: the live account is then read every 2 min (twice `livePollS`), because the endpoint's budget is per login and shared with Claude Code. An expired idle token that could not be refreshed is tried again after 10 min; other errors after `livePollS`. A forced read (`POST /v1/poll`, a refresh from `/quay`) does not cut a backoff or the slower pace short. A single 429 is logged as `info`; 429s in a row (a backoff past its first doubling) and other errors as `warn`. After an engine restart the first read of each account waits at least 1 min after its last observation. Accounts with a rejected refresh token are not polled.
+**Usage polling (`qf_provider::Schedule`, defaults in `qf_model::Tuning`):** live account every 60 s (`livePollS`), idle accounts every 600 s (`idlePollS`); the minimum outside simulation is 30 s live and 60 s idle. A 429 from the usage endpoint waits the longer of `Retry-After` and a doubling wait (2, 4, 8 min, ...), at most 15 min (`backoffMaxS`), and puts the account on a slower pace for 1 hour: the live account is then read every 2 min (twice `livePollS`), because the endpoint's budget is per login and shared with Claude Code. An expired idle token that could not be refreshed is tried again after 10 min; other errors after `livePollS`. A forced read (`POST /v1/poll`, a refresh from `/quay`) does not cut a backoff or the slower pace short. A single 429 is logged as `info`; 429s in a row (a backoff past its first doubling) and other errors as `warn`. After an engine restart the first read of each account waits at least 1 min after its last observation. Accounts with a rejected refresh token are not polled.
 
 **Idle-account refresh (owner decision, 2026-11-07):** an idle account's access token expires after some hours, so the engine refreshes its saved copy (`Engine::refresh_idle`): `POST https://platform.claude.com/v1/oauth/token` with `grant_type=refresh_token`, Claude Code's public client id and the login's own scopes. It runs under `cred_lock` (the lock every switch holds while writing), only when no environment's login files hold the same refresh token (read from disk, any unreadable file skips the refresh), and stores the result before use; the switch reads the saved login again under that lock. `invalid_grant` or 401/403 sets the account to `refresh_rejected` (a notice asks for a new sign-in; the account is no longer polled or a candidate); a refreshed login that cannot be stored sets `vault_error`; other failures leave it unchanged and it shows no usage until a later poll succeeds. The journal records `login.refreshed` or `login.refresh_rejected` with the account id only. The live login is never refreshed by Quayflow.
 
 ## 6. API v1
 
-Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.json`. JSON bodies, camelCase, schemas in `crates/qf-model/src/api.rs`. Errors: HTTP 4xx/5xx with `{"error": "...", "code": "bad_token|invalid|not_found|conflict|refused|incompatible|internal"}`. Mutating requests may carry `requestId`; a repeat within the last 256 ids returns the first response.
+Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.json`. JSON bodies, camelCase, schemas in `crates/qf-model/src/api.rs`. Errors: HTTP 4xx/5xx with `{"error": "...", "code": "..."}`. Codes: `bad_token` (403), `invalid` (400; 413 for a body over 64 KB), `not_found` (404), `refused`, `needs_disclosure`, `needs_approval`, `in_progress` (409), `vault`, `internal` (500). A refused switch is not an error: `SwitchResponse` has `ok: false` with `message` and `blockedBy`. Mutating requests may carry `requestId`. A repeat of a successful request among the last 256 ids returns the first response without running again; a failed request releases its id, so a repeat runs; a repeat while the first is still running gets 409 `in_progress`.
 
 | Method and route | Body / query | Response |
 |---|---|---|
@@ -139,7 +139,7 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `POST /v1/failure` | `FailureShape` | `OkResponse` |
 | `POST /v1/unknown` | `{"env"?, "action": "ignore"}` | `OkResponse` |
 | `GET /v1/lanes` | | `[LaneView]` |
-| `POST /v1/lanes/create` / `delete` / `check` | `{"name"}` | `LaneView` / `OkResponse` |
+| `POST /v1/lanes/create` / `check` / `delete` | `{"name"}` | `LaneView` for create and check; `OkResponse` for delete |
 | `POST /v1/handoff/prepare` | `{"sessionId", "toEnv"}` | `HandoffResponse` (history copied, command only) |
 | `POST /v1/handoff/open` | `{"sessionId", "toEnv"}` | `HandoffResponse` (new window launched) |
 | `POST /v1/handoff/replace` | `{"sessionId", "toEnv"}` | `HandoffResponse` (claim written for the PowerShell hook; the user then exits the session) |
@@ -198,7 +198,7 @@ shell claim --pid N            used by the prompt hook: print and consume this t
 policy [--json]                managed login enforcement per environment
 report [--preview]             build a local support report for review (--preview prints it and saves nothing)
 migrate-poc [--group G] [--accept-disclosure]   import the PoC vault (~/.quayflow-poc)
-update [--check] [--version vX.Y.Z | --source DIR] [--skip-attestation]   runs the release's install.ps1 -Update (hash-checked): engine and Mod as a matched pair
+update [--check] [--version vX.Y.Z | --source DIR] [--skip-attestation]   runs the release's installer (hash-checked): engine and Mod as a matched pair
 uninstall [--delete-vault] [--delete-logs] [--delete-data] [--yes]   each deletion separate and off by default; --delete-data = vault, logs, settings and lanes
 consent <engine-start|signin-startup|credential-storage|terms|prompt-hook|live-canary> <on|off>
 version
@@ -206,7 +206,7 @@ version
 
 `quayflow last --session <id> [--json]` reads `journal.jsonl` and `config.json` directly, so it works with the engine stopped. The session id is the `session_id` of Claude's JSON output. It reports the latest `recovery.decision` for that session and the `failure.shape` before it: `outcome` is `recovered` (switched and retried once, and the retry did not fail), `all_exhausted` (switched to the account available soonest, no retry), `not_recovered` (with the reason in `why`, including a retry that failed too) or `no_limit` (nothing recorded); `limit` names the account, window, percentage and reset that was hit; `switchedTo`, `retried`, `at`; and `availableAt`, the earliest time worth running again (the soonest account's availability, or the reset of the limit that was hit; empty after a recovery). Exit code 0 when something is recorded, 3 when nothing is.
 
-`update` refuses without a signed-in GitHub CLI unless `--skip-attestation` is given, then downloads the release's `SHA256SUMS` and `install.ps1`, checks the script's hash, and runs `install.ps1 -Update`. The installer makes its full checks (hashes, attestation for the release workflow, tag and commit, the Mod's `SOURCE_COMMIT`), keeps consents and PATH, leaves a Mod installed from a local folder as it is, and refreshes an installed shell module. `--check` only compares the release's hashes with the installed programs. `--source DIR` installs a local release folder (engine only).
+`update` refuses without a signed-in GitHub CLI unless `--skip-attestation` is given, then downloads the release's `SHA256SUMS` and installer, checks the script's hash, and runs it: `install.ps1 -Update` on Windows, `sh install.sh --update` on Linux. The installer makes its full checks (hashes, attestation for the release workflow, tag and commit, the Mod's `SOURCE_COMMIT`), keeps consents and PATH, leaves a Mod installed from a local folder as it is, and refreshes an installed shell module. `--check` only compares the release's hashes with the installed programs. `--source DIR` installs a local release folder (engine only).
 
 ## 8. Early checks
 
@@ -226,5 +226,5 @@ version
 
 ## 10. Build notes
 
-- Local development on a machine without Visual Studio Build Tools: `RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-gnu` (no C compiler needed: HTTPS uses Windows SChannel through `native-tls`). Releases are built by CI with the pinned MSVC toolchain.
-- Reproducible release: pinned toolchain (`rust-toolchain.toml`), `Cargo.lock`, `--locked`, `strip`, no debug info, `-C link-arg=/Brepro`, `SOURCE_DATE_EPOCH` from the tag's commit, `--remap-path-prefix`.
+- Local development on a machine without Visual Studio Build Tools: `RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-gnu` (no C compiler needed: HTTPS uses Windows SChannel through `native-tls`). Releases are built by CI with the pinned toolchain: MSVC on GitHub's Windows runner, and Ubuntu 22.04 for Linux.
+- Reproducible release: pinned toolchain (`rust-toolchain.toml`), `Cargo.lock`, `--locked`, `strip`, no debug info, `SOURCE_DATE_EPOCH` from the tag's commit, `--remap-path-prefix`, and on Windows `-C link-arg=/Brepro`. Each platform is built twice and the release fails if the builds differ.

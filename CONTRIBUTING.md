@@ -7,7 +7,7 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 - **No bypass of restrictions.** Quayflow never works around an organization's or the client's controls. Pull requests that weaken managed-login enforcement, the credential-selector restriction, consent gates or group permissions are declined.
 - **No secrets in logs, journals, reports or tests.** Use opaque ids (12-hex identity hashes). Never paste real tokens, emails or transcripts into issues.
 - **Never test against real logins in CI.** Unit and fake-environment tests only. Real-login scripts live in `tests/e2e/` and are run by maintainers on their own machines.
-- **Mark evidence honestly.** A mock never proves client adoption. Do not mark an acceptance scenario as passed unless it ran against the product build (`docs/acceptance.md`).
+- **Mark evidence honestly.** A mock never proves client adoption. Do not mark an acceptance scenario as passed without recorded real evidence in `docs/acceptance.md`: date, script, case and build (a local build or a release).
 
 ## Repository layout
 
@@ -19,7 +19,7 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 | `crates/qf-adapter` | Everything that knows Claude's on-disk layout: locks, login swap, sessions, policy, canary, lanes, history |
 | `crates/qf-provider` | Usage and profile endpoints, idle-account token refresh, poll schedule and backoff |
 | `crates/qf-engine` | The daemon: state, transitions, adoption, recovery, journal, HTTP API |
-| `crates/quayflow` | The `quayflow.exe` CLI (including `quayflow last`) and the `quayflow-bg.exe` launcher |
+| `crates/quayflow` | The `quayflow` CLI (`quayflow.exe` on Windows; including `quayflow last`) and the Windows `quayflow-bg.exe` launcher |
 | `mod/quayflow` | The Claude Code Mod (TypeScript) |
 | `shell/` | Opt-in PowerShell prompt hook and its self-test |
 | `installer/` | `install.ps1`, `install.sh` and their sandbox tests |
@@ -32,27 +32,48 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 
 Quayflow targets all platforms Claude Code runs on; it ships for Windows x64 and Linux x86_64, macOS is next. Keep platform-specific code (vault, paths and locks, shell integration, installer) behind its module boundary so the policy, engine and Mod stay shared. See [Platform scope](docs/requirements.md#platform-scope).
 
-- Windows 10/11 or Linux (Ubuntu 22.04 or later), Rust 1.98 (pinned in `rust-toolchain.toml`), Node 20+ for the Mod (CI uses Node 24), Claude Code 2.1.316 or later, PowerShell 7 and Windows PowerShell 5.1 for the shell and installer tests.
-- With Visual Studio Build Tools: `cargo build`. Without them, use the GNU toolchain locally: `$env:RUSTUP_TOOLCHAIN = "1.98.0-x86_64-pc-windows-gnu"` (releases are always built with MSVC in CI).
+Both platforms need Rust 1.98 (pinned in `rust-toolchain.toml`), Node 20 or later for the Mod (CI uses Node 24), Claude Code 2.1.316 or later (for `claude plugin test`; no sign-in needed) and Python 3.
+
+- **Windows 10/11:** PowerShell 7 and Windows PowerShell 5.1 (shell and installer tests). With Visual Studio Build Tools, `cargo build` works as is. Without them, use the GNU toolchain locally: `$env:RUSTUP_TOOLCHAIN = "1.98.0-x86_64-pc-windows-gnu"` (releases are always built with MSVC in CI).
+- **Linux (Ubuntu 22.04 or later):** a C toolchain and OpenSSL headers (`build-essential`, `pkg-config`, `libssl-dev`), and ShellCheck. PowerShell 7 only if you run the real-login scripts.
+
+On Windows:
 
 ```powershell
-cargo fmt --all
+cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-pwsh -File tests/e2e/smoke-fake-env.ps1        # real quayflow.exe against a fake environment
-pwsh -File tests/e2e/cli-fake-env.ps1          # CLI behavior and error paths, fake environment
-pwsh -File tests/e2e/sim-usage.ps1            # scripted usage from a fake usage API (needs Python 3)
-pwsh -File shell/test-Quayflow.ps1            # prompt hook, PowerShell 7 and 5.1
-# On Linux:
-sh installer/test-install.sh                   # install.sh in a sandbox
-sh tests/e2e/smoke-linux.sh                    # real program, fake environment: install, engine, update, uninstall
-pwsh -File installer/test-install.ps1         # installer in a sandbox, PowerShell 7 and 5.1
+cargo build --locked -p quayflow                # the e2e scripts use target\debug\quayflow.exe
+pwsh -File tests/e2e/smoke-fake-env.ps1         # real quayflow.exe against a fake environment
+pwsh -File tests/e2e/cli-fake-env.ps1           # CLI behavior and error paths, fake environment
+pwsh -File tests/e2e/sim-usage.ps1              # scripted usage from a fake usage API
+pwsh -File shell/test-Quayflow.ps1              # prompt hook, PowerShell 7 and 5.1
+pwsh -File installer/test-install.ps1           # install.ps1 in a sandbox, PowerShell 7 and 5.1
+```
+
+On Linux:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo build --locked -p quayflow
+sh installer/test-install.sh                    # install.sh in a sandbox
+sh tests/e2e/smoke-linux.sh target/debug/quayflow   # real program, fake environment: install, engine, update, uninstall
+shellcheck -S warning installer/*.sh tests/e2e/*.sh
+```
+
+On both, the Mod:
+
+```sh
 claude plugin validate --strict .
 claude plugin validate --strict mod/quayflow
 claude plugin test mod/quayflow
 ```
 
-The fake-environment scripts take `-Exe <path>` to test a particular build (CI passes `target\debug\quayflow.exe`). The `tests/e2e/real-*.ps1` scripts switch your real Claude login; never run them in CI.
+**Type check (optional).** It needs Claude Code's own declaration file, which belongs to Claude Code and is not in this repository. Copy it to `mod/host-types/claude-code-2.1.316.d.ts` (where to find it: [Mod README](mod/quayflow/README.md#check-type-check-and-test)), then run `npx -y -p typescript@5.6.3 tsc -p mod/tsconfig.ci.json`. The folder is gitignored; never commit the file. CI skips the type check with a warning when the file is absent.
+
+The fake-environment scripts take `-Exe <path>` to test a particular build. The `tests/e2e/real-*.ps1` scripts switch your real Claude login; never run them in CI.
 
 ## Pull requests
 

@@ -85,10 +85,11 @@ Validated with the test kit (`tests/pane.test.tsx`, `tests/review.test.tsx`): th
 
 ## Check, type-check and test
 
-All three run without a Claude login and without an engine.
+All of these run without a Claude login and without an engine.
 
 ```text
-claude plugin validate mod/quayflow
+claude plugin validate --strict .
+claude plugin validate --strict mod/quayflow
 claude plugin test mod/quayflow
 ```
 
@@ -98,10 +99,10 @@ Type check (no package.json needed):
 npx -y -p typescript@5.6.3 tsc -p mod/tsconfig.ci.json
 ```
 
-The type check needs Claude Code's own API declaration file for 2.1.316, which is Claude Code's, not part of this repository; `mod/tsconfig.ci.json` names where it expects it. CI skips the type check with a warning when it is absent. Claude Code writes the file in two places you can copy it from:
+The type check needs Claude Code's own API declaration file for 2.1.316, which is Claude Code's, not part of this repository. Copy it to `mod/host-types/claude-code-2.1.316.d.ts` (gitignored; never commit it). CI skips the type check with a warning when it is absent. Claude Code writes the file in two places you can copy it from:
 
 - a loaded Mod's `.claude-plugin/types/claude-code/index.d.ts` (Claude Code lays it beside a Mod it loads from a hot-reloaded folder, for example `claude --plugin-dir mod/quayflow` in an interactive session; gitignored), or
-- the plugin-authoring skill's folder, `%TEMP%\claude\bundled-skills\<claude-version>\<id>\plugin-authoring\types\claude-code.d.ts`, written when that skill loads.
+- the plugin-authoring skill's folder, `%TEMP%\claude\bundled-skills\<claude-version>\<id>\plugin-authoring\types\claude-code.d.ts` (on Linux under `$TMPDIR` or `/tmp`), written when that skill loads.
 
 Once `.claude-plugin/types/` exists, `tsc -p mod/quayflow` also works with the `tsconfig.json` in this folder. After a Claude Code update, refresh the copy from the new build.
 
@@ -113,7 +114,7 @@ Once `.claude-plugin/types/` exists, `tsc -p mod/quayflow` also works with the `
 
 ## Testing a usage limit by hand
 
-Start Claude with `QUAYFLOW_SIM_LIMIT=1` in its environment (without it the hook is off), then write `%LOCALAPPDATA%\Quayflow\simulate-limit.json` as `{"atStep": 0}`. The next main-agent request with index >= `atStep` is answered as failed without being sent, once: the session that fires takes the file by renaming it, so only one session fires even when several run. The failure is reported with `simulated: true` and the engine decides as for a real one.
+Start Claude with `QUAYFLOW_SIM_LIMIT=1` in its environment (without it the hook is off), then write `%LOCALAPPDATA%\Quayflow\simulate-limit.json` (Linux: `~/.local/share/quayflow/simulate-limit.json`) as `{"atStep": 0}`. The next main-agent request with index >= `atStep` is answered as failed without being sent, once: the session that fires takes the file by renaming it, so only one session fires even when several run. The failure is reported with `simulated: true` and the engine decides as for a real one.
 
 ## Privacy
 
@@ -121,4 +122,4 @@ The Mod sends the engine opaque ids (session, turn, agent, identity hashes), lab
 
 ## Install
 
-The Quayflow installer (`installer/install.ps1`) adds this repository's marketplace pinned to the release tag and installs the plugin at user scope; `quayflow update` runs the release's installer in update mode, which updates the engine and the Mod as a matched pair (a Mod installed from a local folder is left as it is). Running Claude sessions load a new Mod after a restart.
+The Quayflow installer (`installer/install.ps1`; `installer/install.sh` on Linux) adds this repository's marketplace pinned to the release tag and installs the plugin at user scope; `quayflow update` runs the release's installer in update mode, which updates the engine and the Mod as a matched pair (a Mod installed from a local folder is left as it is). Running Claude sessions load a new Mod after a restart.

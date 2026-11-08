@@ -51,6 +51,8 @@ claude plugin validate mod/quayflow
 claude plugin test mod/quayflow           # tests in mod/quayflow/tests, harness in harness.ts
 ```
 
+The first type check needs `mod/quayflow/.claude-plugin/types/`, which Claude Code writes beside a Mod it loads (gitignored). Without it, put Claude Code's declaration file at `mod/host-types/claude-code-2.1.316.d.ts` (never committed) and run `npx -y -p typescript@5.6.3 tsc -p mod/tsconfig.ci.json`, as CI does.
+
 Fake-environment end-to-end (safe anywhere, run in CI): `pwsh -File tests/e2e/smoke-fake-env.ps1`, `cli-fake-env.ps1`, `sim-usage.ps1` (fake usage API `tests/sim/fake_api.py`, `QUAYFLOW_SIM_API`). Also `shell/test-Quayflow.ps1` and `installer/test-install.ps1`.
 
 Linux (CI job `linux`, or a Linux machine): `cargo clippy`/`cargo test` as above, `sh installer/test-install.sh`, `sh tests/e2e/smoke-linux.sh target/debug/quayflow`, `shellcheck -S warning installer/*.sh tests/e2e/*.sh`, `claude plugin test mod/quayflow`. Platform code is behind `cfg(windows)` / `cfg(not(windows))`: Linux paths and facts are in `qf-adapter` (`process.rs`, `env.rs`, `lock.rs`, `lanes.rs`, `policy.rs`), `qf-engine/src/paths.rs`, `qf-vault` and `quayflow/src/local.rs`; the Mod picks the layout in `hooks/engine.ts` (`layout`).

@@ -1,15 +1,17 @@
 # Quayflow user guide
 
-Quayflow v0.1.5. This guide covers installing, setting up accounts and groups, how switching behaves, and how to remove Quayflow. Quayflow runs on Windows x64 and Linux x86_64 (macOS is next). Paths below are the Windows ones; [Linux](#linux) lists what differs there.
+Quayflow v0.1.5. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64 and Linux x86_64 (macOS is next). Paths below are the Windows ones; [Linux](#linux) lists what differs there.
+
+Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. See [acceptance results](acceptance.md).
 
 > **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is not affiliated with or endorsed by Anthropic.
 
-Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Headless jobs](#headless-jobs-claude--p) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Engine control](#engine-control) · [Update](#update) · [Uninstall](#uninstall) · [Several machines](#using-an-account-on-several-machines) · [Troubleshooting](#troubleshooting) · [Testing](#testing-your-setup) · [Linux](#linux) · [Files](#files-and-folders)
+Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [Status line](#the-status-line) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Several machines](#using-an-account-on-several-machines) · [Headless jobs](#headless-jobs-claude--p) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Managed login](#organization-managed-login) · [Engine control](#engine-control) · [Troubleshooting](#troubleshooting) · [Testing](#testing-your-setup) · [Update](#update) · [Uninstall](#uninstall) · [Linux](#linux) · [Files](#files-and-folders)
 
 ## Requirements
 
 - Windows 10 or 11, x64; or Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later).
-- Claude Code installed and working (`claude --version`). Quayflow v0.1.5 was validated against Claude Code 2.1.316; other versions are checked automatically (see [Version checks](#version-checks)).
+- Claude Code installed and working (`claude --version`). Quayflow v0.1.5 was validated against Claude Code 2.1.316 on Windows and 2.1.319 on Linux; other versions are checked automatically (see [Version checks](#version-checks)).
 - Windows: Windows PowerShell 5.1 or PowerShell 7 for the installer. Linux: `sh`, `curl`, `sha256sum`, and `python3` for the Mod step. No administrator rights.
 - Claude subscription logins (claude.ai sign-in). Quayflow never switches a subscription session to API-key billing.
 
@@ -26,8 +28,8 @@ The installer:
 1. Shows what Quayflow does and asks for your consent.
 2. Downloads `quayflow.exe` and `quayflow-bg.exe` and refuses to continue if their SHA-256 hashes do not match the release's `SHA256SUMS`. It also verifies the GitHub build-provenance attestation with the GitHub CLI (`gh`, installed and signed in), accepting only an attestation made by this repository's release workflow for that tag and commit, and refuses on failure. Without a signed-in `gh` it refuses before downloading, unless you pass `-SkipAttestation`.
 3. Installs them to `%LOCALAPPDATA%\Quayflow\bin` and adds that folder to your user PATH (skip with `-NoPath`).
-4. Adds the `quayflow` plugin marketplace pinned to the same release tag and installs the Mod (`quayflow@quayflow`, user scope). The release records the commit it was built from (`SOURCE_COMMIT`); the installer refuses the Mod if the tag's checkout is at a different commit (for example, a moved tag). If the new Mod cannot be added or is refused, the previous one is put back. If the old proof-of-concept plugin `quayflow@quayflow-local` is present, it is removed.
-5. Records your consent for on-demand engine start. With `-Startup`, it also records consent for starting the engine at Windows sign-in. These are recorded even when the Mod step failed; the installer then ends with an error that says what to fix.
+4. Adds the `quayflow` plugin marketplace pinned to the same release tag and installs the Mod (`quayflow@quayflow`, user scope). The release records the commit it was built from (`SOURCE_COMMIT`); the installer refuses the Mod if the tag's checkout is at a different commit (for example, a moved tag). If the new Mod cannot be added or is refused, the previous one is put back.
+5. Records your consent for on-demand engine start. With `-Startup`, it also records consent for starting the engine when you sign in. These are recorded even when the Mod step failed; the installer then ends with an error that says what to fix.
 
 It does not read, copy or change any Claude login. Running Claude sessions load the Mod after you restart them.
 
@@ -63,15 +65,15 @@ Start Claude as usual (`claude`) and run `/quay`. The first time, Quayflow asks 
 | Consent | What it allows | Can be changed with |
 |---|---|---|
 | Engine start | The Mod starts `quayflow.exe` in the background when a session finds it not running. Given at install | `quayflow consent engine-start on\|off` |
-| Sign-in startup | The engine also starts when you sign in to Windows | `quayflow consent signin-startup on\|off` |
-| Credential storage | Quayflow keeps a reusable copy of each login you register, in its DPAPI vault | `quayflow consent credential-storage on\|off` |
+| Sign-in startup | The engine also starts when you sign in (a Windows startup entry, or a systemd user unit on Linux) | `quayflow consent signin-startup on\|off` |
+| Credential storage | Quayflow keeps a reusable copy of each login you register, in its vault (DPAPI on Windows, owner-only files on Linux) | `quayflow consent credential-storage on\|off` |
 | Terms | You confirm you are responsible for your provider's terms and your organization's rules | `quayflow consent terms on\|off` |
 
 Onboarding happens only in interactive sessions. A headless job (`claude -p`) never shows a prompt. Every group starts in **Suggest** mode.
 
 Quayflow creates one group, **Default**, which is empty at first.
 
-After the consents, `/quay` shows a readiness table: engine and Mod protocol, the protected vault, the running Claude version, the static version check, whether the current login is known, and *Live adoption: on next actual switch*. None of these checks switches an account. Quayflow is not affiliated with or endorsed by Anthropic.
+After the consents, `/quay` shows a readiness table: engine and Mod protocol, the protected vault, the running Claude version, the static version check, whether the current login is known, and *Live adoption: on next actual switch*. None of these checks switches an account.
 
 ### The /quay pane
 
@@ -91,7 +93,7 @@ The **Overview** shows, top to bottom:
 - the **home account's** state when you are away from it (see below);
 - the number of sessions on this environment, and **Sessions**, **Actions**, **Limits** and **Home**.
 
-Every figure is written out beside its graphic. Usage is shown only while the reading is current: otherwise the account says *reading…*, *not read yet*, *not current* or why it cannot be read, never 0%. The true-color graphics are drawn in the terminal; other surfaces show text gauges.
+Every figure is written out beside its graphic. Usage is shown only while the reading is current: otherwise the account says *reading…*, *not read yet*, *usage unknown*, or *unreadable:* and the reason, never 0%. The true-color graphics are drawn in the terminal; other surfaces show text gauges.
 
 **Why an account is not a switch target.** Account rows (Overview and Accounts) give the reason in a word or two: *no room to gain* (it would not leave enough margin below the threshold), *usage unknown* (no current reading), *at its limit*, *not in this group*, *group conflict* (a running session's group does not allow it), *blocked by your organization* (managed login), or *plan lacks this model*. The live account, and an account whose badge already says what is wrong (SIGN IN, VAULT), get no reason. The full reason is in the account's detail and in **Why?**.
 
@@ -121,7 +123,7 @@ Every figure is written out beside its graphic. Usage is shown only while the re
 When Quayflow switches accounts, the following requests of your conversation go to the new account. A **group** is your approval for that. Putting accounts in one group approves processing the work of any project that uses that group under any of those accounts. Switching within a group then needs no further confirmation.
 
 - **Default group.** A project without an explicit assignment uses the designated default group. The default is a fallback, not a union of all your accounts. Adding an account to Default makes it eligible for every unassigned project, including projects you open in the future.
-- **Project assignment.** `quayflow project assign C:\src\client-x ClientX` makes that folder use group `ClientX` instead of the default. An explicit assignment replaces the default; it does not merge with it. Content inside a repository can never grant itself accounts.
+- **Project assignment.** `quayflow project assign C:\src\client-x ClientX` makes that folder use group `ClientX` instead of the default. An explicit assignment replaces the default; it does not merge with it. `quayflow project list` shows the assignments and `quayflow project unassign <path>` removes one. Content inside a repository can never grant itself accounts.
 - **Mixed identities.** If a change would put an organization account and a personal account in one group, or accounts of different organizations, Quayflow shows a one-time disclosure first: work in projects using this group may be sent to any of these accounts. Your acceptance is recorded with the group. Removing an account from a group withdraws the approval for future switches. Whether your organization allows its work to be processed by other accounts is your responsibility.
 - **Home and ranks.** One account per group can be **Preferred**: it is the group's home (see [Return home](#return-home)). Accounts can also be ranked Preferred, Normal or Backup. Ranks only break close choices.
 - **Commands:** `quayflow group list | create <G> | delete <G> | add <G> <account..> | remove <G> <account..> | preferred <G> <account|none> | rank <G> <account> <rank> | default <G> | tuning <G> --threshold N --margin N`.
@@ -142,11 +144,11 @@ Each group has a mode. When several groups govern an environment, the most restr
 
 Turning on Automatic needs explicit approval: `quayflow mode automatic --group Default --approve` (or the Groups tab in `/quay`).
 
-Defaults, adjustable per group: proactive threshold 85% of the account's binding usage window; a candidate must be at least 10 points below the threshold; 5 minutes between proactive switches. The binding window is the fullest of the five-hour, seven-day and per-model weekly windows. Quayflow uses only fresh usage readings: at most 5 minutes old for the live account and 60 minutes for idle ones. A missing or stale reading is never treated as zero and never triggers an automatic switch.
+Defaults per group (Groups tab, or `quayflow group tuning`): proactive threshold 85% of the account's binding usage window; a candidate must be at least 10 points below the threshold. For every group (`/quay` > Settings > Tuning): 5 minutes between proactive switches. The binding window is the fullest of the five-hour, seven-day and per-model weekly windows. Quayflow uses only fresh usage readings: at most 5 minutes old for the live account and 60 minutes for idle ones. A missing or stale reading is never treated as zero and never triggers an automatic switch.
 
 **Idle accounts and expired tokens.** Claude refreshes the live account's login; Quayflow never refreshes the live login. When an idle account's access token expires, Quayflow refreshes that account's saved copy (with Claude's own token service and the login's own scopes) and reads its usage with the new token, so the account stays a candidate for suggestions, automatic switching and recovery. The refresh runs under the same credential lock every switch holds, and only when no environment's login uses the same refresh token; the new login is stored before it is used. If the sign-in service refuses an idle account's saved login, the account is marked for a new sign-in (**Sign in again** in its detail, or `quayflow reauth <account>`).
 
-**Stale readings are never shown as current.** A usage figure is shown only while it is fresh. Otherwise `quayflow status` prints `usage unknown (last read 25 min ago)`, and `/quay` says the usage is being read, not current, or why it cannot be read.
+**Stale readings are never shown as current.** A usage figure is shown only while it is fresh. Otherwise `quayflow status` prints `usage unknown (last read 25 min ago)`, and `/quay` says *reading…* or *usage unknown*, or why the account cannot be read.
 
 **How often usage is read.** The live account is read every 60 seconds and idle accounts every 10 minutes. The usage endpoint's budget is per login and shared with Claude Code, so after it refuses a read (HTTP 429), the live account is read every 2 minutes for the next hour, with a longer backoff when refusals repeat. A refresh from `/quay` (`/quay poll`, or the pane asking for a fresh read) reads at once, except during that slower pace or a backoff: then it waits for the next scheduled read instead of forcing one.
 
@@ -211,6 +213,10 @@ When a request ends with no response, the Mod asks the engine whether the accoun
 
 Limits: one switch and at most one retry per failed request. Cancellation is never recovered. Quayflow never replays completed actions (edits, commits, messages, deployments) and never starts a second process for a job that has ended.
 
+## Using an account on several machines
+
+The same account used on several machines shares one allowance and one usage-reading rate limit. Each machine's Quayflow reads usage on its own schedule: about once a minute for the live account and every ten minutes for idle ones, slowing down and backing off when the usage endpoint refuses a read (see [Modes](#modes)). An idle account's reading from this machine does not include what another machine has used since, so it is never treated as guaranteed capacity. Its age is shown, and a usage-limit failure on the new account is handled as normal recovery.
+
 ## Headless jobs (`claude -p`)
 
 Quayflow works with unattended `claude -p` jobs (scheduled tasks, scripts, agent pipelines) on your own machine, with no change to how you run them.
@@ -255,7 +261,7 @@ quayflow last --session <session_id> --json
 A **lane** is an optional separate credential environment, for sessions that need a different account from the rest. The most common reason is the remedy for a group conflict.
 
 - A lane has its own login, its own `.claude.json`, its own session folder and its own organization policy files.
-- It links your shared Claude setup from `~/.claude`: `settings.json`, `CLAUDE.md`, `plugins\`, `skills\`, `agents\`, `commands\` and the memory folders. Folders use junctions and files use hard links, so no administrator rights are needed. Inside a lane, Claude behaves like your normal Claude, including the Quayflow Mod, except for the account. `quayflow lanes check <name>` repairs a broken file link.
+- It links your shared Claude setup from `~/.claude`: `settings.json`, `CLAUDE.md`, `plugins\`, `skills\`, `agents\`, `commands\` and the memory folders. Folders use junctions on Windows and symbolic links on Linux; files use hard links. No administrator rights are needed. Inside a lane, Claude behaves like your normal Claude, including the Quayflow Mod, except for the account. `quayflow lanes check <name>` repairs a broken file link.
 - A switch inside a lane moves only that lane's sessions. A lane does not give an account extra allowance and is not a security sandbox.
 - In-place switching inside a lane is enabled only after the lane passes the version check.
 - Commands: `quayflow lanes list | create <name> | delete <name> | check <name>`.
@@ -269,7 +275,7 @@ Moving a session into or between lanes, and the fallback where in-place switchin
 - **Open New Session** opens a new console window that resumes the session in the destination environment. Where a window cannot be opened, Quayflow shows the exact command to run.
 - **Replace Current Session** ends the current session and resumes it in the same terminal under the destination. This needs the PowerShell integration below. In other shells (cmd, Git Bash, editor terminals without it), Quayflow offers Open New Session instead.
 
-In `/quay` choose **Session actions**: Open New Session is preselected. Each action has a review that names the destination (environment and login), the context (full retained history) and the window, and asks you to confirm that only the destination continues the task. Replace names the shell first: in a shell other than PowerShell 7 or Windows PowerShell 5.1 it says same-terminal replacement is unavailable before anything is prepared, and offers a new window or the engine's prepared command. Without the prompt hook, a separate box installs it (it loads in PowerShell windows opened afterwards). A group conflict offers **Review move to lane**, which names the restricted session and the destination lane; the move is made from that session.
+In `/quay` choose **Actions** on the Overview (or **Session actions** under Lanes in the Groups tab): Open New Session is preselected. Each action has a review that names the destination (environment and login), the context (full retained history) and the window, and asks you to confirm that only the destination continues the task. Replace names the shell first: in a shell other than PowerShell 7 or Windows PowerShell 5.1 it says same-terminal replacement is unavailable before anything is prepared, and offers a new window or the engine's prepared command. Without the prompt hook, a separate box installs it (it loads in PowerShell windows opened afterwards). A group conflict offers **Move to lane**, which names the restricted session and the destination lane; the move is made from that session.
 
 Replace prepares the destination before the source exits. If the transfer fails, the original session is left as it was and the failure is reported. Quayflow never silently starts a fresh session or substitutes a summary. Only one copy of a task ever runs.
 
@@ -304,7 +310,7 @@ For one shell only: `Disable-QuayflowPromptHook`, and `Enable-QuayflowPromptHook
 
 ## Unknown logins and other switchers
 
-If the live login of an environment is not one you registered, Quayflow pauses automatic switching and recovery for that environment and tells you. This happens, for example, after running `/login` yourself or signing out. You can register the login (`/quay register`) or ignore it. Ignoring acknowledges the notice, and automation stays paused while that login is live. A manual switch is still possible, but Quayflow first stores a protected backup of the unknown login so it is never lost.
+If the live login of an environment is not one you registered, Quayflow pauses automatic switching and recovery for that environment and tells you. This happens, for example, after running `/login` yourself or signing out. You can register the login (`/quay register`) or ignore it (`quayflow unknown ignore`). Ignoring acknowledges the notice, and automation stays paused while that login is live. A manual switch is still possible, but Quayflow first stores a protected backup of the unknown login so it is never lost.
 
 If the login keeps changing without Quayflow, another account-switching tool is probably working on the same environment. Quayflow warns you and pauses automation. Do not run two switchers on one environment.
 
@@ -322,32 +328,6 @@ If your organization enforces its login (`forceLoginOrgUUID` or `forceLoginMetho
 ### Version checks
 
 When the engine sees a new Claude version, it checks automatically that the parts it relies on are still present. If the check fails, in-place switching is disabled for that version, and Quayflow uses Open/Replace instead with a warning. The first real switch on a new version is verified per session as described above. `quayflow canary --live` runs an optional synthetic check, with your consent; `/quay` > Settings > **Version** shows what it does, its consent and its status before you run it. When several Claude versions run at once, the oldest one decides.
-
-## Update
-
-```powershell
-quayflow update --check   # is a newer release available?
-quayflow update           # install it with the release's own installer and all its checks
-```
-
-`quayflow update` downloads the release's `install.ps1`, checks it against the release's `SHA256SUMS`, and runs it in update mode. The installer then makes every check of a first install: the SHA-256 hashes, the build-provenance attestation of the release workflow for that tag and commit, and the Mod's source commit. The attestation check needs the GitHub CLI, signed in; without it the update is refused, unless you add `--skip-attestation` to accept the hashes alone (needed for releases before v0.1.5).
-
-An update never runs in the middle of a switch. It stops the engine, replaces the programs, refreshes the PowerShell prompt hook module if you installed it, moves the Mod to the same release, and restarts the engine if it was running. Your consents, PATH and startup setting are kept. A Mod installed from a local folder (a development checkout) is left as it is, with a note. `quayflow update --source <folder>` installs a local release folder (`SHA256SUMS`, `install.ps1` and the programs) and leaves the Mod as it is. Re-running the installer also upgrades. Restart Claude sessions to load the new Mod.
-
-## Uninstall
-
-```powershell
-quayflow uninstall                  # keeps vault, configuration and logs
-quayflow uninstall --delete-vault   # also deletes the protected vault copies
-quayflow uninstall --delete-logs    # also deletes routine logs and saved reports
-quayflow uninstall --delete-data    # deletes the vault, logs, settings and lanes
-```
-
-Each deletion is a separate choice and off by default (`/quay` > Settings > **Uninstall** shows them and the matching command). An unresolved recovery record in the journal is kept and reported. Or use `install.ps1 -Uninstall [-DeleteData]`. Uninstall removes the Mod, the sign-in startup entry, the PowerShell profile block and the engine. The installer also removes the PATH entry. **The login that is live at that moment stays live**, so your current account keeps working in Claude. Conversation history is never deleted.
-
-## Using an account on several machines
-
-The same account used on several machines shares one allowance and one usage-reading rate limit. Each machine's Quayflow reads usage on its own schedule: about once a minute for the live account and every ten minutes for idle ones, slowing down and backing off when the usage endpoint refuses a read (see [Modes](#modes)). An idle account's reading from this machine does not include what another machine has used since, so it is never treated as guaranteed capacity. Its age is shown, and a usage-limit failure on the new account is handled as normal recovery.
 
 ## Troubleshooting
 
@@ -370,58 +350,37 @@ The same account used on several machines shares one allowance and one usage-rea
 | Replace did nothing in this terminal | The PowerShell hook is not loaded: `quayflow shell install`, open a new terminal, check the execution policy (5.1). Other shells use Open New Session |
 | Replace said history is not ready | Run the command it printed once Claude has fully exited |
 
-Logs are in `%LOCALAPPDATA%\Quayflow\logs` (sanitized, 7 days).
+Logs are in `%LOCALAPPDATA%\Quayflow\logs` (Linux: `~/.local/share/quayflow/logs`), sanitized and kept 7 days.
 
 ## Testing your setup
 
-The repository's `tests/e2e/` folder holds scripts that exercise the product build; [tests/e2e/README.md](../tests/e2e/README.md) lists them all. Read each one before you run it.
+The repository's `tests/e2e/` folder holds scripts that exercise the product build; [tests/e2e/README.md](../tests/e2e/README.md) lists them all and what each needs. Read each one before you run it.
 
-**Fake environment (safe anywhere).** `smoke-fake-env.ps1`, `cli-fake-env.ps1` and `sim-usage.ps1` run the real `quayflow.exe` against a temporary fake Claude environment, so they never touch `~/.claude` or a real login. CI runs all three on every change.
+- **Fake environment (safe anywhere).** `smoke-fake-env.ps1`, `cli-fake-env.ps1`, `sim-usage.ps1` and, on Linux, `smoke-linux.sh` run the real program against a temporary fake Claude environment. They never touch `~/.claude` or a real login. CI runs them on every change.
+- **Real logins (owner-run).** `real-switching.ps1`, `real-lanes.ps1` and `real-headless.ps1` **switch your live Claude login** and put it back. Run them only on your own machine, never in CI. Recorded results are in [acceptance.md](acceptance.md).
 
-```powershell
-pwsh -File tests/e2e/smoke-fake-env.ps1 -Exe "$env:LOCALAPPDATA\Quayflow\bin\quayflow.exe"
-```
-
-The smoke test covers single instance, the handshake, consent-gated registration, the mixed-identity disclosure, a manual switch with pin, a held lock leaving the login unchanged, an unknown login pausing automation, a support report without secrets, and an intentional stop. `cli-fake-env.ps1` checks the CLI's argument validation and error paths. `sim-usage.ps1` scripts usage over time against a fake usage API (it needs Python): suggestions, Automatic, return home, stale readings, backoff, recovery, all accounts exhausted, and the refresh of an idle account's token.
-
-**Real logins (owner-run).** These **switch your live Claude login** and put it back. They use synthetic prompts on model haiku. Run them only on your own machine, never in CI.
-
-`tests/e2e/real-switching.ps1` switches between two registered accounts. Prerequisites:
-
-- the engine running, and two accounts registered in one group (`quayflow status`);
-- the Mod installed;
-- `quayflow consent live-canary on`.
+## Update
 
 ```powershell
-pwsh -File tests/e2e/real-switching.ps1                  # all cases
-pwsh -File tests/e2e/real-switching.ps1 -Case H,R1       # selected cases
+quayflow update --check   # is a newer release available?
+quayflow update           # install it with the release's own installer and all its checks
+quayflow update --version v0.1.5   # a specific release instead of the latest
 ```
 
-| Case | What it checks |
-|---|---|
-| H | Switch in the middle of a headless job with sequential tools: same process, no replay, one output |
-| S | Switch while two parallel subagents run: each follows at its next request |
-| R1 | Simulated usage limit in Automatic mode: one switch, one retry, one JSON result |
-| R2 | Simulated usage limit in Suggest mode: no switch in a headless job |
+`quayflow update` downloads the release's installer (`install.ps1`, or `install.sh` on Linux), checks it against the release's `SHA256SUMS`, and runs it in update mode. The installer then makes every check of a first install: the SHA-256 hashes, the build-provenance attestation of the release workflow for that tag and commit, and the Mod's source commit. The attestation check needs the GitHub CLI, signed in; without it the update is refused, unless you add `--skip-attestation` to accept the hashes alone (needed for releases before v0.1.5).
 
-`tests/e2e/real-headless.ps1` runs `claude -p` against a **real** usage limit. It needs, in one group, an account that is at its limit now and at least one other account with room:
+An update never runs in the middle of a switch. It stops the engine, replaces the programs, refreshes the PowerShell prompt hook module if you installed it, moves the Mod to the same release, and restarts the engine if it was running. Your consents, PATH and startup setting are kept. A Mod installed from a local folder (a development checkout) is left as it is, with a note. `quayflow update --source <folder>` installs a local release folder (`SHA256SUMS`, `install.ps1` and the programs) and leaves the Mod as it is. Re-running the installer also upgrades. Restart Claude sessions to load the new Mod.
+
+## Uninstall
 
 ```powershell
-pwsh -File tests/e2e/real-headless.ps1 -Exhausted <label>             # all cases
-pwsh -File tests/e2e/real-headless.ps1 -Exhausted <label> -Case X1,X5 # selected cases
+quayflow uninstall                  # keeps vault, configuration and logs
+quayflow uninstall --delete-vault   # also deletes the protected vault copies
+quayflow uninstall --delete-logs    # also deletes routine logs and saved reports
+quayflow uninstall --delete-data    # deletes the vault, logs, settings and lanes
 ```
 
-| Case | What it checks |
-|---|---|
-| X1 | Automatic: one switch, one retry, one clean JSON result, exit code 0; `quayflow last` says `recovered` |
-| X2 | Automatic, three parallel runs: one shared switch, every run answers |
-| X3 | Suggest: no switch, no question, no hang; Claude's own result stands; `quayflow last` says `not_recovered` with a time to run again |
-| X4 | Engine stopped: `claude -p` behaves as without Quayflow, and the stopped engine is not restarted |
-| X5 | A run fails at the limit, `quayflow last` names a time to run again, and a fresh `claude -p` succeeds on another account |
-
-In every case stdout must be exactly Claude's JSON, with no Quayflow line. The script puts back your live account and the group's mode at the end. `tests/e2e/real-lanes.ps1` checks lanes with a real second account.
-
-Results are saved under `%LOCALAPPDATA%\Quayflow\e2e`. If a case fails, check that your live account afterwards is the one you expect (`quayflow status`), then attach the sanitized output and a `quayflow report` to a bug report. Recorded results against the product build are in [acceptance.md](acceptance.md).
+Each deletion is a separate choice and off by default (`/quay` > Settings > **Uninstall** shows them and the matching command). An unresolved recovery record in the journal is kept and reported. Or use `install.ps1 -Uninstall [-DeleteData]` (Linux: `install.sh --uninstall [--delete-data]`). Uninstall removes the Mod, the sign-in startup entry, the PowerShell profile block and the engine. The installer also removes the PATH entry. **The login that is live at that moment stays live**, so your current account keeps working in Claude. Conversation history is never deleted.
 
 ## Linux
 
@@ -434,6 +393,7 @@ Quayflow works the same way on Linux, with these differences:
 | Saved logins | Encrypted with DPAPI for your user | Owner-only files (`vault/<id>.login`, `0600`), not encrypted: the same protection Claude Code gives its own `~/.claude/.credentials.json` on Linux |
 | Engine start at sign-in | A per-user Run entry | A systemd user unit, `~/.config/systemd/user/quayflow.service` (`loginctl enable-linger` to start it at boot) |
 | Sign-in window, Open New Session | A new console window | A new window of your desktop's terminal (`x-terminal-emulator`, GNOME Terminal, Konsole, xterm), on the desktop of the Claude session that asked, even when the engine started over SSH; without a desktop, the exact command to run in another terminal |
+| Lane links | Junctions for folders, hard links for files | Symbolic links for folders, hard links for files |
 | Replace Current Session | PowerShell prompt hook | Not yet: use Open New Session, or run the prepared command after `/exit` |
 | Update | `quayflow update` runs `install.ps1 -Update` | `quayflow update` runs `install.sh --update` |
 

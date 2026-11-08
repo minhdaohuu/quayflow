@@ -22,7 +22,7 @@ Quayflow relies on Claude Code behavior that was observed on Claude Code 2.1.316
 - the token service and Claude Code's public client, used to refresh an idle account's saved login;
 - the session registry (`<env>\sessions\<pid>.json`).
 
-Any Claude update can change these. Quayflow checks each new Claude version automatically. It disables in-place switching for a version that fails the check, or whose first real switch is not adopted, and falls back to Open/Replace with a warning (FR-24). If the usage endpoint changes or refuses, readings become stale. Stale readings never count as zero, so Quayflow stops proactive switching instead of guessing, and manual switching and confirmed-limit recovery keep working.
+Any Claude update can change these. Quayflow checks each new Claude version automatically. It disables in-place switching for a version that fails the check, or whose first real switch is not adopted, and falls back to Open New Session (or same-terminal Replace, Windows only) with a warning (FR-24). If the usage endpoint changes or refuses, readings become stale. Stale readings never count as zero, so Quayflow stops proactive switching instead of guessing, and manual switching and confirmed-limit recovery keep working.
 
 **Usage readings are paced.** The usage endpoint's budget is per login and shared with Claude Code itself. Quayflow reads the live account every minute and idle accounts every 10 minutes. After the endpoint refuses a read (HTTP 429), that account waits at least 2 minutes, doubling to at most 15 minutes for refusals in a row, and for an hour the live account is read every 2 minutes. A refresh from `/quay` waits for that pace too. So a figure can be a few minutes old; its age is always shown.
 
@@ -44,7 +44,7 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 ## Organization accounts
 
 - Managed login enforcement (`forceLoginOrgUUID`, `forceLoginMethod`) is respected. Accounts it refuses are not candidates. The managed-login override setting is recorded but **not implemented** in this build (see [Security notes](security.md#managed-login-enforcement-and-the-override-setting)).
-- Changing the credential selector (`CLAUDE_CONFIG_DIR`) inside a running organization session is held by Claude Code. Quayflow never works around that, so organization sessions switch only by the in-place swap or by Open/Replace.
+- Changing the credential selector (`CLAUDE_CONFIG_DIR`) inside a running organization session is held by Claude Code. Quayflow never works around that, so organization sessions switch only by the in-place swap, Open New Session or same-terminal Replace (Windows only).
 - Enforcement of an organization policy that differs from the cached one has not been observed; that needs an organization administrator.
 - Company machines often allow only signed software (next section).
 
@@ -65,25 +65,25 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 
 ## Lanes
 
-- Lanes link your shared Claude setup with directory junctions and file hard links. If Claude replaces a linked file by renaming, the link breaks. `quayflow lanes check` detects and repairs this, but until then the lane sees an older copy of that file.
+- Lanes link your shared Claude setup: folders with directory junctions on Windows and symbolic links on Linux, files with hard links on both. If Claude replaces a linked file by renaming, the link breaks. `quayflow lanes check` detects and repairs this, but until then the lane sees an older copy of that file.
 - Auto-memory lives in each environment's project folders. Memory written in a lane may not appear in the default environment and the other way round, unless the memory folders are linked.
 - A lane is not a security boundary and gives an account no extra allowance.
 
 ## Security boundaries
 
-- Neither vault (DPAPI on Windows, owner-only files on Linux) protects against malware running as your user. Such software can also read Claude's own login file. See [Security notes](security.md#the-vault-dpapi).
+- Neither vault (DPAPI on Windows, owner-only files on Linux) protects against malware running as your user. Such software can also read Claude's own login file. See [Security notes](security.md#the-vault-on-windows-dpapi).
 - Any program running as your user can call the engine's loopback API.
 
 ## Not yet confirmed (v0.1 release conditions)
 
-These were not confirmed as of v0.1.5 (2026-11-08). Each is required before v0.1 leaves the pilot ([release conditions](requirements.md#release-conditions-for-v01)):
+These are not confirmed yet. Each is required before v0.1 leaves the pilot ([release conditions](requirements.md#release-conditions-for-v01)):
 
 - Claude's own in-process usage-limit wait adopting a login switched during the wait (AC-23). A job that fails when every account is exhausted is not affected: a fresh `claude -p` uses the login that is live when it starts.
-- Claude reading and writing correctly through lane links on the release build. It passed on a local build on 2026-11-03 (AC-12).
+- Claude reading and writing correctly through lane links on the release build. It passed on local builds on Windows (2026-11-03) and Linux (2026-11-08) (AC-12).
 - Engine crash reconciliation, version gating, and dead refresh token handling against the product build (AC-28, AC-37, AC-05).
-- The remaining acceptance scenarios AC-01 to AC-43 against the product build. The proof of concept demonstrated many of them, but the product build has its own results, which are recorded separately.
+- The remaining acceptance scenarios AC-01 to AC-43 against the product build.
 
-A real usage-limit failure has been handled end to end (2026-11-07): interactive Suggest and Automatic recovery, and headless runs with `tests/e2e/real-headless.ps1` X1 to X5, 42/42 (AC-21; see [acceptance.md](acceptance.md)).
+Recovery from a real usage limit passed on Windows, on a local build (AC-21). It has not been run on Linux. See [acceptance.md](acceptance.md).
 
 ## Recovery procedures
 

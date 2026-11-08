@@ -17,8 +17,8 @@ pub struct HelloRequest {
     pub headless: bool,
     #[serde(default)]
     pub claude_version: Option<String>,
-    /// Linux: the interactive session's desktop variables (`DISPLAY`, `WAYLAND_DISPLAY`,
-    /// `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`), so a sign-in or Open New
+    /// Linux: the interactive session's desktop variables (`qf_adapter::process::DESKTOP_VARS`:
+    /// display, session bus, `XDG_*`, `BROWSER`), so a sign-in or Open New
     /// Session window opens on the person's desktop even when the engine started without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<std::collections::BTreeMap<String, String>>,
@@ -448,7 +448,8 @@ impl OkResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ErrorBody {
     pub error: String,
-    /// Machine code: "bad_token", "invalid", "not_found", "conflict", "refused", "incompatible", "internal".
+    /// Machine code: "bad_token", "invalid", "not_found", "refused", "needs_disclosure",
+    /// "needs_approval", "in_progress", "vault", "internal".
     pub code: String,
 }
 
