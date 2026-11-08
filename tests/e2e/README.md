@@ -23,7 +23,7 @@ Always run them with `pwsh -File`, never dot-sourced (`. script`): they end with
 
 ### One-time setup
 
-To test a published release (v0.1.3 or later on Windows, v0.1.5 on Linux, v0.1.6 on macOS), install it as the [user guide](../../docs/user-guide.md#install) describes and go to step 3. To test a local build, start at step 1.
+To test a published release (v0.1.3 or later on Windows, v0.1.5 or later on Linux, v0.1.6 or later on macOS), install it as the [user guide](../../docs/user-guide.md#install) describes and go to step 3. To test a local build, start at step 1.
 
 1. Stage a local build in `dist\` (ignored by git). On Windows:
 

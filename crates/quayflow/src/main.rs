@@ -48,7 +48,7 @@ Accounts and groups
 Lanes and sessions
   lanes list | create N | check N | delete N
   handoff prepare|open|replace --session ID --to ENV
-  shell install | uninstall | refresh   PowerShell prompt hook for same-terminal Replace
+  shell install | uninstall | refresh   PowerShell prompt hook for same-terminal Replace (Windows)
 
 Maintenance
   canary [--live]              version check (static); --live runs the synthetic adoption job
@@ -459,6 +459,12 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
             }
         }
         "shell" => match a.p(1) {
+            Some("install") if !cfg!(windows) => {
+                eprintln!(
+                    "quayflow: the prompt hook is for PowerShell on Windows; on Linux and macOS use Open New Session"
+                );
+                1
+            }
             Some("install") => match local::shell_install(dd, &local::profile_paths()) {
                 Ok(r) => {
                     for e in &r.problems {

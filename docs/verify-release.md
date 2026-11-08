@@ -18,7 +18,7 @@ Each release is built by this repository's release workflow (`.github/workflows/
 
 1. **Published hash.** `SHA256SUMS` lists the SHA-256 of every other asset. The installer and `quayflow update` refuse a file whose hash does not match.
 2. **Build provenance.** A GitHub artifact attestation, signed through GitHub's Sigstore integration, records that each asset was built by this repository's workflow from a specific commit and tag. Releases from v0.1.5 on only (see below).
-3. **Reproducible build.** For the executables (`quayflow.exe`, `quayflow-bg.exe`, `quayflow-linux-x86_64`, and the two macOS programs), the workflow builds the same commit twice, in separate jobs and directories, and fails if the two builds differ. Windows builds on GitHub's Windows runner, Linux on Ubuntu 22.04, macOS on `macos-15`. The toolchain is pinned in `rust-toolchain.toml`, dependencies are locked with `Cargo.lock`, paths are remapped, and `SOURCE_DATE_EPOCH` is set from the tag's commit. On Windows, `/Brepro` also makes the PE header deterministic.
+3. **Reproducible build.** For the executables (`quayflow.exe`, `quayflow-bg.exe`, `quayflow-linux-x86_64`, and the two macOS programs), the workflow builds the same commit twice, in separate jobs and directories, and fails if the two builds differ. Windows builds on GitHub's Windows runner, Linux on Ubuntu 22.04, macOS on `macos-15`. The toolchain is pinned in `rust-toolchain.toml`, dependencies are locked with `Cargo.lock`, paths are remapped, and `SOURCE_DATE_EPOCH` is set from the tag's commit. On Windows, `/Brepro` also makes the PE header deterministic. On macOS, `-Wl,-S` leaves out the debug map, whose absolute paths would otherwise change the binary's `LC_UUID`.
 
 The installer checks (1) always, and (2) unless you pass `-SkipAttestation` (`install.ps1`) or `--skip-attestation` (`install.sh`). Without that option it refuses to install when the GitHub CLI is missing or signed out, or when the program (or `SOURCE_COMMIT`) has no attestation from this repository's `.github/workflows/release.yml` for the release tag and commit. It also checks that the Mod it adds from the release tag is at the commit in `SOURCE_COMMIT`.
 
@@ -31,8 +31,8 @@ Windows, in PowerShell:
 ```powershell
 $v = 'v0.1.6'
 $base = "https://github.com/minhdaohuu/quayflow/releases/download/$v"
-foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64', 'install.ps1', 'install.sh', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
-    try { Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f } catch { "$f is not in this release" }   # Linux files from v0.1.5; SOURCE_COMMIT from v0.1.1
+foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64', 'quayflow-macos-arm64', 'quayflow-macos-x86_64', 'install.ps1', 'install.sh', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
+    try { Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f } catch { "$f is not in this release" }   # Linux files from v0.1.5, macOS from v0.1.6; SOURCE_COMMIT from v0.1.1
 }
 Get-Content SHA256SUMS | ForEach-Object {
     $hash, $name = $_ -split '\s+\*?', 2
@@ -55,7 +55,7 @@ sha256sum -c --ignore-missing SHA256SUMS
 
 Every line must say `OK`. `--ignore-missing` skips the assets you did not download; in Git Bash or WSL the same `sha256sum` command checks the Windows files.
 
-macOS (from v0.1.6), in `sh`: download `quayflow-macos-arm64` (Apple silicon) or `quayflow-macos-x86_64` (Intel) instead of the Linux program, the same way. On a macOS without `sha256sum`, check with `shasum -a 256 -c --ignore-missing SHA256SUMS`.
+macOS (from v0.1.6), in `sh`: download `quayflow-macos-arm64` (Apple silicon) or `quayflow-macos-x86_64` (Intel) instead of the Linux program, the same way. Older macOS versions have no `sha256sum`; there, check with `shasum -a 256 -c --ignore-missing SHA256SUMS`.
 
 A hash check proves that you have the files the release lists, but `SHA256SUMS` comes from the same release page. To tie the files to this repository's build, also check the attestation.
 
@@ -87,7 +87,7 @@ git ls-remote https://github.com/minhdaohuu/quayflow "refs/tags/$v^{}" "refs/tag
 
 On macOS, use the macOS program's name in the loop. Each must end with `Verification succeeded`. `--signer-workflow` accepts only an attestation made by the release workflow (not by any other workflow of the repository), and `--source-ref` / `--source-digest` tie it to the release tag and its commit.
 
-**Releases before v0.1.5.** GitHub issues artifact attestations only for public repositories. v0.1.0 to v0.1.4 were built while the repository was private and are not attested. Their release notes say so, and only the hash check applies. The installer refuses them unless you pass `-SkipAttestation`. They have no Linux build.
+**Releases before v0.1.5.** GitHub issues artifact attestations only for public repositories. v0.1.0 to v0.1.4 were built while the repository was private and are not attested. Their release notes say so, and only the hash check applies. The installer refuses them unless you pass `-SkipAttestation`. They have no Linux or macOS build.
 
 ## Rebuild it yourself
 
@@ -123,13 +123,13 @@ sha256sum target/release/quayflow   # compare with quayflow-linux-x86_64 in SHA2
 
 `RUSTFLAGS` is split at spaces, so build from a path without spaces. The workflow proves that two builds on Ubuntu 22.04 are identical. A build on another distribution or release can differ, because a different glibc, linker or C toolchain can change the bytes. To compare, build on Ubuntu 22.04 (for example in a container).
 
-On macOS, the same steps with the Xcode Command Line Tools, adding `-C link-arg=-Wl,-S` to `RUSTFLAGS` and the target: `cargo build --release --locked -p quayflow --bin quayflow --target aarch64-apple-darwin` (or `x86_64-apple-darwin`, after `rustup target add x86_64-apple-darwin`), then `shasum -a 256 target/<target>/release/quayflow`. The workflow builds both programs twice on GitHub's `macos-15` runner; a different Xcode linker version can change the bytes.
+On macOS, the same steps with the Xcode Command Line Tools (no OpenSSL files needed), adding `-C link-arg=-Wl,-S` to `RUSTFLAGS` and the target: `cargo build --release --locked -p quayflow --bin quayflow --target aarch64-apple-darwin` (after `rustup target add aarch64-apple-darwin`; or `x86_64-apple-darwin`), then `shasum -a 256 target/<target>/release/quayflow`. The workflow builds both programs twice on GitHub's `macos-15` runner; a different Xcode linker version can change the bytes.
 
 ## Why releases are not code-signed
 
 Quayflow v0.1 executables are **not code-signed**: no Authenticode signature on Windows, no signature on Linux, and only the linker's ad-hoc signature on macOS (enough to run; installed with `curl`, the program carries no quarantine flag, and `install.sh` removes it from a verified copy of a browser download). This is common for open-source tools. A code-signing certificate costs money and needs a verified legal entity. The integrity properties above give a stronger link between the binary and its source: a code signature identifies who signed a file, but not what source it was built from. Signing can be added later, for example through SignPath's free program for open-source projects, without other changes.
 
-`quayflow status` and the `/quay` pane show the build's version, its SHA-256, and how to verify it ("not code-signed; verify with the release's SHA256SUMS"). For releases before v0.1.5, which are not attested, check the hash as above.
+`quayflow status` and the `/quay` pane show the build's version, its SHA-256, and how to verify it ("not code-signed; verify with the release's SHA256SUMS (and gh attestation verify when the release is attested)"). For releases before v0.1.5, which are not attested, check the hash as above.
 
 ## Windows protections and Quayflow
 

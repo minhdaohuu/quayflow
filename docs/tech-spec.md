@@ -1,6 +1,6 @@
 # Quayflow v0.1 technical specification
 
-> Scope: this specification describes v0.1 on Windows x64, Linux x86_64 and macOS as of v0.1.6. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux and [section 1b](#1b-macos) macOS. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated behind module boundaries. See [requirements.md](requirements.md#platform-scope). Linux is not fully tested; see [Known limits](known-limits.md#platform-and-scope).
+> Scope: this specification describes v0.1 on Windows x64, Linux x86_64 and macOS as of v0.1.6. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux and [section 1b](#1b-macos) macOS. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated behind module boundaries. See [requirements.md](requirements.md#platform-scope). Linux and macOS are not fully tested; see [Known limits](known-limits.md#platform-and-scope).
 
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
@@ -19,7 +19,7 @@ Companion to [requirements.md](requirements.md). This file holds the engineering
 | Topic | Linux |
 |---|---|
 | Program | Release asset `quayflow-linux-x86_64`, installed as `~/.local/share/quayflow/bin/quayflow` and linked as `~/.local/bin/quayflow`; no `quayflow-bg` (no console window to hide) |
-| Data folder | `$XDG_DATA_HOME/quayflow`, default `~/.local/share/quayflow`, made `0700` (`qf_engine::paths::default_root`) |
+| Data folder | `$XDG_DATA_HOME/quayflow`, default `~/.local/share/quayflow`, made `0700` (`qf_engine::paths::default_root`, `DataDir::ensure`) |
 | Vault | `vault/<account-id>.login`: base64 of `{"oauth": ..., "account": ...}`, no encryption, `0600` (`qf_vault::OwnerOnly`); backups of an unknown login are `backups/unknown-<hash>-<ts>.login` in the same form |
 | File writes | `qf_vault::atomic_write` creates the temp file with the target's mode, or `0600` for a new file |
 | Single instance | `flock` on `engine.lock` (`File::try_lock`) |
@@ -66,7 +66,7 @@ macOS is supported from v0.1.6 (Apple silicon and Intel). This section records w
 | Vault | Owner-only files as on Linux (`qf_vault::OwnerOnly`); a Keychain-backed vault under Quayflow's own service may follow |
 | Canary | Also requires `OAUTH_FILE_SUFFIX` (the service name is assembled at run time), `find-generic-password`, `add-generic-password` and `.storage-write` (`canary::MACOS_MARKERS`; present in 2.1.311, 2.1.317 and 2.1.319). As on every platform, each running session's own version (from its registry entry, not the installed one) must pass |
 | Process facts | `proc_pidinfo(PROC_PIDTBSDINFO)` for parent, start time and name; `kill(pid, 0)` for liveness (`/proc` does not exist) |
-| Data folder | `~/.local/share/quayflow`, as on Linux, so the Mod's `layout` needs no change |
+| Data folder | `$XDG_DATA_HOME/quayflow`, default `~/.local/share/quayflow`, made `0700`, as on Linux, so the Mod's `layout` needs no change |
 | Sign-in startup | LaunchAgent `~/Library/LaunchAgents/com.quayflow.engine.plist` (`RunAtLoad`, `AbandonProcessGroup`, runs `quayflow start`), loaded with `launchctl bootstrap gui/<uid>` and removed with `bootout`. The engine must run in the user's login session to use the Keychain (not over SSH, not as a daemon) |
 | New console | `open -a Terminal` with a `.command` script in the temporary folder (mode `0700`; sets the variables and folder, removes itself, `exec`s the program; holds no secret) |
 | Release | `quayflow-macos-arm64` and `quayflow-macos-x86_64`, each built by two separate `macos-15` jobs with different checkout folders, and compared. The linker's ad-hoc signature is enough for a `curl` install (no quarantine flag); `install.sh` removes the flag from a verified copy of a browser download. `install.sh` picks the asset by `uname`, uses `shasum -a 256` when `sha256sum` is missing, and finds the running engine with `ps` |
@@ -272,7 +272,7 @@ unknown ignore [--env E]       acknowledge an unregistered live login (automatio
 canary [--live]                static check now; --live runs the synthetic adoption job (consent)
 lanes list | create <name> | delete <name> | check <name>
 handoff open|replace|prepare --session <id> --to <env>
-shell install | uninstall      PowerShell prompt hook (PowerShell 7 and 5.1 profiles)
+shell install | uninstall      PowerShell prompt hook (PowerShell 7 and 5.1 profiles; Windows)
 shell refresh                  rewrite an installed hook module from this version (no profile change)
 shell claim --pid N            used by the prompt hook: print and consume this terminal's pending replacement
 policy [--json]                managed login enforcement per environment

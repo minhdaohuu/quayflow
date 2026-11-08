@@ -122,8 +122,8 @@ Prefer to read before you run? [Download, verify, read, then run](docs/verify-re
 | Platform | Status |
 |---|---|
 | Windows x64 | Supported. Switching, real usage-limit recovery and headless jobs tested end to end with real accounts. |
-| Linux x86_64 | Supported from v0.1.5, **not fully tested**: switching, lanes and headless jobs ran with real accounts on Ubuntu 24.04; real usage-limit recovery and an install from a published release have not run yet. |
-| macOS | Supported from v0.1.6 (Apple silicon and Intel), **not fully tested**: on an Apple silicon Mac, switching, lanes and recovery from a simulated usage limit passed with real accounts; real usage-limit recovery, Intel Macs and an install from a published release have not run yet. Claude Code keeps its login in the Keychain there, and Quayflow switches it through `/usr/bin/security`. |
+| Linux x86_64 | Supported from v0.1.5, **not fully tested**: switching, lanes and headless jobs ran with real accounts on Ubuntu 24.04; real usage-limit recovery, Open New Session, an install from a published release and other distributions have not run yet. |
+| macOS | Supported from v0.1.6 (Apple silicon and Intel), **not fully tested**: on an Apple silicon Mac, switching, lanes and recovery from a simulated usage limit passed with real accounts; real usage-limit recovery, Open New Session, Intel Macs and an install from a published release have not run yet. Claude Code keeps its login in the Keychain there, and Quayflow switches it through `/usr/bin/security`. |
 
 Details: [acceptance results](docs/acceptance.md).
 
@@ -131,7 +131,7 @@ Details: [acceptance results](docs/acceptance.md).
 
 1. Start Claude as usual: `claude`.
 2. Type `/quay`. The welcome screen asks you to start the engine and to accept the terms reminder.
-3. **Register** the login you are signed in with, and allow Quayflow to keep it in its vault. It joins the `Default` group.
+3. **Register login**: register the login you are signed in with, and allow Quayflow to keep it in its vault. It joins the `Default` group.
 4. **Add account.** Pick a group and choose **Sign in with Claude**: a window opens with Claude's own sign-in. Afterwards Quayflow suggests a name from the account's e-mail address; press Enter to save. Quayflow never sees a password or asks for a token.
 5. **Turn on Automatic** for the group. Quayflow asks you to approve it once:
 
@@ -144,13 +144,13 @@ Details: [acceptance results](docs/acceptance.md).
 6. Keep working. The status line shows the live account and its usage:
 
    ```text
-   Quayflow · work · Automatic · 5h 97% · 7d 40%
+   Quayflow · work · Automatic · 5h 62% · 7d 40%
    ```
 
    Near the threshold (85%) Quayflow switches to the account with the most room. If a request hits the limit first, it switches and retries that request once. Either way your next answer arrives in the same session, and the transcript says what happened:
 
    ```text
-   ● quayflow: Quayflow: Switched to personal (usage-limit recovery).
+   ● quayflow: Quayflow: Switched to personal (usage-limit recovery). Each session uses it from its next request; …
    ```
 
 Prefer to decide each time? Leave the group in Suggest, the default: the status line then says `| personal suggested` and `/quay accept` switches.
@@ -186,7 +186,7 @@ Session a04910ad-30f6-4c2a-8bd8-94a317333a02: not recovered
   why:          Suggest mode: no automatic switch; /quay accept switches to personal
 ```
 
-`--json` gives the same as `recovered`, `all_exhausted` or `not_recovered`, with `availableAt`.
+`--json` gives the same as JSON: `outcome` (`recovered`, `all_exhausted` or `not_recovered`) and `availableAt`, the time to run again (`null` when none applies).
 
 <details>
 <summary><b>Recipes: nightly jobs and self-healing agent loops</b></summary>
@@ -207,7 +207,7 @@ while :; do
   out=$(claude -p "$TASK" --output-format json) && { printf '%s\n' "$out"; break; }
   at=$(quayflow last --session "$(printf '%s' "$out" | jq -r .session_id)" --json | jq -r .availableAt)
   [ "$at" = null ] && { printf '%s\n' "$out"; exit 1; }   # not a usage limit: stop
-  sleep $(( $(date -d "$at" +%s) - $(date +%s) + 60 ))
+  sleep $(( $(printf '%s' "$at" | jq -R 'sub("\\.[0-9]+";"") | fromdateiso8601') - $(date +%s) + 60 ))
 done
 ```
 
@@ -232,7 +232,7 @@ What Quayflow promises a pipeline:
 - **Bounded.** One switch and at most one retry per failed request. Never a replay of completed work, never a second process.
 - **Fails open.** With the engine stopped or not installed, `claude -p` behaves exactly as without Quayflow.
 
-Tested on Windows with real accounts and a real weekly limit by [`tests/e2e/real-headless.ps1`](tests/e2e/real-headless.ps1): 42 of 42 checks, including three parallel runs sharing one switch. Setup: [Headless jobs](docs/user-guide.md#headless-jobs-claude--p).
+Tested on Windows with real accounts and a real weekly limit by [`tests/e2e/real-headless.ps1`](tests/e2e/real-headless.ps1) on a local build: 42 of 42 checks, including three parallel runs sharing one switch. Not yet run on Linux or macOS. Setup: [Headless jobs](docs/user-guide.md#headless-jobs-claude--p).
 
 ## How it works
 
@@ -300,7 +300,7 @@ The switch sequence and the recovery rules, step by step: [technical specificati
 - **Terms and organization rules are your responsibility.** Use only accounts that are yours to use.
 - **A switch moves every session of an environment** (by default `~/.claude`), each at its next request. Use lanes to keep a session on a different account.
 - **Saved logins** are protected for your user (DPAPI on Windows; `0600` files on Linux and macOS, not encrypted). Neither protects against malware running as you. Claude refreshes the live login; Quayflow refreshes only an idle account's saved copy, so its usage stays readable. Logins never go into logs, reports or the Mod.
-- **Releases are not code-signed.** They are reproducible, hashed and, from v0.1.5 on, attested. Smart App Control and signed-only company policies may block them. See [Verifying a release](docs/verify-release.md).
+- **Releases are not code-signed.** They are reproducible, hashed and, from v0.1.5 on, attested. On Windows, Smart App Control and signed-only company policies may block them. On macOS they carry only the linker's ad-hoc signature; a `curl` install is not quarantined. See [Verifying a release](docs/verify-release.md).
 
 Read [Known limits](docs/known-limits.md) before relying on Quayflow for unattended work, and [Security notes](docs/security.md) for what it touches.
 
