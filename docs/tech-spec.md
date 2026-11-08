@@ -104,6 +104,49 @@ PoC data in `%USERPROFILE%\.quayflow-poc` is imported once with `quayflow migrat
 
 **Idle-account refresh (owner decision, 2026-11-07):** an idle account's access token expires after some hours, so the engine refreshes its saved copy (`Engine::refresh_idle`): `POST https://platform.claude.com/v1/oauth/token` with `grant_type=refresh_token`, Claude Code's public client id and the login's own scopes. It runs under `cred_lock` (the lock every switch holds while writing), only when no environment's login files hold the same refresh token (read from disk, any unreadable file skips the refresh), and stores the result before use; the switch reads the saved login again under that lock. `invalid_grant` or 401/403 sets the account to `refresh_rejected` (a notice asks for a new sign-in; the account is no longer polled or a candidate); a refreshed login that cannot be stored sets `vault_error`; other failures leave it unchanged and it shows no usage until a later poll succeeds. The journal records `login.refreshed` or `login.refresh_rejected` with the account id only. The live login is never refreshed by Quayflow.
 
+**A switch, step by step.**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant C as Claude session
+    participant M as Quayflow Mod
+    participant E as quayflow engine
+    participant F as Login files
+
+    E->>E: Account A reaches 85% of its binding window
+    alt Suggest mode (default)
+        E-->>M: Candidate: account B (same group)
+        M-->>You: Status line shows the suggestion
+        You->>M: /quay accept
+        M->>E: Switch to B
+    else Automatic mode (approved per group)
+        E->>E: Pick B by eligibility, then remaining allowance
+    end
+    Note over C: A request in flight finishes on A
+    E->>F: Swap A → B under Claude's credential locks
+    C->>F: Next request reads login B
+    M->>E: Report the identity the request used
+    E-->>M: Adoption verified ✓
+```
+
+**When a request hits a usage limit.** In Suggest mode the switch is only suggested; in Manual mode nothing is switched. Either way Claude's own result stands.
+
+```mermaid
+flowchart LR
+    R["Request fails"] --> Q{"Confirmed<br/>usage limit?"}
+    Q -- "no" --> P["Pass the error through<br/>unchanged"]
+    Q -- "yes" --> A{"An approved account<br/>with room?"}
+    A -- "yes" --> S["One switch to it<br/>(shared by concurrent failures)"]
+    S --> T["Retry the same request once,<br/>in the same process"]
+    T --> D{"Succeeded?"}
+    D -- "yes" --> OK["Session continues"]
+    D -- "no" --> W["Claude's own usage-limit<br/>behavior takes over"]
+    A -- "no, all at their limit" --> SO["Switch to the account<br/>available soonest, no retry"]
+    SO --> W
+```
+
 ## 6. API v1
 
 Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.json`. JSON bodies, camelCase, schemas in `crates/qf-model/src/api.rs`. Errors: HTTP 4xx/5xx with `{"error": "...", "code": "..."}`. Codes: `bad_token` (403), `invalid` (400; 413 for a body over 64 KB), `not_found` (404), `refused`, `needs_disclosure`, `needs_approval`, `in_progress` (409), `vault`, `internal` (500). A refused switch is not an error: `SwitchResponse` has `ok: false` with `message` and `blockedBy`. Mutating requests may carry `requestId`. A repeat of a successful request among the last 256 ids returns the first response without running again; a failed request releases its id, so a repeat runs; a repeat while the first is still running gets 409 `in_progress`.
