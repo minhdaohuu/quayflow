@@ -203,7 +203,10 @@ try {
         $TB = @{ five_hour = 100; five_hour_reset_s = 600 }
         $TC = @{ five_hour = 100; five_hour_reset_s = 3600 }
     }
-    Start-Sleep 4
+    # Each account's reading must show its limit: an out-of-date reading says nothing about
+    # when an account is available (b may still be slowed down after the 429 in step 6).
+    $seen = WaitFor { @('a', 'b', 'c') | ForEach-Object { $u = (Acct $_).usage; $u -and $u.fresh -and ($u.windows | Where-Object { $_.pct -ge 100 }) } | Where-Object { -not $_ } | Measure-Object | ForEach-Object { $_.Count -eq 0 } } 60
+    Check 'all exhausted: every reading shows the limit' $seen ((State).accounts | ConvertTo-Json -Depth 8 -Compress)
     $r = Recover 'turn-exhausted' 100
     Check 'all exhausted: switches to the account available soonest (b)' (WaitFor { (LiveToken) -eq $TB }) "$(LiveToken) $($r | ConvertTo-Json -Compress)"
     Check 'all exhausted: no retry; Claude''s own wait continues' (-not $r.retry) ($r | ConvertTo-Json -Compress)
