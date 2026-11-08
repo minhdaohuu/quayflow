@@ -323,6 +323,9 @@ function AddAccount($: EngineInterface, c: Ctx): JSX.Element {
     const taken = !reauth && name ? s.accounts.find(a => a.label.toLowerCase() === name.toLowerCase()) : undefined
     const current = env?.live.known ? label(s, env.live.account) : 'the current login'
     const newGroup = c.form['add:showgroup'] === '1'
+    // A sign-in already holds a login in a temporary folder, so the vault consent comes first.
+    const needConsent = !s.consents.credentialStorage
+    const consentGiven = c.form['add:vault'] === '1'
     return (
       <Box flexDirection="column">
         {Section(
@@ -345,6 +348,8 @@ function AddAccount($: EngineInterface, c: Ctx): JSX.Element {
           newGroup ? null : Btn(c, 'add-newgroup', '+ New group', () => setForm($, 'add:showgroup', '1')),
         )}
         {!reauth && newGroup ? Field($, c, 'add:newgroup', 'New group', { placeholder: 'name', submitLabel: 'create', autoFocus: true, onSubmit: v => void createGroupInline($, v, 'add:group').then(() => setForm($, 'add:showgroup', '')) }) : null}
+        {needConsent ? Toggle(c, 'add:vault', 'Keep the logins I add in my protected local vault (needed to sign in)', consentGiven, v => setForm($, 'add:vault', v ? '1' : '')) : null}
+        {needConsent && !consentGiven ? Line(c, 'Tick the vault box above first: the sign-in keeps a login until you save or cancel it.', { tone: 'warn' }) : null}
         {Line(c, `Your session stays on ${current}. Quayflow never asks for a token.`, { dim: true })}
         {Hint(c, "Claude's native sign-in opens in a temporary credential environment; nothing is saved until you review the identity it returns. Mixing organization and personal identities in one group asks for approval at that point.")}
         {Row(
@@ -445,7 +450,11 @@ async function startSignin($: EngineInterface, c: Ctx, typed?: string): Promise<
     return void flash($, 'warn', `"${labelText}" is already a name here; pick another.`)
   }
   if (!s.consents.credentialStorage) {
-    return void flash($, 'warn', 'Credential storage consent is needed first: register the current login or review consents in Settings.')
+    if (c.form['add:vault'] !== '1') {
+      return void flash($, 'warn', 'Tick "Keep the logins I add in my protected local vault" first: signing in keeps a login until you save or cancel it.')
+    }
+    const given = await run($, 'recording your vault consent', () => actOnboarding($, { credentialStorage: true }, false))
+    if (!given) return
   }
   const st = await run($, 'opening a native sign-in', () => actSigninStart($, reauth))
   if (!st) return

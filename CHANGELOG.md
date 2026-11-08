@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Releases carry `quayflow-macos-arm64` and `quayflow-macos-x86_64`, built twice and compared like the other programs.
 
 ### Changed
+- `/quay add` before any login was registered seemed to do nothing after you typed a name: it only flashed a short warning that the vault consent was missing. The add screen now shows the vault box itself; tick it and press Enter to sign in.
 - A switch also waits for Claude Code's `.storage-write.lock`, which Claude holds while it saves its login, on every platform. On Linux and macOS the legacy lock is named after the resolved folder, as Claude names it.
 
 ## [0.1.5] - 2026-11-08

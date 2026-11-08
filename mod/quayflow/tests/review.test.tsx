@@ -160,6 +160,27 @@ describe('registration', () => {
     await ui.unmount()
   })
 
+  test('adding an account before any vault consent asks for it on the add screen, then signs in', async ($, on) => {
+    const ready = { id: 'si-3', state: 'ready', configDir: '/t', command: 'claude', identity: { account: 'e5e5e5e5e5e5', kind: 'personal' } }
+    const fresh: StateView = { ...STATE, consents: { ...STATE.consents, credentialStorage: null } }
+    const w = world(on, { state: fresh, routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
+    await start($, w, true)
+    await quay($, 'add')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ key: 'add:vault' })).toBeDefined()
+    // Enter on the name without the box: nothing opens, and the screen says why.
+    await ui.input({ key: 'add:label', text: 'home' })
+    expect(w.routes()).not.toContain('/v1/accounts/signin/start')
+    expect(await ui.find({ type: 'Text', text: /Tick the vault box above first/ })).toBeDefined()
+    // With the box: the consent is recorded, then the sign-in opens.
+    await ui.press({ key: 'add:vault' })
+    await ui.input({ key: 'add:label', text: 'home' })
+    expect(w.bodies('/v1/onboarding')).toContainEqual({ consents: { credentialStorage: true }, complete: false })
+    const r = w.routes()
+    expect(r.indexOf('/v1/onboarding')).toBeLessThan(r.indexOf('/v1/accounts/signin/start'))
+    await ui.unmount()
+  })
+
   test('a reauthentication that returned another identity can be registered as new, never over the old one', async ($, on) => {
     const ready = { id: 'si-2', state: 'ready', configDir: 'C:\\t', command: 'claude', identity: { account: 'd4d4d4d4d4d4', kind: 'personal', unexpected: true } }
     const w = world(on, { routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
