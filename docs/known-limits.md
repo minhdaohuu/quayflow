@@ -6,9 +6,10 @@ Quayflow v0.1 (currently v0.1.5) is a pilot release. This page lists what it doe
 
 - **Windows x64 and Linux x86_64.** Quayflow targets all platforms Claude Code runs on; v0.1 supports Windows 10/11 x64 and, from v0.1.5, Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later). macOS (Apple silicon and Intel) is built for the next release and passes the automated suites on a Mac; its CI job has not run yet; Linux arm64 is not built yet (see [requirements.md](requirements.md#platform-scope)).
 - **Linux vault is not encrypted.** Saved logins are owner-only files (`0600` in a `0700` folder), as Claude Code keeps its own login on Linux; any program running as you, or root, can read them. An encrypted vault through the desktop keyring (Secret Service) is planned; it is not used now because unattended jobs on a server often have no unlocked keyring.
-- **macOS is not fully tested.** The engine, installer and Mod pass their automated suites on a Mac. The Keychain switch passed with two real accounts on Claude Code 2.1.319 (`tests/e2e/real-macos-keychain.py`, 19/19): two running interactive sessions and a headless run used the new account from their next request (the first 0.5 s after the switch), the item's other entries were kept and no Keychain dialog appeared. Quayflow itself then passed `real-switching.ps1` 13/13 on macOS with two real accounts: switches in the middle of a headless job and of parallel subagents, and recovery from a simulated usage limit (one switch, one retry on the new account). Lanes passed `real-lanes.ps1` 8/8. The LaunchAgent started the engine at sign-in. Not yet run on macOS: recovery from a real usage limit (`real-headless.ps1`), an install from a published release, and Intel Macs.
+- **macOS is not fully tested.** The engine, installer and Mod pass their automated suites on a Mac. The Keychain switch passed with two real accounts on Claude Code 2.1.319 (`tests/e2e/real-macos-keychain.py`, 19/19): two running interactive sessions and a headless run used the new account from their next request (the first 0.5 s after the switch), the item's other entries were kept and no Keychain dialog appeared. Quayflow itself then passed `real-switching.ps1` 13/13 on macOS with two real accounts: switches in the middle of a headless job and of parallel subagents, and recovery from a simulated usage limit (one switch, one retry on the new account). Lanes passed `real-lanes.ps1` 8/8. The LaunchAgent started the engine at sign-in. Not yet run on macOS: recovery from a real usage limit (`real-headless.ps1`), Open New Session, an install from a published release, Intel Macs, and the macOS CI job on GitHub.
 - **macOS: the Keychain switch depends on more undocumented behavior.** Claude's Keychain item name (a hash of the exact `CLAUDE_CONFIG_DIR` text), its 30-second Keychain cache, and its check of `.credentials.json`'s modification time before each request, which Quayflow uses to make running sessions read the new login at once. The engine must run in your login session; it cannot use the Keychain over SSH. A session started with another spelling of `CLAUDE_CONFIG_DIR` than Quayflow's (a trailing slash, a path through a symbolic link, or the variable set to `~/.claude` explicitly) reads another Keychain item and does not follow a switch; `/quay` names such sessions and the exact value to use. A `CLAUDE_CONFIG_DIR` with characters outside ASCII may name a different item than Claude's (Claude normalizes the text to Unicode NFC; Quayflow does not).
-- **macOS vault is not encrypted.** Saved logins are owner-only files, as on Linux.
+- **macOS vault is not encrypted.** Saved logins are owner-only files, as on Linux, while Claude Code keeps its own login in the Keychain there.
+- **macOS: configuration profiles are not read.** Quayflow reads the managed login policy from `/Library/Application Support/ClaudeCode`, but not from MDM configuration profiles (`/Library/Managed Preferences/…/com.anthropic.claudecode.plist`), which Claude Code also reads. Claude still enforces such a policy.
 - **Linux and macOS: no same-terminal Replace.** The prompt hook is PowerShell only. Open New Session needs a desktop terminal; over SSH, Quayflow prints the command to run.
 - **Linux is not fully tested.** The engine, installer and Mod pass their automated suites on Linux, and on one Ubuntu 24.04 machine switching, lanes and a silent headless job were run with two real accounts. Not yet run on Linux: recovery from a real usage limit (headless cases X1, X2, X3, X5), an install and update from a published release, Open New Session, and any distribution other than Ubuntu 24.04. See [acceptance.md](acceptance.md).
 - **Subscription logins only** (claude.ai sign-in). Quayflow never moves a session to API-key or other billing.
@@ -20,7 +21,8 @@ Quayflow v0.1 (currently v0.1.5) is a pilot release. This page lists what it doe
 Quayflow relies on Claude Code behavior that was observed on Claude Code 2.1.316 but is not documented:
 
 - the client reads the login again at its next model request, so an in-place swap takes effect without a restart;
-- Claude's credential lock protocol (`.oauth_refresh.lock`, the legacy lock, the configuration lock), which Quayflow takes in Claude's order;
+- Claude's credential lock protocol (`.oauth_refresh.lock`, the legacy lock, `.storage-write.lock`, the configuration lock), which Quayflow takes in Claude's order;
+- on macOS, Claude's Keychain item for its login, its 30-second Keychain cache, and its check of `.credentials.json` before each request (see the macOS items above);
 - the usage endpoint (`/api/oauth/usage`) and profile endpoint (`/api/oauth/profile`), and their response shapes;
 - the token service and Claude Code's public client, used to refresh an idle account's saved login;
 - the session registry (`<env>\sessions\<pid>.json`).
@@ -68,13 +70,13 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 
 ## Lanes
 
-- Lanes link your shared Claude setup: folders with directory junctions on Windows and symbolic links on Linux, files with hard links on both. If Claude replaces a linked file by renaming, the link breaks. `quayflow lanes check` detects and repairs this, but until then the lane sees an older copy of that file.
+- Lanes link your shared Claude setup: folders with directory junctions on Windows and symbolic links on Linux and macOS, files with hard links on all three. If Claude replaces a linked file by renaming, the link breaks. `quayflow lanes check` detects and repairs this, but until then the lane sees an older copy of that file.
 - Auto-memory lives in each environment's project folders. Memory written in a lane may not appear in the default environment and the other way round, unless the memory folders are linked.
 - A lane is not a security boundary and gives an account no extra allowance.
 
 ## Security boundaries
 
-- Neither vault (DPAPI on Windows, owner-only files on Linux) protects against malware running as your user. Such software can also read Claude's own login file. See [Security notes](security.md#the-vault-on-windows-dpapi).
+- No vault (DPAPI on Windows, owner-only files on Linux and macOS) protects against malware running as your user. Such software can also read Claude's own login file. See [Security notes](security.md#the-vault-on-windows-dpapi).
 - Any program running as your user can call the engine's loopback API.
 
 ## Not yet confirmed (v0.1 release conditions)
@@ -86,7 +88,7 @@ These are not confirmed yet. Each is required before v0.1 leaves the pilot ([rel
 - Engine crash reconciliation, version gating, and dead refresh token handling against the product build (AC-28, AC-37, AC-05).
 - The remaining acceptance scenarios AC-01 to AC-43 against the product build.
 
-Recovery from a real usage limit passed on Windows, on a local build (AC-21). It has not been run on Linux. See [acceptance.md](acceptance.md).
+Recovery from a real usage limit passed on Windows, on a local build (AC-21). It has not been run on Linux or macOS; on both, recovery from a simulated limit passed (case R1). See [acceptance.md](acceptance.md).
 
 ## Recovery procedures
 

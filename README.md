@@ -109,7 +109,7 @@ You need Claude Code. No administrator rights.
 irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1 | iex
 ```
 
-**Linux x86_64** (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later):
+**Linux x86_64** (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later), and **macOS** (Apple silicon and Intel) from the next release:
 
 ```sh
 curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh
@@ -123,7 +123,7 @@ Prefer to read before you run? [Download, verify, read, then run](docs/verify-re
 |---|---|
 | Windows x64 | Supported. Switching, real usage-limit recovery and headless jobs tested end to end with real accounts. |
 | Linux x86_64 | Supported from v0.1.5, **not fully tested**: switching, lanes and headless jobs ran with real accounts on Ubuntu 24.04; real usage-limit recovery and an install from a published release have not run yet. |
-| macOS | Planned. |
+| macOS | Next release (Apple silicon and Intel), **not released yet**: on an Apple silicon Mac, switching, lanes and recovery from a simulated usage limit passed with real accounts; real usage-limit recovery, Intel Macs and an install from a published release have not run yet. Claude Code keeps its login in the Keychain there, and Quayflow switches it through `/usr/bin/security`. |
 
 Details: [acceptance results](docs/acceptance.md).
 
@@ -260,7 +260,7 @@ flowchart LR
     S2 -.-> ENV
 ```
 
-- **The engine** (`quayflow`) runs in the background for your user. It reads each account's 5-hour, 7-day and per-model windows (the live account every minute, idle accounts every ten minutes), decides by your groups and modes, and swaps the login files atomically under Claude's own locks.
+- **The engine** (`quayflow`) runs in the background for your user. It reads each account's 5-hour, 7-day and per-model windows (the live account every minute, idle accounts every ten minutes), decides by your groups and modes, and swaps the login atomically under Claude's own locks (the login files, or Claude's Keychain item on macOS).
 - **The Mod** runs inside every Claude session. It draws the status line and the `/quay` pane, reports which account each request used, and on a confirmed usage limit asks the engine for one switch and retries that request once.
 - **Every switch is verified.** If a client's next request did not use the new account, in-place switching turns off for that Claude version.
 - **Lanes** keep one session on a different account in a separate environment that still links your shared Claude setup.
@@ -289,7 +289,7 @@ The switch sequence and the recovery rules, step by step: [technical specificati
 
 **Does it read my prompts?** No. The Mod sends the engine opaque ids, the labels and group names you typed, usage percentages and the project folder path. Never prompt, response or tool content, never tokens.
 
-**Where are my logins?** On your computer only: encrypted with DPAPI on Windows; owner-only files (`0600`) on Linux, the same protection Claude Code gives its own login there. No telemetry, no server.
+**Where are my logins?** On your computer only: encrypted with DPAPI on Windows; owner-only files (`0600`) on Linux and macOS (on Linux the same protection Claude Code gives its own login; on macOS Claude Code itself uses the Keychain). No telemetry, no server.
 
 **What if the engine is down?** Claude works as usual. The status line says so, and headless runs are untouched.
 
@@ -299,7 +299,7 @@ The switch sequence and the recovery rules, step by step: [technical specificati
 
 - **Terms and organization rules are your responsibility.** Use only accounts that are yours to use.
 - **A switch moves every session of an environment** (by default `~/.claude`), each at its next request. Use lanes to keep a session on a different account.
-- **Saved logins** are protected for your user (DPAPI on Windows; `0600` files on Linux, not encrypted). Neither protects against malware running as you. Claude refreshes the live login; Quayflow refreshes only an idle account's saved copy, so its usage stays readable. Logins never go into logs, reports or the Mod.
+- **Saved logins** are protected for your user (DPAPI on Windows; `0600` files on Linux and macOS, not encrypted). Neither protects against malware running as you. Claude refreshes the live login; Quayflow refreshes only an idle account's saved copy, so its usage stays readable. Logins never go into logs, reports or the Mod.
 - **Releases are not code-signed.** They are reproducible, hashed and, from v0.1.5 on, attested. Smart App Control and signed-only company policies may block them. See [Verifying a release](docs/verify-release.md).
 
 Read [Known limits](docs/known-limits.md) before relying on Quayflow for unattended work, and [Security notes](docs/security.md) for what it touches.
@@ -318,15 +318,15 @@ Read [Known limits](docs/known-limits.md) before relying on Quayflow for unatten
 
 ## Roadmap
 
-- **Now (v0.1, public pilot):** Windows x64 and Linux x86_64. The remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
+- **Now (v0.1, public pilot):** Windows x64 and Linux x86_64; macOS with the next release. The remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
 - **Next:** lanes for unattended jobs with their own mode, so background jobs can switch without moving your interactive sessions.
-- **Later:** macOS; an encrypted Linux vault through the desktop keyring; same-terminal Replace for bash and zsh; code signing.
+- **Later:** an encrypted vault on Linux (desktop keyring) and macOS (Keychain); same-terminal Replace for bash and zsh; code signing.
 
 Have a use case that is not covered? [Open an issue](https://github.com/minhdaohuu/quayflow/issues/new/choose).
 
 ## Contributing
 
-Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers building from source on Windows and Linux, the test suites and the repository layout. Quayflow handles login files, so changes are held to a high bar for safety and honest evidence. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report security problems privately as described in [SECURITY.md](SECURITY.md).
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers building from source on Windows, Linux and macOS, the test suites and the repository layout. Quayflow handles login files, so changes are held to a high bar for safety and honest evidence. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report security problems privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

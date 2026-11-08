@@ -1,18 +1,18 @@
 # Quayflow user guide
 
-Quayflow v0.1.5. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64 and Linux x86_64 (macOS is next). Paths below are the Windows ones; [Linux](#linux) lists what differs there.
+Quayflow v0.1.5. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64 and Linux x86_64; macOS (Apple silicon and Intel) comes with the next release. Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
 
-Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. See [acceptance results](acceptance.md).
+Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. macOS is not released yet; on an Apple silicon Mac, switching, lanes and recovery from a simulated limit passed with real accounts, while recovery from a real limit, Intel Macs and an install from a published release have not been run. See [acceptance results](acceptance.md).
 
 > **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is not affiliated with or endorsed by Anthropic.
 
-Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [Status line](#the-status-line) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Several machines](#using-an-account-on-several-machines) · [Headless jobs](#headless-jobs-claude--p) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Managed login](#organization-managed-login) · [Engine control](#engine-control) · [Troubleshooting](#troubleshooting) · [Testing](#testing-your-setup) · [Update](#update) · [Uninstall](#uninstall) · [Linux](#linux) · [Files](#files-and-folders)
+Contents: [Requirements](#requirements) · [Install](#install) · [First use](#first-use) · [Accounts](#accounts) · [Groups](#groups-are-data-approvals) · [Modes](#modes) · [Status line](#the-status-line) · [What a switch does](#what-a-switch-does) · [Manual switch and pin](#manual-switch-and-pin) · [Return home](#return-home) · [Usage limits](#when-a-request-hits-a-usage-limit) · [Several machines](#using-an-account-on-several-machines) · [Headless jobs](#headless-jobs-claude--p) · [Lanes](#lanes) · [Open and Replace](#open-new-session-and-replace-current-session) · [PowerShell integration](#powershell-integration) · [Unknown logins](#unknown-logins-and-other-switchers) · [Managed login](#organization-managed-login) · [Engine control](#engine-control) · [Troubleshooting](#troubleshooting) · [Testing](#testing-your-setup) · [Update](#update) · [Uninstall](#uninstall) · [Linux](#linux) · [macOS](#macos) · [Files](#files-and-folders)
 
 ## Requirements
 
-- Windows 10 or 11, x64; or Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later).
-- Claude Code installed and working (`claude --version`). Quayflow v0.1.5 was validated against Claude Code 2.1.316 on Windows and 2.1.319 on Linux; other versions are checked automatically (see [Version checks](#version-checks)).
-- Windows: Windows PowerShell 5.1 or PowerShell 7 for the installer. Linux: `sh`, `curl`, `sha256sum`, and `python3` for the Mod step. No administrator rights.
+- Windows 10 or 11, x64; or Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later); or macOS on Apple silicon or Intel (next release).
+- Claude Code installed and working (`claude --version`). Quayflow v0.1.5 was validated against Claude Code 2.1.316 on Windows and 2.1.319 on Linux and macOS; other versions are checked automatically (see [Version checks](#version-checks)).
+- Windows: Windows PowerShell 5.1 or PowerShell 7 for the installer. Linux and macOS: `sh`, `curl`, `sha256sum` (or `shasum` on macOS), and `python3` for the Mod step. No administrator rights.
 - Claude subscription logins (claude.ai sign-in). Quayflow never switches a subscription session to API-key billing.
 
 ## Install
@@ -47,14 +47,14 @@ It does not read, copy or change any Claude login. Running Claude sessions load 
 
 With `irm | iex` you cannot pass options. Use `& ([scriptblock]::Create((irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1))) -Startup` instead. Plain `irm | iex` therefore needs the GitHub CLI signed in; without it, pass `-SkipAttestation` this way to rely on the hash check alone.
 
-On Linux:
+On Linux and macOS:
 
 ```sh
 curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh
 curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh -s -- --startup   # with options
 ```
 
-`install.sh` makes the same checks and steps, with long options (`--version`, `--startup`, `--no-path`, `--no-plugin`, `--yes`, `--source`, `--marketplace-source`, `--skip-attestation`, `--uninstall [--delete-data]`). It installs to `~/.local/share/quayflow/bin` (or `$XDG_DATA_HOME/quayflow/bin`) and links `~/.local/bin/quayflow`; `--startup` adds a systemd user unit (`quayflow.service`). See [Linux](#linux).
+`install.sh` makes the same checks and steps, with long options (`--version`, `--startup`, `--no-path`, `--no-plugin`, `--yes`, `--source`, `--marketplace-source`, `--skip-attestation`, `--uninstall [--delete-data]`). It installs to `~/.local/share/quayflow/bin` (or `$XDG_DATA_HOME/quayflow/bin`) and links `~/.local/bin/quayflow`; `--startup` adds a systemd user unit (`quayflow.service`) on Linux and a LaunchAgent (`com.quayflow.engine`) on macOS. See [Linux](#linux) and [macOS](#macos).
 
 **GitHub CLI.** Install the [GitHub CLI](https://cli.github.com/) and sign in (`gh auth login`) before installing, so the installer can verify the attestations. Releases from v0.1.5 on are attested; v0.1.0 to v0.1.4 were built while the repository was private and are not attested, so they install only with `-SkipAttestation`. If Claude Code cannot clone the marketplace and you have no GitHub SSH key, set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` before installing.
 
@@ -65,8 +65,8 @@ Start Claude as usual (`claude`) and run `/quay`. The first time, Quayflow asks 
 | Consent | What it allows | Can be changed with |
 |---|---|---|
 | Engine start | The Mod starts `quayflow.exe` in the background when a session finds it not running. Given at install | `quayflow consent engine-start on\|off` |
-| Sign-in startup | The engine also starts when you sign in (a Windows startup entry, or a systemd user unit on Linux) | `quayflow consent signin-startup on\|off` |
-| Credential storage | Quayflow keeps a reusable copy of each login you register, in its vault (DPAPI on Windows, owner-only files on Linux) | `quayflow consent credential-storage on\|off` |
+| Sign-in startup | The engine also starts when you sign in (a Windows startup entry, a systemd user unit on Linux, a LaunchAgent on macOS) | `quayflow consent signin-startup on\|off` |
+| Credential storage | Quayflow keeps a reusable copy of each login you register, in its vault (DPAPI on Windows, owner-only files on Linux and macOS) | `quayflow consent credential-storage on\|off` |
 | Terms | You confirm you are responsible for your provider's terms and your organization's rules | `quayflow consent terms on\|off` |
 
 Onboarding happens only in interactive sessions. A headless job (`claude -p`) never shows a prompt. Every group starts in **Suggest** mode.
@@ -261,7 +261,7 @@ quayflow last --session <session_id> --json
 A **lane** is an optional separate credential environment, for sessions that need a different account from the rest. The most common reason is the remedy for a group conflict.
 
 - A lane has its own login, its own `.claude.json`, its own session folder and its own organization policy files.
-- It links your shared Claude setup from `~/.claude`: `settings.json`, `CLAUDE.md`, `plugins\`, `skills\`, `agents\`, `commands\` and the memory folders. Folders use junctions on Windows and symbolic links on Linux; files use hard links. No administrator rights are needed. Inside a lane, Claude behaves like your normal Claude, including the Quayflow Mod, except for the account. `quayflow lanes check <name>` repairs a broken file link.
+- It links your shared Claude setup from `~/.claude`: `settings.json`, `CLAUDE.md`, `plugins\`, `skills\`, `agents\`, `commands\` and the memory folders. Folders use junctions on Windows and symbolic links on Linux and macOS; files use hard links. No administrator rights are needed. Inside a lane, Claude behaves like your normal Claude, including the Quayflow Mod, except for the account. `quayflow lanes check <name>` repairs a broken file link.
 - A switch inside a lane moves only that lane's sessions. A lane does not give an account extra allowance and is not a security sandbox.
 - In-place switching inside a lane is enabled only after the lane passes the version check.
 - Commands: `quayflow lanes list | create <name> | delete <name> | check <name>`.
@@ -350,13 +350,13 @@ When the engine sees a new Claude version, it checks automatically that the part
 | Replace did nothing in this terminal | The PowerShell hook is not loaded: `quayflow shell install`, open a new terminal, check the execution policy (5.1). Other shells use Open New Session |
 | Replace said history is not ready | Run the command it printed once Claude has fully exited |
 
-Logs are in `%LOCALAPPDATA%\Quayflow\logs` (Linux: `~/.local/share/quayflow/logs`), sanitized and kept 7 days.
+Logs are in `%LOCALAPPDATA%\Quayflow\logs` (Linux and macOS: `~/.local/share/quayflow/logs`), sanitized and kept 7 days.
 
 ## Testing your setup
 
 The repository's `tests/e2e/` folder holds scripts that exercise the product build; [tests/e2e/README.md](../tests/e2e/README.md) lists them all and what each needs. Read each one before you run it.
 
-- **Fake environment (safe anywhere).** `smoke-fake-env.ps1`, `cli-fake-env.ps1`, `sim-usage.ps1` and, on Linux, `smoke-linux.sh` run the real program against a temporary fake Claude environment. They never touch `~/.claude` or a real login. CI runs them on every change.
+- **Fake environment (safe anywhere).** `smoke-fake-env.ps1`, `cli-fake-env.ps1`, `sim-usage.ps1` and, on Linux and macOS, `smoke-unix.sh` run the real program against a temporary fake Claude environment. They never touch `~/.claude` or a real login. CI runs them on every change.
 - **Real logins (owner-run).** `real-switching.ps1`, `real-lanes.ps1` and `real-headless.ps1` **switch your live Claude login** and put it back. Run them only on your own machine, never in CI. Recorded results are in [acceptance.md](acceptance.md).
 
 ## Update
@@ -367,7 +367,7 @@ quayflow update           # install it with the release's own installer and all 
 quayflow update --version v0.1.5   # a specific release instead of the latest
 ```
 
-`quayflow update` downloads the release's installer (`install.ps1`, or `install.sh` on Linux), checks it against the release's `SHA256SUMS`, and runs it in update mode. The installer then makes every check of a first install: the SHA-256 hashes, the build-provenance attestation of the release workflow for that tag and commit, and the Mod's source commit. The attestation check needs the GitHub CLI, signed in; without it the update is refused, unless you add `--skip-attestation` to accept the hashes alone (needed for releases before v0.1.5).
+`quayflow update` downloads the release's installer (`install.ps1`, or `install.sh` on Linux and macOS), checks it against the release's `SHA256SUMS`, and runs it in update mode. The installer then makes every check of a first install: the SHA-256 hashes, the build-provenance attestation of the release workflow for that tag and commit, and the Mod's source commit. The attestation check needs the GitHub CLI, signed in; without it the update is refused, unless you add `--skip-attestation` to accept the hashes alone (needed for releases before v0.1.5).
 
 An update never runs in the middle of a switch. It stops the engine, replaces the programs, refreshes the PowerShell prompt hook module if you installed it, moves the Mod to the same release, and restarts the engine if it was running. Your consents, PATH and startup setting are kept. A Mod installed from a local folder (a development checkout) is left as it is, with a note. `quayflow update --source <folder>` installs a local release folder (`SHA256SUMS`, `install.ps1` and the programs) and leaves the Mod as it is. Re-running the installer also upgrades. Restart Claude sessions to load the new Mod.
 
@@ -399,15 +399,33 @@ Quayflow works the same way on Linux, with these differences:
 
 If `quayflow` or `claude` is not found right after installing, `~/.local/bin` was created after you signed in: open a new login shell, or run `source ~/.profile`.
 
+## macOS
+
+macOS (Apple silicon and Intel) comes with the next release. It works like Linux, with these differences:
+
+| Topic | Linux | macOS |
+|---|---|---|
+| Program | `quayflow-linux-x86_64` | `quayflow-macos-arm64` (Apple silicon) or `quayflow-macos-x86_64` (Intel), in the same folders as on Linux |
+| Claude's own login | `~/.claude/.credentials.json` | The Keychain item `Claude Code-credentials`; with `CLAUDE_CONFIG_DIR` set, `Claude Code-credentials-` and 8 characters derived from the folder name |
+| A switch | Rewrites the login file | Rewrites the Keychain item through `/usr/bin/security` (the login never appears on a command line), keeps the item's other entries such as MCP logins, and leaves an owner-only copy in `.credentials.json` for about 35 seconds. The copy makes every running session use the new account from its next request; without it a session can take up to 30 seconds, and a retry after a usage limit would still go to the old account |
+| Saved logins | Owner-only files | Owner-only files, as on Linux (not in the Keychain) |
+| Engine start at sign-in | systemd user unit | LaunchAgent `~/Library/LaunchAgents/com.quayflow.engine.plist`. macOS starts it some seconds after you sign in and shows a one-time "App Background Activity" notice (System Settings > General > Login Items & Extensions). The engine must run in your login session to use the Keychain: it cannot switch logins over SSH or as a system service |
+| Sign-in window, Open New Session | Your desktop's terminal | A new Terminal window |
+| Replace Current Session | Not yet | Not yet |
+
+An environment that has no Keychain item yet (a new lane, or a Mac where Claude Code keeps its login in `.credentials.json` because the Keychain refused it) is switched through `.credentials.json`, as on Linux. Claude Code moves it into the Keychain at its next save; deleting a lane removes that item too.
+
+Claude names the Keychain item after the exact text of `CLAUDE_CONFIG_DIR`. `~/work/claude` and `~/work/claude/` are two different items, and setting the variable to `~/.claude` is not the same as leaving it unset. A session started with another spelling than the one Quayflow uses does not follow a switch; `/quay` shows a notice naming the value to start it with.
+
 ## Files and folders
 
-Everything lives in `%LOCALAPPDATA%\Quayflow` (Linux: `~/.local/share/quayflow`, with `/` paths):
+Everything lives in `%LOCALAPPDATA%\Quayflow` (Linux and macOS: `~/.local/share/quayflow`, with `/` paths):
 
 | Path | Content |
 |---|---|
-| `bin\` | `quayflow.exe`, `quayflow-bg.exe` (Linux: `quayflow`) |
+| `bin\` | `quayflow.exe`, `quayflow-bg.exe` (Linux and macOS: `quayflow`) |
 | `config.json` | Groups, projects, modes, tuning, consents. No credentials |
-| `vault\` | Saved logins: encrypted with DPAPI for your Windows user; on Linux owner-only files |
+| `vault\` | Saved logins: encrypted with DPAPI for your Windows user; on Linux and macOS owner-only files |
 | `backups\` | Protected backups of unknown logins taken before a manual switch |
 | `observations.json` | Last usage readings with their times |
 | `journal.jsonl` | Switches, recovery decisions, policy overrides, unresolved operations |

@@ -4,18 +4,18 @@ What Quayflow v0.1 touches on your machine, how it protects saved logins, where 
 
 ## What Quayflow touches
 
-The data folder is `%LOCALAPPDATA%\Quayflow` on Windows and `~/.local/share/quayflow` on Linux.
+The data folder is `%LOCALAPPDATA%\Quayflow` on Windows and `~/.local/share/quayflow` on Linux and macOS (macOS is in the next release).
 
 | Component | Reads | Writes |
 |---|---|---|
-| Engine (`quayflow.exe` on Windows, `quayflow` on Linux) | Claude's login entries (`claudeAiOauth` in `<env>\.credentials.json`, `oauthAccount` in `.claude.json`); session registry `<env>\sessions\*.json`; managed policy ([below](#managed-login-enforcement-and-the-override-setting)); the Claude binary, scanned for the markers it relies on | Those two login entries, by atomic replace under Claude's own locks, leaving every other key unchanged; a session's history copied into the destination environment when you choose Open New Session or Replace (newer history is never overwritten); its own data folder |
+| Engine (`quayflow.exe` on Windows, `quayflow` on Linux and macOS) | Claude's login entries (`claudeAiOauth` in `<env>\.credentials.json`, or on macOS in Claude's Keychain item, [below](#claudes-login-in-the-macos-keychain); `oauthAccount` in `.claude.json`); session registry `<env>\sessions\*.json`; managed policy ([below](#managed-login-enforcement-and-the-override-setting)); the Claude binary, scanned for the markers it relies on | Those two login entries, by atomic replace under Claude's own locks, leaving every other key unchanged (on macOS also a short-lived owner-only copy in `.credentials.json`); a session's history copied into the destination environment when you choose Open New Session or Replace (newer history is never overwritten); its own data folder |
 | Engine, network | Two provider endpoints with each saved account's access token: usage (`/api/oauth/usage`) and profile (`/api/oauth/profile`) on `api.anthropic.com`; the token service (`platform.claude.com/v1/oauth/token`) with an idle account's saved refresh token, only to refresh that saved copy; GitHub Releases for `quayflow update` | Nothing else. No telemetry |
-| Mod (Claude Code plugin) | Per-request results, the session's own rate-limit information, and the identity its request used (an opaque handle and a profile lookup, hashed). On Linux, an interactive session's desktop variables (display, session bus), sent to the engine at the handshake so a sign-in window opens on your desktop; the engine keeps them in memory only | Calls to the engine's loopback API only. It never receives a credential |
-| Command-line tool (`quayflow`) | The data folder, release assets for `quayflow update` | The sign-in startup entry when you turn it on (`quayflow consent signin-startup on`, or the installer's startup option): the `Quayflow` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows, the systemd user unit `~/.config/systemd/user/quayflow.service` on Linux |
+| Mod (Claude Code plugin) | Per-request results, the session's own rate-limit information, and the identity its request used (an opaque handle and a profile lookup, hashed). On Linux, an interactive session's desktop variables (display, session bus), sent to the engine at the handshake so a sign-in window opens on your desktop; the engine keeps them in memory only. The session's `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` as set, sent at the handshake so the engine can tell whether the session reads the Keychain item Quayflow writes (macOS); not logged | Calls to the engine's loopback API only. It never receives a credential |
+| Command-line tool (`quayflow`) | The data folder, release assets for `quayflow update` | The sign-in startup entry when you turn it on (`quayflow consent signin-startup on`, or the installer's startup option): the `Quayflow` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows, the systemd user unit `~/.config/systemd/user/quayflow.service` on Linux, the LaunchAgent `~/Library/LaunchAgents/com.quayflow.engine.plist` on macOS |
 | PowerShell integration (opt-in, Windows) | Its own claim file `handoff\claims\<pid>.json` | Your two PowerShell profiles (a marked block), `CLAUDE_CONFIG_DIR` only for the resumed process |
-| Installer | Release assets, Claude plugin lists | Windows (`install.ps1`): `%LOCALAPPDATA%\Quayflow\bin`, user PATH, Claude plugin and marketplace registration, the startup entry with `-Startup`. Linux (`install.sh`): `~/.local/share/quayflow/bin`, the link `~/.local/bin/quayflow`, Claude plugin and marketplace registration, the systemd user unit with `--startup` |
+| Installer | Release assets, Claude plugin lists | Windows (`install.ps1`): `%LOCALAPPDATA%\Quayflow\bin`, user PATH, Claude plugin and marketplace registration, the startup entry with `-Startup`. Linux and macOS (`install.sh`): `~/.local/share/quayflow/bin`, the link `~/.local/bin/quayflow`, Claude plugin and marketplace registration, the systemd user unit (Linux) or LaunchAgent (macOS) with `--startup`; on macOS it removes the quarantine flag from the program after verifying it |
 
-The engine calls the operating system directly (Windows: DPAPI, file locks, process control; Linux: `/proc`, `flock`, file modes). It does not run PowerShell or other shells. It opens a window only when you ask for one: a sign-in, or Open New Session. It runs as your user without administrator rights. The command-line tool runs a shell only for `quayflow update`, which runs the release's installer with PowerShell (Windows) or `sh` (Linux). Model requests are always made by the unmodified Claude client.
+The engine calls the operating system directly (Windows: DPAPI, file locks, process control; Linux: `/proc`, `flock`, file modes; macOS: `proc_pidinfo`, `flock`, file modes). It does not run PowerShell or other shells. On macOS it runs `/usr/bin/security` for Claude's Keychain item, `/bin/launchctl` for the LaunchAgent and `/usr/bin/open` for a Terminal window. It opens a window only when you ask for one: a sign-in, or Open New Session. It runs as your user without administrator rights. The command-line tool runs a shell only for `quayflow update`, which runs the release's installer with PowerShell (Windows) or `sh` (Linux and macOS). Model requests are always made by the unmodified Claude client.
 
 ## The vault on Windows (DPAPI)
 
@@ -41,6 +41,21 @@ On Linux each saved login is a file `~/.local/share/quayflow/vault/<account-id>.
 It protects against other (non-root) users of the machine. It does not protect against malware running as you, root, or an offline copy of the disk (use disk encryption for that). An encrypted vault through the desktop keyring (Secret Service) is planned; it is not used now because unattended jobs on a server usually have no unlocked keyring, and a vault that fails when nobody is signed in would break them.
 
 Files Quayflow replaces atomically (saved logins, Claude's login files, its own settings) keep the permissions of the file they replace, or are created `0600`. A switch therefore never leaves Claude's `.credentials.json` readable by others. Other files, such as logs and the journal, are created with your umask, inside the `0700` data folder.
+
+## The vault on macOS
+
+On macOS the vault is the same as on Linux: owner-only files (`0600`) in a `0700` data folder, **not encrypted**. Claude Code itself keeps its login in the Keychain there, so on macOS the vault is a weaker copy than Claude's own. It protects against other (non-root) users of the Mac, not against malware running as you, root, or an offline copy of the disk (FileVault covers that). A vault in the Keychain, under Quayflow's own item, is planned.
+
+## Claude's login in the macOS Keychain
+
+On macOS Claude Code keeps its login in a generic-password item of your login Keychain: `Claude Code-credentials`, or `Claude Code-credentials-` and 8 characters of a hash of `CLAUDE_CONFIG_DIR` when that variable is set. The item holds one JSON object: the login (`claudeAiOauth`) and other entries such as MCP logins.
+
+- **Access.** Quayflow reads and writes the item only through `/usr/bin/security`, the tool Claude itself uses and the one the item's access list trusts. It never uses the Security framework: an update through it would move the item out of the `apple-tool:` partition, and Claude would then meet a Keychain dialog. The login is passed on standard input (`security -i`), never on a command line, where other processes could see it; a login too long for one input line is refused rather than passed as an argument.
+- **Writes.** A switch replaces only `claudeAiOauth` and keeps every other entry, under Claude's own locks, then reads the item back and compares. A call that takes over 5 seconds (a Keychain dialog waiting) is ended and the switch is reported as not done.
+- **The copy in `.credentials.json`.** Right after writing the item, Quayflow writes the same JSON to `<env>/.credentials.json` (`0600`, atomic replace). Claude checks that file before each request; a change makes it drop its 30-second Keychain cache, so running sessions use the new account at once, and a retry after a usage limit goes to the new account. The file holds the real login rather than an empty object, so a Keychain read that fails meanwhile still finds the right login. The engine removes it after 35 seconds, under Claude's storage lock, and only if its content is still what Quayflow wrote or equals the Keychain item: a login Claude saved there itself (when the Keychain refused it) is never removed. For those 35 seconds the login exists as an owner-only file, as it always does on Linux.
+- **Only your own item.** The bare item name is used only for your real `~/.claude`, with your home folder taken from the system's account record, not from `$HOME`; any other folder is never mapped to it. `QUAYFLOW_KEYCHAIN=off` keeps Quayflow out of the Keychain entirely (file-backed environments only).
+- **Sign-in and lanes.** `claude auth login` in a temporary folder writes its own Keychain item; Quayflow reads the login from it and removes it when the sign-in is saved or cancelled. Deleting a lane removes the lane's item after keeping its newest token in the vault.
+- **The session.** The engine must run in your login session (as it does when a Claude session or the LaunchAgent starts it) to reach the Keychain; over SSH or as a system service the Keychain is not available.
 
 ## Tokens and refresh
 
@@ -75,7 +90,10 @@ Organizations can enforce which login Claude Code accepts, through `forceLoginOr
 - Windows: registry policy `HKLM\SOFTWARE\Policies\ClaudeCode` and `HKCU\SOFTWARE\Policies\ClaudeCode`;
 - Windows: `C:\Program Files\ClaudeCode\managed-settings.json` and `managed-settings.d\*.json`;
 - Linux: `/etc/claude-code/managed-settings.json` and `managed-settings.d/*.json`;
+- macOS: `/Library/Application Support/ClaudeCode/managed-settings.json` and `managed-settings.d/*.json`;
 - server-managed settings that Claude has stored in the environment.
+
+On macOS Claude Code also reads configuration profiles (`/Library/Managed Preferences/<user>/com.anthropic.claudecode.plist` and `/Library/Managed Preferences/com.anthropic.claudecode.plist`). Quayflow does not read those yet, so on a Mac whose organization sets the login policy only through a configuration profile, Quayflow does not see it; Claude still enforces it, and a switch to an account it refuses fails at the next request.
 
 It checks again after each policy fetch (FR-06a).
 
@@ -96,11 +114,11 @@ Same-terminal replacement exists on Windows only (PowerShell). The PowerShell ho
 
 ## Release integrity
 
-Releases are reproducible, hashed and, from v0.1.5 on, attested, but **not code-signed** in v0.1 (no Authenticode signature on Windows, no signature on Linux). See [Verifying a release](verify-release.md).
+Releases are reproducible, hashed and, from v0.1.5 on, attested, but **not code-signed** in v0.1 (no Authenticode signature on Windows, no signature on Linux, only the linker's ad-hoc signature on macOS). See [Verifying a release](verify-release.md).
 
 The installer always checks the SHA-256 hashes. It also requires a build-provenance attestation made by this repository's release workflow (`.github/workflows/release.yml`) for the release tag and commit, verified with a signed-in GitHub CLI. If it cannot verify one, it refuses to install, unless you pass `-SkipAttestation` (`install.ps1`) or `--skip-attestation` (`install.sh`). That option leaves the hash check as the only protection. v0.1.0 to v0.1.4 were built while the repository was private. They are not attested and need that option. The Mod is added from the release tag and refused if the checkout is not at the commit the release records in `SOURCE_COMMIT`; the gaps that remain are in [Known limits](known-limits.md#distribution).
 
-`quayflow update` downloads the release's installer (`install.ps1` on Windows, `install.sh` on Linux), checks it against `SHA256SUMS`, and runs it, so an update makes the installer's full checks. Like the installer, it refuses when the attestation cannot be verified, unless `--skip-attestation` is given.
+`quayflow update` downloads the release's installer (`install.ps1` on Windows, `install.sh` on Linux and macOS), checks it against `SHA256SUMS`, and runs it, so an update makes the installer's full checks. Like the installer, it refuses when the attestation cannot be verified, unless `--skip-attestation` is given.
 
 The release workflow pins every third-party GitHub Action to a full commit SHA and checks out without keeping the job token in the git configuration.
 

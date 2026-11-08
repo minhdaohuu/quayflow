@@ -11,8 +11,8 @@ Read `CHANGELOG.md` first for what changed recently; it is kept accurate.
 | `crates/qf-model` | Shared types: config (`Tuning` defaults), API v1 request/response structs, time helpers |
 | `crates/qf-policy` | Pure decisions: eligibility and its explanations, proactive switch, recovery target, effective mode |
 | `crates/qf-provider` | Usage and profile API, poll `Schedule` (backoff, slow pace after a 429), idle-token refresh |
-| `crates/qf-vault` | Vault of saved logins: DPAPI on Windows, owner-only files on Linux (`OwnerOnly`); `atomic_write` keeps file modes |
-| `crates/qf-adapter` | Claude environment files: read/write login under Claude's own locks |
+| `crates/qf-vault` | Vault of saved logins: DPAPI on Windows, owner-only files on Linux and macOS (`OwnerOnly`); `atomic_write` keeps file modes |
+| `crates/qf-adapter` | Claude environment files: read/write login under Claude's own locks; `keychain.rs` and `login.rs` `Store` for Claude's macOS Keychain item |
 | `crates/qf-engine` | The engine: state, observe loop, transitions (switches), recovery, journal, HTTP API (`http.rs` routes) |
 | `crates/quayflow` | CLI `quayflow.exe` (`main.rs` HELP lists every command) and `quayflow-bg.exe`; `last.rs` = `quayflow last` |
 | `mod/quayflow/hooks` | The Mod (Claude Code plugin, TypeScript): `register.tsx` hooks, `step.ts` request hook and recovery, `engine.ts` link/handshake, `watcher.ts` event long-poll and status line, `commands.ts` `/quay`, `pane.tsx`/`flows.tsx`/`review.tsx` the pane, `ui.tsx` design kit, `chart.ts` Raster graphics |
