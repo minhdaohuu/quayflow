@@ -240,6 +240,7 @@ export type LaneView = {
   name: string
   configDir: string
   live?: AccountId | null
+  liveLabel?: string | null
   linksOk: boolean
   linkDetail: string[]
   canaryPassed: boolean

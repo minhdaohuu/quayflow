@@ -248,7 +248,7 @@ pub fn explain_all(ctx: &Ctx) -> Vec<(AccountId, Result<String, Exclusion>)> {
                 Ok(format!(
                     "{:.0}% {} ({} old)",
                     w.pct,
-                    w.key,
+                    qf_model::window_name(&w.key),
                     fmt_age(o.age_ms(ctx.now) / 1000)
                 ))
             })();
@@ -333,7 +333,8 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
         let until = ctx.pin.map(|p| qf_model::time::to_rfc3339(p.until)).unwrap_or_default();
         return Proactive::None(format!(
             "{live_label} at {:.0}% {}, pinned by you until {until} (/quay unpin)",
-            live_w.pct, live_w.key
+            live_w.pct,
+            qf_model::window_name(&live_w.key)
         ));
     }
 
@@ -351,7 +352,7 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
                         reason: format!(
                             "home account {home_label} has room again: {:.0}% {} ({} old)",
                             hw.pct,
-                            hw.key,
+                            qf_model::window_name(&hw.key),
                             fmt_age(ho.age_ms(ctx.now) / 1000)
                         ),
                         return_home: true,
@@ -365,7 +366,7 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
         return Proactive::None(format!(
             "{live_label} at {:.0}% {} ({} old), below {threshold:.0}%",
             live_w.pct,
-            live_w.key,
+            qf_model::window_name(&live_w.key),
             fmt_age(live_obs.age_ms(ctx.now) / 1000)
         ));
     }
@@ -373,7 +374,7 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
         return Proactive::None(format!(
             "{live_label} at {:.0}% {}; cooldown {} s after the last switch",
             live_w.pct,
-            live_w.key,
+            qf_model::window_name(&live_w.key),
             left / 1000
         ));
     }
@@ -382,7 +383,7 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
         None => Proactive::None(format!(
             "{live_label} at {:.0}% {}, but no approved account has {:.0}% or less with a fresh observation; continuing",
             live_w.pct,
-            live_w.key,
+            qf_model::window_name(&live_w.key),
             threshold - margin
         )),
         Some(c) => {
@@ -392,9 +393,9 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
                 reason: format!(
                     "{live_label} at {:.0}% {} >= {threshold:.0}%; {to_label} at {:.0}% {} ({} old)",
                     live_w.pct,
-                    live_w.key,
+                    qf_model::window_name(&live_w.key),
                     c.pct,
-                    c.window,
+                    qf_model::window_name(&c.window),
                     fmt_age(c.age_s)
                 ),
                 return_home: false,
@@ -437,7 +438,12 @@ pub fn confirm_limit(ctx: &Ctx, session_pcts: &[(String, f64)], simulated: bool)
     match ctx.fresh_binding(live) {
         Ok((o, w)) => LimitEvidence {
             confirmed: w.pct >= hard,
-            detail: format!("{:.0}% {} ({} old)", w.pct, w.key, fmt_age(o.age_ms(ctx.now) / 1000)),
+            detail: format!(
+                "{:.0}% {} ({} old)",
+                w.pct,
+                qf_model::window_name(&w.key),
+                fmt_age(o.age_ms(ctx.now) / 1000)
+            ),
         },
         Err(e) => LimitEvidence {
             confirmed: false,

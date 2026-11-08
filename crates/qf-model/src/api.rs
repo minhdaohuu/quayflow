@@ -220,6 +220,9 @@ pub struct LaneView {
     pub config_dir: String,
     #[serde(default)]
     pub live: Option<AccountId>,
+    /// The live account's label, for people (CLI and pane).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_label: Option<String>,
     pub links_ok: bool,
     pub link_detail: Vec<String>,
     pub canary_passed: bool,

@@ -145,7 +145,10 @@ pub fn text(v: &Value) -> String {
         let acct = l.get("account").and_then(Value::as_str).unwrap_or("the live account");
         let pct = l.get("pct").and_then(Value::as_f64).unwrap_or(0.0);
         let win = l.get("window").and_then(Value::as_str).unwrap_or("?");
-        out.push_str(&format!("\n  limit:        {acct} at {pct:.0}% {win}"));
+        out.push_str(&format!(
+            "\n  limit:        {acct} at {pct:.0}% {}",
+            qf_model::window_name(win)
+        ));
         if let Some(r) = l.get("resetsAt").and_then(Value::as_str) {
             out.push_str(&format!(" (resets {r})"));
         }

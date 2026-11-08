@@ -19,6 +19,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - Linux: the sign-in window's link could open in LibreOffice instead of the browser (the window lacked the desktop's `XDG_DATA_DIRS`, where a snap browser is listed). The desktop's own variables are now passed on. The window also stays open after `claude auth login` and says whether the sign-in finished.
 - After `quayflow stop` from a terminal, the status line said "engine not running" instead of "engine stopped by you (/quay start)" in sessions that were already open.
 - An update from a local build says the Mod was left as it is, instead of "Skipped the Claude Code plugin (-NoPlugin)".
+- A per-model weekly limit is written "7d Fable" in reasons, `quayflow status` and `quayflow last`, instead of the internal key "7d:Fable".
+- A switch is told once in the transcript: the extra "Session … now runs on … (verified on its request)" note is gone. The status line shows the account; a session that does not adopt a switch still gets a notice.
+- `quayflow group tuning` refusing a threshold at or below the margin now names both values and says to pass `--margin` with a lower value.
+- `quayflow lanes list` names the lane's live account by its label instead of its id.
 
 ## [0.1.4] - 2026-11-07
 

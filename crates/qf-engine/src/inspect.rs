@@ -79,7 +79,7 @@ impl Engine {
                         (Some(o), Some(w)) => format!(
                             "live here: {:.0}% {} ({} old)",
                             w.pct,
-                            w.key,
+                            qf_model::window_name(&w.key),
                             qf_policy::fmt_age(o.age_ms(now) / 1000)
                         ),
                         _ => "live here; usage not observed yet".into(),
@@ -121,7 +121,7 @@ impl Engine {
                     Ok((o, w)) => format!(
                         "{:.0}% {} ({} old)",
                         w.pct,
-                        w.key,
+                        qf_model::window_name(&w.key),
                         qf_policy::fmt_age(o.age_ms(now) / 1000)
                     ),
                     Err(e) => e.explain(),

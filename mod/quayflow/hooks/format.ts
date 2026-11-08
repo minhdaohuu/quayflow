@@ -481,11 +481,15 @@ export function announcements(s: StateView): { id: string; text: string; toast?:
   return out
 }
 
-/** Engine event kinds whose text is news for the person: told once in the transcript. */
-const ANNOUNCED_EVENTS = new Set(['notice', 'switched', 'adoption'])
+/**
+ * Engine event kinds whose text is news for the person: told once in the transcript. A
+ * verified adoption is not: the switch was already told and the status line shows the account
+ * (a session that did not adopt it gets a notice).
+ */
+const ANNOUNCED_EVENTS = new Set(['notice', 'switched'])
 
 /**
- * Engine events to tell once (notices, switches, adoptions), for this session's
+ * Engine events to tell once (notices, switches), for this session's
  * environment, from after `since` (the session's start): never older history, never a
  * text-less event (`usage`). Keyed by the engine run and the event's sequence.
  */

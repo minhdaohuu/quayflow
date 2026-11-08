@@ -22,7 +22,7 @@ whether you are at the keyboard or a `claude -p` job is running on its own.
 > [!IMPORTANT]
 > **You are responsible for complying with your provider's terms and your organization's rules**, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is an independent open-source project and is **not affiliated with or endorsed by Anthropic**.
 
-**Status:** v0.1.4, public pilot. Quayflow targets every platform Claude Code runs on: **Windows x64 and Linux x86_64 now** (Linux from v0.1.5), macOS next. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts; see [acceptance results](docs/acceptance.md) for what is proven and what is still open.
+**Status:** v0.1.4, public pilot. Quayflow targets every platform Claude Code runs on: **Windows x64 and Linux x86_64 now** (Linux from v0.1.5), macOS next. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts on Windows. **Linux is not fully tested:** switching and headless jobs ran with real accounts on one Ubuntu machine, but recovery from a real usage limit and an install from a published release have not. See [acceptance results](docs/acceptance.md) for what is proven and what is still open.
 
 ## What and why
 
@@ -373,7 +373,7 @@ Without Visual Studio Build Tools, set `$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-p
 
 ## Roadmap
 
-- **v0.1 (now, MVP):** Windows x64 and Linux x86_64 public pilot. Switching, real usage-limit recovery and headless jobs are proven with real accounts; the remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
+- **v0.1 (now, MVP):** Windows x64 and Linux x86_64 public pilot. Switching, real usage-limit recovery and headless jobs are proven with real accounts on Windows; Linux is not fully tested yet. The remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
 - **Next:** lanes for unattended jobs, with their own mode, so background jobs can switch without moving your interactive sessions.
 - **Later:** macOS (Keychain); an encrypted Linux vault through the desktop keyring where one runs; same-terminal Replace for bash and zsh; Authenticode signing.
 

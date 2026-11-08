@@ -153,6 +153,11 @@ impl Observation {
     }
 }
 
+/// A usage window's key as people read it: "5h", "7d", "7d Opus" (the key "7d:Opus").
+pub fn window_name(key: &str) -> String {
+    key.replacen(':', " ", 1)
+}
+
 /// A per-model window label ("Opus", "Sonnet 4.6") matches a model id ("claude-opus-5-5")
 /// when the window's family word appears in the id.
 pub fn model_matches(window_model: &str, model_id: &str) -> bool {

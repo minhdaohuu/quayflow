@@ -275,7 +275,7 @@ describe('announcements of engine events', () => {
     { seq: 48, ts: NOW + 9_500, kind: 'state', env: null, text: 'Pin cleared.' },
   ]
 
-  test('each notice, switch and adoption once; no history, no usage, no other environment', async ($, on) => {
+  test('each notice and switch once; no adoption, no history, no usage, no other environment', async ($, on) => {
     // The engine answers the same batch to every poll: the Mod still tells each event once.
     const w = world(on, { routes: { '/v1/events': { seq: 48, events: batch } } })
     await start($, w, true)
@@ -285,7 +285,7 @@ describe('announcements of engine events', () => {
     const of = (t: string) => logs.filter(l => l.includes(t))
     expect(of('The login changed outside Quayflow to personal.')).toEqual(['Quayflow: The login changed outside Quayflow to personal.'])
     expect(of('Switched to personal')).toHaveLength(1)
-    expect(of('Session S2 now runs on personal')).toHaveLength(1)
+    expect(of('Session S2 now runs on personal')).toHaveLength(0)
     expect(of('Old news')).toHaveLength(0)
     expect(of('Another environment')).toHaveLength(0)
     expect(of('Pin cleared')).toHaveLength(0)

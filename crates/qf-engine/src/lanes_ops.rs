@@ -23,6 +23,7 @@ impl Engine {
                     name: id.0.clone(),
                     config_dir: st.env.config_dir.display().to_string(),
                     live: st.live.clone(),
+                    live_label: st.live.as_ref().map(|a| inner.config.label(a)),
                     links_ok: links.iter().all(|l| l.ok),
                     link_detail: links.iter().map(|l| format!("{}: {}", l.item, l.detail)).collect(),
                     canary_passed: st.lane_canary,

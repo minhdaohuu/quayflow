@@ -134,7 +134,7 @@ pub fn status(v: &Value) {
                 format!(
                     "{:.0}% {} ({} old)",
                     b["pct"].as_f64().unwrap_or(0.0),
-                    b["key"].as_str().unwrap_or("?"),
+                    qf_model::window_name(b["key"].as_str().unwrap_or("?")),
                     age(u["ageS"].as_i64().unwrap_or(0))
                 )
             }
@@ -210,10 +210,11 @@ pub fn lanes(v: &Value) {
         outln!(
             "{} · {} · links {} · check {} · {} session(s)",
             l["name"].as_str().unwrap_or("?"),
-            l["live"]
-                .as_str()
-                .map(|x| format!("live #{x}"))
-                .unwrap_or_else(|| "no login".into()),
+            match (l["liveLabel"].as_str(), l["live"].as_str()) {
+                (Some(label), _) => format!("live: {label}"),
+                (None, Some(x)) => format!("live #{x}"),
+                _ => "no login".into(),
+            },
             if l["linksOk"] == true { "ok" } else { "need repair" },
             if l["canaryPassed"] == true {
                 "passed"

@@ -215,7 +215,7 @@ impl Engine {
                     evidence.detail,
                     inner.config.label(&c.id),
                     c.pct,
-                    c.window,
+                    qf_model::window_name(&c.window),
                     qf_policy::fmt_age(c.age_s)
                 );
                 (c.id, true, reason)

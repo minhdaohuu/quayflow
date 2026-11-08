@@ -353,8 +353,8 @@ impl Config {
             }
             if !(g.margin >= 0.0 && g.margin < g.threshold) {
                 return Err(format!(
-                    "group \"{}\": margin must be 0 or more and below the threshold",
-                    g.name
+                    "group \"{}\": margin {:.0} must be 0 or more and below the threshold {:.0} (pass --margin with a lower value)",
+                    g.name, g.margin, g.threshold
                 ));
             }
             for id in &g.accounts {
