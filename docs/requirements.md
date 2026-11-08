@@ -1,10 +1,10 @@
-# Quayflow v0.1 requirements
+# Quayflow requirements
 
-The functional requirements Quayflow v0.1 is built and tested against. Code comments, the technical specification and the acceptance table refer to these IDs (FR-xx; acceptance scenarios AC-xx are listed in [acceptance.md](acceptance.md)).
+The functional requirements Quayflow is built and tested against. Code comments, the technical specification and the acceptance table refer to these IDs (FR-xx; acceptance scenarios AC-xx are listed in [acceptance.md](acceptance.md)).
 
 ## Platform scope
 
-Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. v0.1 ships for Windows 10/11 x64, Linux x86_64 and, from v0.1.6, macOS; the requirements below name Windows mechanisms (DPAPI, PowerShell, `%LOCALAPPDATA%`). Linux meets them with owner-only `0600` files for the vault (the same protection Claude Code gives its own login file), `~/.local/share/quayflow`, a systemd user unit and `install.sh`; same-terminal replacement is not available on Linux yet. macOS (Apple silicon and Intel, from v0.1.6) uses the Linux layout, owner-only vault files and `install.sh`, a LaunchAgent for sign-in startup, and Claude Code's own Keychain item for the live login ([tech spec §1b](tech-spec.md#1b-macos)); its vault is not in the Keychain yet, and same-terminal replacement is not available there either. Linux and macOS are not fully tested; see [Known limits](known-limits.md#platform-and-scope). Later platforms meet the same requirements with their own equivalents: OS credential protection for the vault, the platform's shell for same-terminal replacement and the platform's per-user data folder. New code should keep platform-specific parts behind the existing module boundaries (vault, adapter paths and locks, shell integration, installer) so that the policy, engine and Mod stay shared.
+Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. It ships for Windows 10/11 x64, Linux x86_64 and, from v0.1.6, macOS; the requirements below name Windows mechanisms (DPAPI, PowerShell, `%LOCALAPPDATA%`). Linux meets them with owner-only `0600` files for the vault (the same protection Claude Code gives its own login file), `~/.local/share/quayflow`, a systemd user unit and `install.sh`; same-terminal replacement is not available on Linux yet. macOS (Apple silicon and Intel, from v0.1.6) uses the Linux layout, owner-only vault files and `install.sh`, a LaunchAgent for sign-in startup, and Claude Code's own Keychain item for the live login ([tech spec §1b](tech-spec.md#1b-macos)); its vault is not in the Keychain yet, and same-terminal replacement is not available there either. Linux and macOS are not fully tested; see [Known limits](known-limits.md#platform-and-scope). Later platforms meet the same requirements with their own equivalents: OS credential protection for the vault, the platform's shell for same-terminal replacement and the platform's per-user data folder. New code should keep platform-specific parts behind the existing module boundaries (vault, adapter paths and locks, shell integration, installer) so that the policy, engine and Mod stay shared.
 
 ## Onboarding and accounts
 
@@ -67,7 +67,7 @@ Quayflow targets every platform Claude Code runs on: Windows, macOS and Linux. v
 | FR-24 | Per-version compatibility: a static check of each Claude version, every real switch verified, the oldest running version governs; failures turn in-place switching off for that version. |
 | FR-25 | Original code under MIT; engine in Rust as a single executable, Mod in TypeScript; reproducible builds with published hashes. |
 
-## Release conditions for v0.1
+## Release conditions for 1.0
 
 - All acceptance scenarios pass against the product build ([acceptance.md](acceptance.md)).
 - A real usage-limit failure is observed end to end, and Claude's own retry does not compete with Quayflow's.

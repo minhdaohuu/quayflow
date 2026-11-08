@@ -1,6 +1,6 @@
 # Quayflow Mod
 
-The Claude Code (2.1.316) side of Quayflow, version 0.1.6. It runs inside every Claude session and talks to the per-user engine (`quayflow.exe`; `quayflow` on Linux and macOS) over its loopback API v1 (`docs/tech-spec.md` §6). It never reads or writes a credential.
+The Claude Code (2.1.316) side of Quayflow, version 0.2.0. It runs inside every Claude session and talks to the per-user engine (`quayflow.exe`; `quayflow` on Linux and macOS) over its loopback API v1 (`docs/tech-spec.md` §6). It never reads or writes a credential.
 
 What it does:
 
@@ -45,7 +45,7 @@ The pane also uses `GET /v1/explain`, `/v1/identity`, `/v1/handoff/check`, `/v1/
 
 | Path | Content |
 |---|---|
-| `.claude-plugin/plugin.json` | Manifest (`quayflow` 0.1.6), names the type contract and the `statusLineUsage` option |
+| `.claude-plugin/plugin.json` | Manifest (`quayflow` 0.2.0), names the type contract and the `statusLineUsage` option |
 | `hooks/hooks.json` | Names the hooks module `./register.tsx` |
 | `hooks/register.tsx` | Entry: `session.start`, `session.end` (resume and `/clear`), `turn.step`, `command.run` (`/quay`), `ui.render` (pane `quay`) |
 | `hooks/context.ts` | Session context, `$.state` atoms (all reads and writes), headless UI gates |
@@ -110,7 +110,7 @@ Once `.claude-plugin/types/` exists, `tsc -p mod/quayflow` also works with the `
 
 ## Not implemented in v0.1
 
-- **Pre-request hold.** A bounded hold at the request boundary is optional. The engine's credential swap is atomic between requests, so v0.1 has no hold: the request hook never delays a request before it is sent.
+- **Pre-request hold.** A bounded hold at the request boundary is optional. The engine's credential swap is atomic between requests, so the Mod has no hold: the request hook never delays a request before it is sent.
 
 ## Testing a usage limit by hand
 

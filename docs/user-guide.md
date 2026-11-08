@@ -1,6 +1,6 @@
 # Quayflow user guide
 
-Quayflow v0.1.6. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64, Linux x86_64 and, from v0.1.6, macOS (Apple silicon and Intel). Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
+Quayflow v0.2.0. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64, Linux x86_64 and, from v0.1.6, macOS (Apple silicon and Intel). Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
 
 Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. macOS is not fully tested either; on an Apple silicon Mac, switching, lanes and recovery from a simulated limit passed with real accounts, while recovery from a real limit, Open New Session, Intel Macs and an install from a published release have not been run. See [acceptance results](acceptance.md).
 
@@ -11,7 +11,7 @@ Contents: [Requirements](#requirements) · [Install](#install) · [First use](#f
 ## Requirements
 
 - Windows 10 or 11, x64; or Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later); or macOS on Apple silicon or Intel (from v0.1.6).
-- Claude Code installed and working (`claude --version`). Quayflow v0.1.6 was validated against Claude Code 2.1.316 on Windows and 2.1.319 on Linux and macOS; other versions are checked automatically (see [Version checks](#version-checks)).
+- Claude Code installed and working (`claude --version`). Quayflow was validated against Claude Code 2.1.316 on Windows and 2.1.319 on Linux and macOS; other versions are checked automatically (see [Version checks](#version-checks)).
 - Windows: Windows PowerShell 5.1 or PowerShell 7 for the installer. Linux and macOS: `sh`, `curl`, `sha256sum` (or `shasum` on macOS), and `python3` for the Mod step. No administrator rights.
 - Claude subscription logins (claude.ai sign-in). Quayflow never switches a subscription session to API-key billing.
 
@@ -211,7 +211,7 @@ When a request ends with no response, the Mod asks the engine whether the accoun
 
 - In **Automatic** mode Quayflow switches to the eligible account in the group with the most remaining allowance and retries the same request **once**, in the same process. When several sessions fail at once, they share one switch.
 - In **Suggest** mode it records a suggestion and does not switch.
-- **When every account in the group is exhausted**, Quayflow switches to the account that becomes available soonest, then leaves the rest to Claude. Claude reports the limit, waits, and resumes automatically if your Claude settings allow it; otherwise the job ends with Claude's own result. Quayflow adds no wait and no time limit of its own. If another account frees up first, Automatic mode switches to it. (Whether Claude's waiting client picks up a switch made during the wait is a v0.1 release condition still being confirmed. A new `claude -p` started after the wait does pick it up; see [Headless jobs](#headless-jobs-claude--p).)
+- **When every account in the group is exhausted**, Quayflow switches to the account that becomes available soonest, then leaves the rest to Claude. Claude reports the limit, waits, and resumes automatically if your Claude settings allow it; otherwise the job ends with Claude's own result. Quayflow adds no wait and no time limit of its own. If another account frees up first, Automatic mode switches to it. (Whether Claude's waiting client picks up a switch made during the wait is a condition for 1.0 still being confirmed. A new `claude -p` started after the wait does pick it up; see [Headless jobs](#headless-jobs-claude--p).)
 
 Limits: one switch and at most one retry per failed request. Cancellation is never recovered. Quayflow never replays completed actions (edits, commits, messages, deployments) and never starts a second process for a job that has ended.
 

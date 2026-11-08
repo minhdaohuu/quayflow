@@ -1,6 +1,6 @@
-# Acceptance status (Quayflow v0.1)
+# Acceptance status
 
-The [release conditions](requirements.md#release-conditions-for-v01) require recorded results against a **release build**. This page keeps four kinds of evidence apart. They are not interchangeable.
+The [release conditions](requirements.md#release-conditions-for-10) require recorded results against a **release build**. This page keeps four kinds of evidence apart. They are not interchangeable.
 
 ## Kinds of evidence
 
@@ -52,7 +52,7 @@ macOS 27.2 on Apple silicon, Claude Code 2.1.319, a **local build of the macOS w
 
 ### Still open
 
-- Every result above ran on a local build. The scenarios must be repeated on a release build before v0.1 leaves the pilot.
+- Every result above ran on a local build. The scenarios must be repeated on a release build before 1.0.
 - Claude's own in-process usage-limit wait adopting a login switched during the wait (AC-23).
 
 ## Scenarios
@@ -112,6 +112,6 @@ macOS 27.2 on Apple silicon, Claude Code 2.1.319, a **local build of the macOS w
 | Claude's own usage-limit wait adopts a login switched during the wait | Open |
 | Claude reads and writes correctly through lane links | Passed on local builds: Windows (2026-11-03), Linux and macOS (2026-11-08), `real-lanes.ps1` 8/8 each; repeat on a release build |
 | Crash reconciliation, version gating, dead-refresh-token handling built and passing | Built; logic passes (dead refresh token of an idle account also in Simulation); real runs open |
-| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (Linux programs since v0.1.5, macOS programs since v0.1.6; latest v0.1.6); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attested from v0.1.5: on 2026-11-08 `gh attestation verify` passed for `quayflow.exe`, `quayflow-linux-x86_64` and `install.sh` of v0.1.5, with the release workflow as signer, the tag as source ref and `SOURCE_COMMIT` as source digest. For v0.1.6 the release workflow's verify job passed `gh attestation verify` for every asset, including both macOS programs (run 42494292540). v0.1.0 to v0.1.4 were built while the repository was private and are not attested |
+| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (Linux programs since v0.1.5, macOS programs since v0.1.6; latest v0.2.0); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attested from v0.1.5: on 2026-11-08 `gh attestation verify` passed for `quayflow.exe`, `quayflow-linux-x86_64` and `install.sh` of v0.1.5, with the release workflow as signer, the tag as source ref and `SOURCE_COMMIT` as source digest. For v0.1.6 the release workflow's verify job passed `gh attestation verify` for every asset, including both macOS programs (run 42494292540). v0.1.0 to v0.1.4 were built while the repository was private and are not attested |
 | Disclaimer published | Done (README, installer, onboarding) |
 | Managed-login override documented with its risk | Done (`docs/security.md`); override not implemented in this build |

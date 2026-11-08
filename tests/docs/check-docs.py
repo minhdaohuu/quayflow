@@ -6,13 +6,76 @@
 - No phrase that only made sense before a release ("next release", "not released yet").
 - Platform lists name macOS too: "Windows and Linux" only on a line that also says macOS or
   "every platform".
-Usage: python3 tests/docs/check-docs.py
+- Each release's version follows the CHANGELOG headings of that release (see CONTRIBUTING.md#versioning),
+  and Cargo.toml has the newest released version.
+Usage: python3 tests/docs/check-docs.py          (all checks)
+       python3 tests/docs/check-docs.py --next   (prints the version the next release must have)
 """
 import json, os, re, subprocess, sys, tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(ROOT)
 problems = []
+
+# Versioning (CONTRIBUTING.md#versioning): the CHANGELOG decides the next version.
+# Before 1.0: Added, Changed, Deprecated or Removed -> minor; only Fixed or Security -> patch.
+# From 1.0: Removed or a "**Breaking:**" entry -> major; Added, Changed or Deprecated -> minor;
+# otherwise patch. Versions up to 0.1.6 predate this rule.
+GRANDFATHERED = (0, 1, 6)
+
+
+def changelog_sections():
+    sections, cur = [], None
+    for line in open("CHANGELOG.md", encoding="utf-8"):
+        m = re.match(r"^## \[([^\]]+)\]", line)
+        if m:
+            cur = {"name": m.group(1), "kinds": set(), "breaking": False}
+            sections.append(cur)
+        elif cur and (k := re.match(r"^### (\w+)", line)):
+            cur["kinds"].add(k.group(1))
+        elif cur and re.match(r"^- \*\*Breaking:\*\*", line):
+            cur["breaking"] = True
+    return sections
+
+
+def bump(prev, kinds, breaking):
+    major, minor, patch = prev
+    if major == 0:
+        feature = breaking or bool(kinds & {"Added", "Changed", "Deprecated", "Removed"})
+        return (0, minor + 1, 0) if feature else (0, minor, patch + 1)
+    if breaking or "Removed" in kinds:
+        return (major + 1, 0, 0)
+    if kinds & {"Added", "Changed", "Deprecated"}:
+        return (major, minor + 1, 0)
+    return (major, minor, patch + 1)
+
+
+def vtuple(s):
+    return tuple(int(x) for x in s.split("."))
+
+
+def vstr(t):
+    return ".".join(map(str, t))
+
+
+sections = changelog_sections()
+released = [s for s in sections if re.fullmatch(r"\d+\.\d+\.\d+", s["name"])]
+unreleased = next((s for s in sections if s["name"] == "Unreleased"), None)
+if "--next" in sys.argv:
+    # Prints the version the next release must have, from the [Unreleased] headings.
+    if not unreleased or not unreleased["kinds"]:
+        print("nothing under [Unreleased]: no release needed")
+        sys.exit(1)
+    print(vstr(bump(vtuple(released[0]["name"]), unreleased["kinds"], unreleased["breaking"])))
+    sys.exit(0)
+for newer, older in zip(released, released[1:]):
+    new, old = vtuple(newer["name"]), vtuple(older["name"])
+    if new <= GRANDFATHERED:
+        continue
+    want = bump(old, newer["kinds"], newer["breaking"])
+    if new != want:
+        kinds = ", ".join(sorted(newer["kinds"])) + (", Breaking" if newer["breaking"] else "")
+        problems.append(f"CHANGELOG.md: [{newer['name']}] follows {older['name']} with {kinds}: it must be {vstr(want)} (CONTRIBUTING.md#versioning)")
 
 
 def tracked(pattern):
@@ -80,6 +143,8 @@ places = {
     "mod/quayflow/README.md": (re.search(r"version (\d+\.\d+\.\d+)", open("mod/quayflow/README.md").read()) or [None, None])[1],
     "mod/quayflow/tests/quayflow.test.ts": (re.search(r"modVersion: '([^']+)'", open("mod/quayflow/tests/quayflow.test.ts").read()) or [None, None])[1],
 }
+if released and version != released[0]["name"]:
+    problems.append(f"Cargo.toml: version {version}, the newest CHANGELOG release is {released[0]['name']}")
 for where, v in places.items():
     if v != version:
         problems.append(f"{where}: version {v}, Cargo.toml says {version}")

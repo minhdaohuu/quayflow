@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest release (currently v0.1.6) receives security fixes during the 0.x series.
+Only the latest release (currently v0.2.0) receives security fixes during the 0.x series.
 
 ## Reporting a vulnerability
 

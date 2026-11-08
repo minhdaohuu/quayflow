@@ -29,7 +29,7 @@ The installer checks (1) always, and (2) unless you pass `-SkipAttestation` (`in
 Windows, in PowerShell:
 
 ```powershell
-$v = 'v0.1.6'
+$v = 'v0.2.0'
 $base = "https://github.com/minhdaohuu/quayflow/releases/download/$v"
 foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64', 'quayflow-macos-arm64', 'quayflow-macos-x86_64', 'install.ps1', 'install.sh', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
     try { Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f } catch { "$f is not in this release" }   # Linux files from v0.1.5, macOS from v0.1.6; SOURCE_COMMIT from v0.1.1
@@ -45,7 +45,7 @@ Get-Content SHA256SUMS | ForEach-Object {
 Linux, in `sh`:
 
 ```sh
-v=v0.1.6
+v=v0.2.0
 base=https://github.com/minhdaohuu/quayflow/releases/download/$v
 for f in quayflow-linux-x86_64 install.sh SOURCE_COMMIT SHA256SUMS; do
   curl -fsSLO "$base/$f"
@@ -95,7 +95,7 @@ On Windows with Visual Studio Build Tools (MSVC) and rustup:
 
 ```powershell
 git clone https://github.com/minhdaohuu/quayflow; cd quayflow
-git checkout v0.1.6
+git checkout v0.2.0
 rustup toolchain install          # installs the version pinned in rust-toolchain.toml
 $env:SOURCE_DATE_EPOCH = git log -1 --format=%ct
 $env:CARGO_INCREMENTAL = '0'
@@ -112,7 +112,7 @@ On Linux with rustup, a C toolchain and the OpenSSL development files (`pkg-conf
 
 ```sh
 git clone https://github.com/minhdaohuu/quayflow && cd quayflow
-git checkout v0.1.6
+git checkout v0.2.0
 rustup toolchain install          # installs the version pinned in rust-toolchain.toml
 SOURCE_DATE_EPOCH=$(git log -1 --format=%ct); export SOURCE_DATE_EPOCH
 export CARGO_INCREMENTAL=0
@@ -127,7 +127,7 @@ On macOS, the same steps with the Xcode Command Line Tools (no OpenSSL files nee
 
 ## Why releases are not code-signed
 
-Quayflow v0.1 executables are **not code-signed**: no Authenticode signature on Windows, no signature on Linux, and only the linker's ad-hoc signature on macOS (enough to run; installed with `curl`, the program carries no quarantine flag, and `install.sh` removes it from a verified copy of a browser download). This is common for open-source tools. A code-signing certificate costs money and needs a verified legal entity. The integrity properties above give a stronger link between the binary and its source: a code signature identifies who signed a file, but not what source it was built from. Signing can be added later, for example through SignPath's free program for open-source projects, without other changes.
+Quayflow executables are **not code-signed**: no Authenticode signature on Windows, no signature on Linux, and only the linker's ad-hoc signature on macOS (enough to run; installed with `curl`, the program carries no quarantine flag, and `install.sh` removes it from a verified copy of a browser download). This is common for open-source tools. A code-signing certificate costs money and needs a verified legal entity. The integrity properties above give a stronger link between the binary and its source: a code signature identifies who signed a file, but not what source it was built from. Signing can be added later, for example through SignPath's free program for open-source projects, without other changes.
 
 `quayflow status` and the `/quay` pane show the build's version, its SHA-256, and how to verify it ("not code-signed; verify with the release's SHA256SUMS (and gh attestation verify when the release is attested)"). For releases before v0.1.5, which are not attested, check the hash as above.
 
@@ -139,7 +139,7 @@ An unsigned executable that few people have downloaded yet can trigger the follo
 
 **Smart App Control** (Windows 11). In *On* mode, Smart App Control blocks unsigned executables that Microsoft's cloud service does not know. **It will most likely block `quayflow.exe`, and it cannot be bypassed for a single app.** Your options are to wait until Quayflow is signed, or to turn Smart App Control off. On Windows 11 24H2 and earlier, turning it off cannot be undone without reinstalling Windows. Quayflow does not recommend turning off a security feature for it.
 
-**AppLocker and WDAC (App Control for Business).** Company machines often allow only signed software, or only software from approved paths. Quayflow runs from `%LOCALAPPDATA%`, which such policies usually block. It will not run under them, and it should not: ask your IT department. A policy can allow the file by hash, using the published `SHA256SUMS` value, but that has to be repeated for each release. Organization accounts are often used on such machines, so this is a likely place where v0.1 cannot be used.
+**AppLocker and WDAC (App Control for Business).** Company machines often allow only signed software, or only software from approved paths. Quayflow runs from `%LOCALAPPDATA%`, which such policies usually block. It will not run under them, and it should not: ask your IT department. A policy can allow the file by hash, using the published `SHA256SUMS` value, but that has to be repeated for each release. Organization accounts are often used on such machines, so this is a likely place where Quayflow cannot be used yet.
 
 **Antivirus false positives.** The engine reads login files, runs in the background and starts at sign-in if you ask it to. Heuristic scanners can flag that combination. If your antivirus flags a Quayflow file:
 

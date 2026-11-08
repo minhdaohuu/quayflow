@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+Fixes from a full code review, including an attestation check of the installer that `quayflow update` runs. From this release the version number follows the changes (see CONTRIBUTING.md): Linux (0.1.5) and macOS (0.1.6) would each have been a minor version.
+
 ### Fixed
 - `quayflow update` now checks the attestation of the release's installer before running it. Before, it checked the installer only against `SHA256SUMS` from the same release, which does not prove who built it.
 - When every approved account was at its limit, recovery could switch to an account whose last usage reading was out of date and showed room, as if it were available now. An out-of-date reading now never counts as room there either.
@@ -168,7 +172,8 @@ First release: a private pilot for Windows 10/11 x64 (Quayflow targets every pla
 - Release assets are not attested while the repository is private; install with `-SkipAttestation`.
 - An idle account's access token expires, so it is not observed until it is used again (see `docs/known-limits.md`).
 
-[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/minhdaohuu/quayflow/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/minhdaohuu/quayflow/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/minhdaohuu/quayflow/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/minhdaohuu/quayflow/compare/v0.1.3...v0.1.4

@@ -92,6 +92,23 @@ The PowerShell fake-environment scripts take `-Exe <path>` to test a particular 
 5. Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `ci:`).
 6. CI must be green.
 
+## Versioning
+
+Quayflow uses [Semantic Versioning](https://semver.org/), and the `CHANGELOG.md` headings of a release decide its number. `python3 tests/docs/check-docs.py` checks every release from 0.2.0 on (CI and the pre-push hook run it), and `python3 tests/docs/check-docs.py --next` prints the version the coming release must have.
+
+Before 1.0 (the pilot):
+
+- **Minor** (0.x.0): anything under *Added*, *Changed*, *Deprecated* or *Removed*: a feature, a new platform, a change in behavior, or a change that breaks a script, a config file or the Mod protocol.
+- **Patch** (0.x.y): only *Fixed* or *Security*.
+
+From 1.0:
+
+- **Major**: anything under *Removed*, or an entry that starts with `**Breaking:**`. That is: a CLI command, option or exit code removed or changed; a field removed or renamed in `--json` output; a Mod protocol version a released Mod still speaks no longer accepted; a config or vault file that cannot be migrated automatically; a promise in the README's contract changed; a platform or Claude Code version dropped.
+- **Minor**: *Added*, *Changed* or *Deprecated* without a breaking entry.
+- **Patch**: only *Fixed* or *Security*.
+
+1.0 ends the pilot. It needs the [release conditions](docs/requirements.md#release-conditions-for-10) met on every platform: real usage-limit runs and an install and update from a published release on Windows, Linux and macOS. It also needs the stored formats (config, vault, journal) and the interfaces above frozen, with migrations tested.
+
 ## Licensing
 
 By contributing you agree that your contribution is licensed under the MIT License of this repository. Do not copy code from other projects unless its license allows it and the notice is kept.

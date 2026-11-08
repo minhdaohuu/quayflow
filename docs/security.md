@@ -1,6 +1,6 @@
 # Quayflow security notes
 
-What Quayflow v0.1 touches on your machine, how it protects saved logins, where that protection ends, and how it treats your organization's managed login. Requirement references (FR-xx) are to [requirements.md](requirements.md).
+What Quayflow touches on your machine, how it protects saved logins, where that protection ends, and how it treats your organization's managed login. Requirement references (FR-xx) are to [requirements.md](requirements.md).
 
 ## What Quayflow touches
 
@@ -83,7 +83,7 @@ Any program running as your user can read `engine.json` and call the API, for ex
 > [!CAUTION]
 > **The managed-login override setting works around your organization's access control.** Turning it on can violate your employment or organization policy and expose company work to non-organization accounts. **Responsibility is yours.**
 >
-> **Not implemented in this build.** Quayflow v0.1 records the setting and shows its state, but contains no code path that bypasses enforcement. With the setting on or off, v0.1 behaves the same way: managed login enforcement is respected.
+> **Not implemented in this build.** Quayflow records the setting and shows its state, but contains no code path that bypasses enforcement. With the setting on or off, Quayflow behaves the same way: managed login enforcement is respected.
 
 Organizations can enforce which login Claude Code accepts, through `forceLoginOrgUUID` and `forceLoginMethod` in managed settings. Quayflow reads these from every source Claude reads:
 
@@ -106,7 +106,7 @@ It checks again after each policy fetch (FR-06a).
 - is shown in `/quay` and in the status line while on;
 - is recorded in the journal every time it allows a switch the policy would have refused.
 
-In v0.1 the confirmation, display and journal hooks exist, but the bypass itself was deliberately not written. Claude Code's restriction on changing the credential selector inside organization sessions is never worked around.
+So far the confirmation, display and journal hooks exist, but the bypass itself was deliberately not written. Claude Code's restriction on changing the credential selector inside organization sessions is never worked around.
 
 ## Same-terminal replacement
 
@@ -114,7 +114,7 @@ Same-terminal replacement exists on Windows only (PowerShell). The PowerShell ho
 
 ## Release integrity
 
-Releases are reproducible, hashed and, from v0.1.5 on, attested, but **not code-signed** in v0.1 (no Authenticode signature on Windows, no signature on Linux, only the linker's ad-hoc signature on macOS). See [Verifying a release](verify-release.md).
+Releases are reproducible, hashed and, from v0.1.5 on, attested, but **not code-signed** (no Authenticode signature on Windows, no signature on Linux, only the linker's ad-hoc signature on macOS). See [Verifying a release](verify-release.md).
 
 The installer always checks the SHA-256 hashes. It also requires a build-provenance attestation made by this repository's release workflow (`.github/workflows/release.yml`) for the release tag and commit, verified with a signed-in GitHub CLI. If it cannot verify one, it refuses to install, unless you pass `-SkipAttestation` (`install.ps1`) or `--skip-attestation` (`install.sh`). That option leaves the hash check as the only protection. v0.1.0 to v0.1.4 were built while the repository was private. They are not attested and need that option. The Mod is added from the release tag and refused if the checkout is not at the commit the release records in `SOURCE_COMMIT`; the gaps that remain are in [Known limits](known-limits.md#distribution).
 
