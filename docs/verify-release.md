@@ -7,9 +7,9 @@ Every Quayflow release publishes these assets:
 | `quayflow.exe` | Engine and command-line tool (Windows x64) |
 | `quayflow-bg.exe` | Windowless launcher used by the sign-in startup entry (Windows) |
 | `quayflow-linux-x86_64` | Engine and command-line tool (Linux x86_64; from v0.1.5) |
-| `quayflow-macos-arm64`, `quayflow-macos-x86_64` | Engine and command-line tool (macOS on Apple silicon and Intel; from the next release) |
+| `quayflow-macos-arm64`, `quayflow-macos-x86_64` | Engine and command-line tool (macOS on Apple silicon and Intel; from v0.1.6) |
 | `install.ps1` | Installer (Windows) |
-| `install.sh` | Installer (Linux from v0.1.5; macOS from the next release) |
+| `install.sh` | Installer (Linux from v0.1.5; macOS from v0.1.6) |
 | `Quayflow.psm1` | PowerShell integration (also embedded in `quayflow.exe`) |
 | `SOURCE_COMMIT` | The commit the release was built from (releases after v0.1.0) |
 | `SHA256SUMS` | SHA-256 hash of each asset above, in `sha256sum` format |
@@ -29,7 +29,7 @@ The installer checks (1) always, and (2) unless you pass `-SkipAttestation` (`in
 Windows, in PowerShell:
 
 ```powershell
-$v = 'v0.1.5'
+$v = 'v0.1.6'
 $base = "https://github.com/minhdaohuu/quayflow/releases/download/$v"
 foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64', 'install.ps1', 'install.sh', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
     try { Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f } catch { "$f is not in this release" }   # Linux files from v0.1.5; SOURCE_COMMIT from v0.1.1
@@ -45,7 +45,7 @@ Get-Content SHA256SUMS | ForEach-Object {
 Linux, in `sh`:
 
 ```sh
-v=v0.1.5
+v=v0.1.6
 base=https://github.com/minhdaohuu/quayflow/releases/download/$v
 for f in quayflow-linux-x86_64 install.sh SOURCE_COMMIT SHA256SUMS; do
   curl -fsSLO "$base/$f"
@@ -55,7 +55,7 @@ sha256sum -c --ignore-missing SHA256SUMS
 
 Every line must say `OK`. `--ignore-missing` skips the assets you did not download; in Git Bash or WSL the same `sha256sum` command checks the Windows files.
 
-macOS (from the next release), in `sh`: download `quayflow-macos-arm64` (Apple silicon) or `quayflow-macos-x86_64` (Intel) instead of the Linux program, the same way. On a macOS without `sha256sum`, check with `shasum -a 256 -c --ignore-missing SHA256SUMS`.
+macOS (from v0.1.6), in `sh`: download `quayflow-macos-arm64` (Apple silicon) or `quayflow-macos-x86_64` (Intel) instead of the Linux program, the same way. On a macOS without `sha256sum`, check with `shasum -a 256 -c --ignore-missing SHA256SUMS`.
 
 A hash check proves that you have the files the release lists, but `SHA256SUMS` comes from the same release page. To tie the files to this repository's build, also check the attestation.
 
@@ -95,7 +95,7 @@ On Windows with Visual Studio Build Tools (MSVC) and rustup:
 
 ```powershell
 git clone https://github.com/minhdaohuu/quayflow; cd quayflow
-git checkout v0.1.5
+git checkout v0.1.6
 rustup toolchain install          # installs the version pinned in rust-toolchain.toml
 $env:SOURCE_DATE_EPOCH = git log -1 --format=%ct
 $env:CARGO_INCREMENTAL = '0'
@@ -112,7 +112,7 @@ On Linux with rustup, a C toolchain and the OpenSSL development files (`pkg-conf
 
 ```sh
 git clone https://github.com/minhdaohuu/quayflow && cd quayflow
-git checkout v0.1.5
+git checkout v0.1.6
 rustup toolchain install          # installs the version pinned in rust-toolchain.toml
 SOURCE_DATE_EPOCH=$(git log -1 --format=%ct); export SOURCE_DATE_EPOCH
 export CARGO_INCREMENTAL=0

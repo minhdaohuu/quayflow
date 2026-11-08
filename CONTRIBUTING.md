@@ -30,7 +30,7 @@ Thanks for your interest. Quayflow touches Claude Code's login files, so changes
 
 ## Development setup
 
-Quayflow targets all platforms Claude Code runs on; it ships for Windows x64 and Linux x86_64, and macOS (Keychain, `qf-adapter/src/keychain.rs`) comes with the next release. Keep platform-specific code (vault, paths and locks, shell integration, installer) behind its module boundary so the policy, engine and Mod stay shared. See [Platform scope](docs/requirements.md#platform-scope).
+Quayflow targets all platforms Claude Code runs on; it ships for Windows x64, Linux x86_64 and, from v0.1.6, macOS (Keychain, `qf-adapter/src/keychain.rs`). Keep platform-specific code (vault, paths and locks, shell integration, installer) behind its module boundary so the policy, engine and Mod stay shared. See [Platform scope](docs/requirements.md#platform-scope).
 
 Every platform needs Rust 1.98 (pinned in `rust-toolchain.toml`), Node 20 or later for the Mod (CI uses Node 24), Claude Code 2.1.316 or later (for `claude plugin test`; no sign-in needed) and Python 3.
 

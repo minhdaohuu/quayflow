@@ -4,7 +4,7 @@ What Quayflow v0.1 touches on your machine, how it protects saved logins, where 
 
 ## What Quayflow touches
 
-The data folder is `%LOCALAPPDATA%\Quayflow` on Windows and `~/.local/share/quayflow` on Linux and macOS (macOS is in the next release).
+The data folder is `%LOCALAPPDATA%\Quayflow` on Windows and `~/.local/share/quayflow` on Linux and macOS (macOS from v0.1.6).
 
 | Component | Reads | Writes |
 |---|---|---|

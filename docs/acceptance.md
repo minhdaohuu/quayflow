@@ -9,7 +9,7 @@ The [release conditions](requirements.md#release-conditions-for-v01) require rec
 - **Simulation:** `tests/e2e/sim-usage.ps1` scripts usage over time from a loopback fake of the usage, profile and token API (`tests/sim/fake_api.py`) and checks observation, suggestion, Automatic switching, return home, stale data, backoff, rejected tokens, hard-limit recovery, concurrent failures, the all-exhausted case and idle-account token refresh (33 checks). It proves Quayflow's logic against these fakes, not that the real service behaves the same.
 - **Real:** owner-run scripts against real logins (`tests/e2e/real-switching.ps1`, `tests/e2e/real-lanes.ps1`, `tests/e2e/real-headless.ps1`) and manual steps. Only this kind of evidence can pass a scenario. Each result below names its date, script, case and build.
 
-Logic, Smoke and Simulation run in CI on every change: the Rust and Mod tests on Windows, Linux and macOS, the PowerShell suites on Windows, the shell suites on Linux and macOS. (The macOS CI job is new with the macOS work and has not run on GitHub yet; the same suites passed on an Apple silicon Mac.)
+Logic, Smoke and Simulation run in CI on every change: the Rust and Mod tests on Windows, Linux and macOS, the PowerShell suites on Windows, the shell suites on Linux and macOS. The macOS job first passed on GitHub on 2026-11-08 (run 42491053892, Apple silicon).
 
 ## Real runs
 
@@ -48,7 +48,7 @@ macOS 27.2 on Apple silicon, Claude Code 2.1.319, a **local build of branch `fea
 - `real-lanes.ps1`: 8/8. Lane links (symbolic links) created and checked, the second account switched into the lane, linked skills visible in a real Claude session there, the default login unchanged, links intact after the session, shared skills surviving deletion; no Keychain item left behind.
 - Manual: registering the live login and adding the second account through `/quay add` (sign in first; Claude's sign-in opened in a new Terminal window); the engine started at sign-in by the LaunchAgent (about 20 s after the login; macOS showed its one-time "App Background Activity" notice).
 
-**macOS is not fully tested.** Not run on macOS: X1, X2, X3 and X5 (a real usage limit), Open New Session, an install and update from a published release, Intel Macs, and the CI job on GitHub.
+**macOS is not fully tested.** Not run on macOS: X1, X2, X3 and X5 (a real usage limit), Open New Session, an install and update from a published release, and Intel Macs.
 
 ### Still open
 
@@ -112,6 +112,6 @@ macOS 27.2 on Apple silicon, Claude Code 2.1.319, a **local build of branch `fea
 | Claude's own usage-limit wait adopts a login switched during the wait | Open |
 | Claude reads and writes correctly through lane links | Passed on local builds: Windows (2026-11-03) and Linux (2026-11-08), `real-lanes.ps1` 8/8 each; repeat on a release build |
 | Crash reconciliation, version gating, dead-refresh-token handling built and passing | Built; logic passes (dead refresh token of an idle account also in Simulation); real runs open |
-| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (Linux programs since v0.1.5; latest v0.1.5); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attested from v0.1.5: on 2026-11-08 `gh attestation verify` passed for `quayflow.exe`, `quayflow-linux-x86_64` and `install.sh` of v0.1.5, with the release workflow as signer, the tag as source ref and `SOURCE_COMMIT` as source digest. v0.1.0 to v0.1.4 were built while the repository was private and are not attested |
+| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (Linux programs since v0.1.5, macOS programs since v0.1.6; latest v0.1.6); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attested from v0.1.5: on 2026-11-08 `gh attestation verify` passed for `quayflow.exe`, `quayflow-linux-x86_64` and `install.sh` of v0.1.5, with the release workflow as signer, the tag as source ref and `SOURCE_COMMIT` as source digest. v0.1.0 to v0.1.4 were built while the repository was private and are not attested |
 | Disclaimer published | Done (README, installer, onboarding) |
 | Managed-login override documented with its risk | Done (`docs/security.md`); override not implemented in this build |

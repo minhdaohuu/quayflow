@@ -26,7 +26,7 @@ describe('handshake and engine start', () => {
     expect(r.stopReason).toBeNull()
     expect(requests).toBe(1)
     expect(w.routes()).toEqual(['/v1/hello'])
-    expect(w.bodies('/v1/hello')[0]).toEqual({ protocol: 1, modVersion: '0.1.5', sessionId: 'S1', headless: true, claudeVersion: '2.1.316' })
+    expect(w.bodies('/v1/hello')[0]).toEqual({ protocol: 1, modVersion: '0.1.6', sessionId: 'S1', headless: true, claudeVersion: '2.1.316' })
   })
 
   test('nothing listening: the engine is started at once, without retrying the handshake for seconds', async ($, on) => {

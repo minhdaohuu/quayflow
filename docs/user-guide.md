@@ -1,6 +1,6 @@
 # Quayflow user guide
 
-Quayflow v0.1.5. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64 and Linux x86_64; macOS (Apple silicon and Intel) comes with the next release. Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
+Quayflow v0.1.6. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64, Linux x86_64 and, from v0.1.6, macOS (Apple silicon and Intel). Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
 
 Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. macOS is not released yet; on an Apple silicon Mac, switching, lanes and recovery from a simulated limit passed with real accounts, while recovery from a real limit, Intel Macs and an install from a published release have not been run. See [acceptance results](acceptance.md).
 
@@ -10,8 +10,8 @@ Contents: [Requirements](#requirements) · [Install](#install) · [First use](#f
 
 ## Requirements
 
-- Windows 10 or 11, x64; or Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later); or macOS on Apple silicon or Intel (next release).
-- Claude Code installed and working (`claude --version`). Quayflow v0.1.5 was validated against Claude Code 2.1.316 on Windows and 2.1.319 on Linux and macOS; other versions are checked automatically (see [Version checks](#version-checks)).
+- Windows 10 or 11, x64; or Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later); or macOS on Apple silicon or Intel (from v0.1.6).
+- Claude Code installed and working (`claude --version`). Quayflow v0.1.6 was validated against Claude Code 2.1.316 on Windows and 2.1.319 on Linux and macOS; other versions are checked automatically (see [Version checks](#version-checks)).
 - Windows: Windows PowerShell 5.1 or PowerShell 7 for the installer. Linux and macOS: `sh`, `curl`, `sha256sum` (or `shasum` on macOS), and `python3` for the Mod step. No administrator rights.
 - Claude subscription logins (claude.ai sign-in). Quayflow never switches a subscription session to API-key billing.
 
@@ -35,7 +35,7 @@ It does not read, copy or change any Claude login. Running Claude sessions load 
 
 | Option | Effect |
 |---|---|
-| `-Version v0.1.5` | Install a specific release instead of the latest |
+| `-Version v0.1.6` | Install a specific release instead of the latest |
 | `-Startup` | Also start the engine at Windows sign-in (per-user startup entry, no window) |
 | `-NoPath` | Do not change your PATH |
 | `-NoPlugin` | Engine only; do not touch Claude Code plugins |
@@ -364,7 +364,7 @@ The repository's `tests/e2e/` folder holds scripts that exercise the product bui
 ```powershell
 quayflow update --check   # is a newer release available?
 quayflow update           # install it with the release's own installer and all its checks
-quayflow update --version v0.1.5   # a specific release instead of the latest
+quayflow update --version v0.1.6   # a specific release instead of the latest
 ```
 
 `quayflow update` downloads the release's installer (`install.ps1`, or `install.sh` on Linux and macOS), checks it against the release's `SHA256SUMS`, and runs it in update mode. The installer then makes every check of a first install: the SHA-256 hashes, the build-provenance attestation of the release workflow for that tag and commit, and the Mod's source commit. The attestation check needs the GitHub CLI, signed in; without it the update is refused, unless you add `--skip-attestation` to accept the hashes alone (needed for releases before v0.1.5).
@@ -401,7 +401,7 @@ If `quayflow` or `claude` is not found right after installing, `~/.local/bin` wa
 
 ## macOS
 
-macOS (Apple silicon and Intel) comes with the next release. It works like Linux, with these differences:
+macOS (Apple silicon and Intel) is supported from v0.1.6. It works like Linux, with these differences:
 
 | Topic | Linux | macOS |
 |---|---|---|

@@ -109,7 +109,7 @@ You need Claude Code. No administrator rights.
 irm https://github.com/minhdaohuu/quayflow/releases/latest/download/install.ps1 | iex
 ```
 
-**Linux x86_64** (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later), and **macOS** (Apple silicon and Intel) from the next release:
+**Linux x86_64** (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later), and **macOS** (Apple silicon and Intel) from v0.1.6:
 
 ```sh
 curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh
@@ -123,7 +123,7 @@ Prefer to read before you run? [Download, verify, read, then run](docs/verify-re
 |---|---|
 | Windows x64 | Supported. Switching, real usage-limit recovery and headless jobs tested end to end with real accounts. |
 | Linux x86_64 | Supported from v0.1.5, **not fully tested**: switching, lanes and headless jobs ran with real accounts on Ubuntu 24.04; real usage-limit recovery and an install from a published release have not run yet. |
-| macOS | Next release (Apple silicon and Intel), **not released yet**: on an Apple silicon Mac, switching, lanes and recovery from a simulated usage limit passed with real accounts; real usage-limit recovery, Intel Macs and an install from a published release have not run yet. Claude Code keeps its login in the Keychain there, and Quayflow switches it through `/usr/bin/security`. |
+| macOS | Supported from v0.1.6 (Apple silicon and Intel), **not fully tested**: on an Apple silicon Mac, switching, lanes and recovery from a simulated usage limit passed with real accounts; real usage-limit recovery, Intel Macs and an install from a published release have not run yet. Claude Code keeps its login in the Keychain there, and Quayflow switches it through `/usr/bin/security`. |
 
 Details: [acceptance results](docs/acceptance.md).
 
@@ -318,7 +318,7 @@ Read [Known limits](docs/known-limits.md) before relying on Quayflow for unatten
 
 ## Roadmap
 
-- **Now (v0.1, public pilot):** Windows x64 and Linux x86_64; macOS with the next release. The remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
+- **Now (v0.1, public pilot):** Windows x64, Linux x86_64 and macOS. The remaining [acceptance scenarios](docs/acceptance.md) close the pilot.
 - **Next:** lanes for unattended jobs with their own mode, so background jobs can switch without moving your interactive sessions.
 - **Later:** an encrypted vault on Linux (desktop keyring) and macOS (Keychain); same-terminal Replace for bash and zsh; code signing.
 

@@ -13,7 +13,7 @@
 # Re-running it upgrades. It never reads, prints or changes a Claude login.
 #
 #   curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh
-#   curl -fsSL .../install.sh | sh -s -- --version v0.1.5 --startup
+#   curl -fsSL .../install.sh | sh -s -- --version v0.1.6 --startup
 #
 # Options:
 #   --version vX.Y.Z        Release to install (default: the latest release).

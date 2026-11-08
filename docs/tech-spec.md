@@ -1,6 +1,6 @@
 # Quayflow v0.1 technical specification
 
-> Scope: this specification describes v0.1 on Windows x64 and Linux x86_64 as of v0.1.5. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux and [section 1b](#1b-macos) macOS (next release). Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated behind module boundaries. See [requirements.md](requirements.md#platform-scope). Linux is not fully tested; see [Known limits](known-limits.md#platform-and-scope).
+> Scope: this specification describes v0.1 on Windows x64, Linux x86_64 and macOS as of v0.1.6. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux and [section 1b](#1b-macos) macOS. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated behind module boundaries. See [requirements.md](requirements.md#platform-scope). Linux is not fully tested; see [Known limits](known-limits.md#platform-and-scope).
 
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
@@ -36,7 +36,7 @@ Companion to [requirements.md](requirements.md). This file holds the engineering
 
 ## 1b. macOS
 
-macOS is built for the next release (Apple silicon and Intel). This section records what Claude Code does there and how Quayflow switches. Sources: the JavaScript bundled in Claude Code 2.1.319 (`~/.local/share/claude/versions/<v>`), loopback tests with fake tokens (2026-11-08), and a survey of other account switchers that read the same internals. With real logins on an Apple silicon Mac: `tests/e2e/real-macos-keychain.py` 19/19, `real-switching.ps1` 13/13 and `real-lanes.ps1` 8/8 ([acceptance.md](acceptance.md)).
+macOS is supported from v0.1.6 (Apple silicon and Intel). This section records what Claude Code does there and how Quayflow switches. Sources: the JavaScript bundled in Claude Code 2.1.319 (`~/.local/share/claude/versions/<v>`), loopback tests with fake tokens (2026-11-08), and a survey of other account switchers that read the same internals. With real logins on an Apple silicon Mac: `tests/e2e/real-macos-keychain.py` 19/19, `real-switching.ps1` 13/13 and `real-lanes.ps1` 8/8 ([acceptance.md](acceptance.md)).
 
 ### Claude Code on macOS (2.1.319, observed)
 
