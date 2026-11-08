@@ -263,12 +263,9 @@ describe('first use', () => {
     await start($, w, true)
     await quay($, 'register')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    // The vault consent was given once already: Enter on the name saves.
+    expect(await ui.find({ key: 'reg:consent' })).toBeUndefined()
     await ui.input({ key: 'reg:label', text: 'client' })
-    await ui.press({ key: 'reg-save' })
-    // Every save asks for the storage box: nothing is sent without it.
-    expect(w.routes()).not.toContain('/v1/accounts/register')
-    await ui.press({ key: 'reg:consent' })
-    await ui.press({ key: 'reg-save' })
     expect(await ui.find({ type: 'Text', text: /would mix two organizations/ })).toBeDefined()
     expect(w.bodies('/v1/accounts/register').map(b => b.acceptDisclosure)).toEqual([false])
     await ui.press({ key: 'dc:approve' })

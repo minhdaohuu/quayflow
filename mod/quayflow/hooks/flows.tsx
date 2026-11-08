@@ -2,7 +2,7 @@
 // incompatible states, first use, the switch flow, group conflict and trust views.
 import type { EngineInterface } from 'claude-code'
 
-import type { EnvView, IdentityView, SigninStatus } from '../types'
+import type { EnvView, IdentityView, SigninIdentity, SigninStatus } from '../types'
 import { Q, flash, patchSigninStatus, pause, setDisclosure, setSignin, setView } from './context'
 import { establish, hasCode } from './engine'
 import { actAccept, actCancelTransition, actDorg, actGroupCreate, actIdentity, actIgnoreUnknown, actOnboarding, actRegister, actSigninCancel, actSigninConfirm, actSigninStart, actSigninStatus, actSwitchTo, switchOutcome } from './actions'
@@ -205,40 +205,50 @@ function Register($: EngineInterface, c: Ctx): JSX.Element {
   if (!s) return Line(c, 'Reading the engine state...')
   const env = myEnv(s)
   const group = c.form['reg:group'] ?? s.defaultGroup
-  const consent = c.form['reg:consent'] === '1'
   const live = env && !env.live.signedOut ? env.live.account : undefined
   const idr = useRead<IdentityView>($, c, 'identity', `env:${env?.id ?? '?'}:${live ?? ''}`, () => actIdentity($, { env: env?.id }))
   const id = idr.value && idr.value.account ? idr.value : undefined
   const kind = id ? kindText(id.kind, id.subscription) : env?.live.kind ? kindText(env.live.kind, env.live.subscription) : ''
   const isDefault = group === s.defaultGroup
+  const suggestion = suggestName(id ? { account: id.account, kind: id.kind, display: id.display } : undefined, s.accounts)
+  const name = (c.form['reg:label'] ?? suggestion).trim()
+  const taken = name ? s.accounts.find(a => a.label.toLowerCase() === name.toLowerCase()) : undefined
+  const newGroup = c.form['reg:showgroup'] === '1'
+  const problem = c.form['reg:problem']
   return (
     <Box flexDirection="column">
       {Section(
         c,
-        'Register this login',
-        Hint(c, 'Verified identity first; group selection is mandatory.'),
-        KV(c, 'Identity', id?.display ?? (idr.pending ? 'checking\u2026' : idr.error ? `not readable (${idr.error})` : 'no e-mail in the login')),
+        'Register the account you are signed in to',
+        KV(c, 'Signed in as', `${id?.display ?? (idr.pending ? 'checking\u2026' : idr.error ? `not readable (${idr.error})` : 'no e-mail in the login')}${kind ? ` \u00b7 ${kind}` : ''}`),
         KV(c, 'Organization', id?.orgName ?? (id?.kind === 'personal' || env?.live.kind === 'personal' ? 'none (personal)' : 'not named')),
-        KV(c, 'Account', `#${id?.account ?? live ?? '?'}${kind ? ` \u00b7 ${kind}` : ''}`),
-        Hint(c, 'Shown here for your review only: Quayflow never stores the e-mail address or writes it to logs. The verified account id, not a name, is the evidence (checked by a profile lookup when you save).'),
       )}
-      {Field($, c, 'reg:label', 'Name', { placeholder: 'work, personal, ...', submitLabel: 'set', autoFocus: true, onSubmit: v => void (v.trim() ? flash($, 'info', `Name set: "${v.trim()}".`) : undefined) })}
-      {Pick(c, 'reg:group', 'Group', groupOptions(c), group, v => setForm($, 'reg:group', v))}
+      {Field($, c, 'reg:label', 'Name', { placeholder: 'work, personal, ...', submitLabel: 'save', autoFocus: true, initial: suggestion, onSubmit: v => void saveRegister($, c, v) })}
+      {taken ? Line(c, `\u26a0 "${taken.label}" is already a name here; pick another.`, { tone: 'warn' }) : null}
+      {Row(
+        c,
+        Pick(c, 'reg:group', 'Group', groupOptions(c), group, v => setForm($, 'reg:group', v)),
+        newGroup ? null : Btn(c, 'reg-newgroup', '+ New group', () => setForm($, 'reg:showgroup', '1')),
+      )}
+      {newGroup ? Field($, c, 'reg:newgroup', 'New group', { placeholder: 'name', submitLabel: 'create', autoFocus: true, onSubmit: v => void createGroupInline($, v, 'reg:group').then(() => setForm($, 'reg:showgroup', '')) }) : null}
       {Hint(c, isDefault ? 'The default group applies to all projects without an explicit assignment, including unfamiliar and future ones.' : `Group "${group}" applies only to projects assigned to it.`)}
-      {Field($, c, 'reg:newgroup', 'New group', { placeholder: 'name', submitLabel: 'create', onSubmit: v => void createGroupInline($, v, 'reg:group') })}
-      {Toggle(c, 'reg:consent', 'Keep this login in the protected vault', consent, v => setForm($, 'reg:consent', v ? '1' : ''))}
-      {Alert(c, 'Registration is not activation', 'Saving changes nothing that is running.', 'note')}
+      {!s.consents.credentialStorage
+        ? Toggle(c, 'reg:consent', 'Keep my logins in my local vault (asked once)', c.form['reg:consent'] === '1', v => {
+            setForm($, 'reg:consent', v ? '1' : '')
+            setForm($, 'reg:problem', '')
+          })
+        : null}
+      {problem ? Line(c, `\u26a0 ${problem}`, { tone: 'warn' }) : null}
+      {Hint(c, 'The e-mail address is shown for your review only and never stored. Registering changes nothing that is running.')}
       {Row(
         c,
         Btn(c, 'reg-save', 'Save', () => void saveRegister($, c), true),
-        Btn(c, 'reg-groups', 'Groups', () => go($, { tab: 'groups' })),
         Btn(c, 'reg-cancel', 'Cancel', () => go($, { tab: c.s?.onboarded ? 'accounts' : 'onboarding', sub: c.s?.onboarded ? undefined : 'readiness' })),
       )}
     </Box>
   )
 }
 
-/** Creates a group from a registration or sign-in screen and selects it there. */
 async function createGroupInline($: EngineInterface, name: string, formKey: string): Promise<void> {
   const n = name.trim()
   if (!n) return
@@ -249,14 +259,21 @@ async function createGroupInline($: EngineInterface, name: string, formKey: stri
   }
 }
 
-async function saveRegister($: EngineInterface, c: Ctx): Promise<void> {
+async function saveRegister($: EngineInterface, c: Ctx, typed?: string): Promise<void> {
   const s = c.s
   if (!s) return
-  const labelText = (c.form['reg:label'] ?? '').trim()
+  const idv = c.cache['identity']?.value as IdentityView | undefined
+  const suggestion = suggestName(idv && idv.account ? { account: idv.account, kind: idv.kind, display: idv.display } : undefined, s.accounts)
+  // `typed`: the value Enter submitted (the form state seen here may predate it).
+  const labelText = (typed ?? c.form['reg:label'] ?? suggestion).trim()
   const group = c.form['reg:group'] ?? s.defaultGroup
-  if (!labelText) return void flash($, 'warn', 'Type an account name first (Enter in the field).')
-  if (c.form['reg:consent'] !== '1') {
-    return void flash($, 'warn', 'Saving a login needs your storage consent: tick the vault box.')
+  setForm($, 'reg:problem', '')
+  if (!labelText) return void setForm($, 'reg:problem', 'Type a name for this account.')
+  if (s.accounts.some(a => a.label.toLowerCase() === labelText.toLowerCase())) {
+    return void setForm($, 'reg:problem', `"${labelText}" is already a name here; pick another.`)
+  }
+  if (!s.consents.credentialStorage && c.form['reg:consent'] !== '1') {
+    return void setForm($, 'reg:problem', 'Tick the vault box first: registering keeps a copy of this login.')
   }
   const a = await run(
     $,
@@ -318,43 +335,34 @@ function AddAccount($: EngineInterface, c: Ctx): JSX.Element {
   if (!si || si.status.state === 'cancelled' || si.status.state === 'saved') {
     const reauth = c.view.arg
     const group = c.form['add:group'] ?? s.defaultGroup
-    const g = s.groups.find(x => x.name === group)
-    const name = (c.form['add:label'] ?? '').trim()
-    const taken = !reauth && name ? s.accounts.find(a => a.label.toLowerCase() === name.toLowerCase()) : undefined
-    const current = env?.live.known ? label(s, env.live.account) : 'the current login'
     const newGroup = c.form['add:showgroup'] === '1'
-    // A sign-in already holds a login in a temporary folder, so the vault consent comes first.
+    // Signing in already keeps a login in a temporary folder, so the one vault consent
+    // (asked once, ever) comes before it.
     const needConsent = !s.consents.credentialStorage
-    const consentGiven = c.form['add:vault'] === '1'
+    const unregistered = !reauth && !!env && !env.live.known && !env.live.signedOut
+    const problem = c.form['add:problem']
     return (
       <Box flexDirection="column">
-        {Section(
-          c,
-          reauth ? `Sign in again for "${label(s, reauth)}"` : 'Add another account',
-          Steps(c, [
-            { mark: reauth || name ? 'done' : 'current', title: reauth ? 'Account chosen' : 'Name it and pick a group' },
-            { mark: reauth || name ? 'current' : 'todo', title: "Sign in with Claude's own window" },
-            { mark: 'todo', title: 'Review and save' },
-          ]),
-        )}
+        {Section(c, reauth ? `Sign in again for "${label(s, reauth)}"` : 'Add an account')}
         {si?.status.state === 'cancelled' ? Line(c, 'The last sign-in was cancelled; nothing changed.', { dim: true }) : null}
-        {!reauth && Field($, c, 'add:label', 'Name', { placeholder: 'personal, team, ...', submitLabel: 'sign in', autoFocus: true, onSubmit: v => void startSignin($, c, v) })}
-        {!reauth && (taken
-          ? Line(c, `⚠ "${taken.label}" is already a name here; pick another.`, { tone: 'warn' })
-          : Line(c, name ? `✔ "${name}" will join group ${group}${g ? ` (${g.mode})` : ''}` : 'Type a name, then press Enter to sign in.', { dim: !name, tone: name ? 'ok' : undefined }))}
+        {unregistered
+          ? Row(c, Line(c, `You are signed in to an account Quayflow does not know yet (#${env?.live.account ?? '?'}).`, { tone: 'warn' }), Btn(c, 'add-register-current', 'Register it', () => go($, { tab: 'onboarding', sub: 'register' })))
+          : null}
         {!reauth && Row(
           c,
           Pick(c, 'add:group', 'Group', groupOptions(c), group, v => setForm($, 'add:group', v)),
           newGroup ? null : Btn(c, 'add-newgroup', '+ New group', () => setForm($, 'add:showgroup', '1')),
         )}
         {!reauth && newGroup ? Field($, c, 'add:newgroup', 'New group', { placeholder: 'name', submitLabel: 'create', autoFocus: true, onSubmit: v => void createGroupInline($, v, 'add:group').then(() => setForm($, 'add:showgroup', '')) }) : null}
-        {needConsent ? Toggle(c, 'add:vault', 'Keep the logins I add in my protected local vault (needed to sign in)', consentGiven, v => setForm($, 'add:vault', v ? '1' : '')) : null}
-        {needConsent && !consentGiven ? Line(c, 'Tick the vault box above first: the sign-in keeps a login until you save or cancel it.', { tone: 'warn' }) : null}
-        {Line(c, `Your session stays on ${current}. Quayflow never asks for a token.`, { dim: true })}
-        {Hint(c, "Claude's native sign-in opens in a temporary credential environment; nothing is saved until you review the identity it returns. Mixing organization and personal identities in one group asks for approval at that point.")}
+        {needConsent ? Toggle(c, 'add:vault', 'Keep the logins I add in my local vault (asked once)', c.form['add:vault'] === '1', v => {
+          setForm($, 'add:vault', v ? '1' : '')
+          setForm($, 'add:problem', '')
+        }) : null}
+        {problem ? Line(c, `\u26a0 ${problem}`, { tone: 'warn' }) : null}
+        {Hint(c, "Claude's own sign-in opens in a temporary folder. Nothing is saved until you review the account it returns; your live login stays as it is.")}
         {Row(
           c,
-          Btn(c, 'add-continue', 'Sign in', () => void startSignin($, c), true),
+          Btn(c, 'add-continue', reauth ? 'Sign in again' : 'Sign in with Claude', () => void startSignin($, c), true),
           Btn(c, 'add-cancel', 'Cancel', () => go($, { tab: s.onboarded ? 'accounts' : 'onboarding', sub: s.onboarded ? undefined : 'readiness' })),
         )}
       </Box>
@@ -364,18 +372,9 @@ function AddAccount($: EngineInterface, c: Ctx): JSX.Element {
   if (st.state === 'waiting') {
     return (
       <Box flexDirection="column">
-        {Section(
-          c,
-          'Native sign-in in progress',
-          Steps(c, [
-            { mark: 'done', title: si.reauth ? 'Account chosen' : `Named "${si.label}" in group ${si.group}` },
-            { mark: 'current', title: "Sign in with Claude's own window", desc: 'finish it there; this view follows it' },
-            { mark: 'todo', title: 'Review and save', desc: 'nothing is saved until you confirm' },
-          ]),
-          KV(c, 'Existing task', `continues under ${env?.live.known ? label(s, env.live.account) : 'the current login'}`),
-          Line(c, `If no window opened, run this in a terminal: ${st.command}`),
-          Hint(c, 'No credential or authorization URL appears in logs or reports.'),
-        )}
+        {Section(c, 'Finish the sign-in in the window that opened')}
+        {Line(c, 'This screen moves on by itself when you are done there.', { dim: true })}
+        {Line(c, `No window? Run this in a terminal: ${st.command}`)}
         {Row(c, Btn(c, 'signin-cancel', 'Cancel', () => void cancelSignin($, c, st.id)))}
       </Box>
     )
@@ -394,71 +393,77 @@ function AddAccount($: EngineInterface, c: Ctx): JSX.Element {
   const dupAccount = dup ? s.accounts.find(a => a.label === dup) : undefined
   const unexpected = !!id?.unexpected
   const asNew = unexpected && c.form['add:asnew'] === '1'
-  const consent = c.form['add:consent'] === '1'
-  const group = asNew ? (c.form['add:group'] ?? s.defaultGroup) : si.group
+  const group = c.form['add:group'] ?? si.group
   if (unexpected && !asNew) {
     return (
       <Box flexDirection="column">
-        {Alert(c, 'Reauthentication returned a different identity', `It does not overwrite "${label(s, si.reauth)}". You can register the new identity with its own name, group and storage consent, or cancel.`, 'error')}
-        {KV(c, 'Signed-in identity', `${id?.display ?? `account #${id?.account ?? '?'}`} · ${kindText(id?.kind, id?.subscription)}`)}
+        {Alert(c, 'You signed in to a different account', `It does not replace "${label(s, si.reauth)}". Save it as a new account, or cancel.`, 'error')}
+        {KV(c, 'Signed in as', `${id?.display ?? `account #${id?.account ?? '?'}`} · ${kindText(id?.kind, id?.subscription)}`)}
         {KV(c, 'Expected', `"${label(s, si.reauth)}"`)}
         {Row(
           c,
-          Btn(c, 'signin-review-existing', 'Existing', () => go($, { tab: 'accounts', sub: 'detail', arg: si.reauth }), true),
-          Btn(c, 'signin-as-new', 'Register as new', () => setForm($, 'add:asnew', '1')),
+          Btn(c, 'signin-as-new', 'Save as new', () => setForm($, 'add:asnew', '1'), true),
+          Btn(c, 'signin-review-existing', 'Existing', () => go($, { tab: 'accounts', sub: 'detail', arg: si.reauth })),
           Btn(c, 'signin-discard', 'Cancel', () => void cancelSignin($, c, st.id)),
         )}
       </Box>
     )
   }
+  // A new account (or a different identity saved as new) is named here, with a suggestion.
+  const naming = !dup && (!si.reauth || asNew)
+  const suggestion = naming ? suggestName(id, s.accounts) : ''
+  const name = (c.form['add:label'] ?? suggestion).trim()
+  const taken = naming && name ? s.accounts.find(a => a.label.toLowerCase() === name.toLowerCase()) : undefined
+  const problem = c.form['add:problem']
   return (
     <Box flexDirection="column">
-      {dup
-        ? Alert(c, 'This account is already registered', `The verified account matches "${dup}", even though the new name is different. Updating refreshes its protected copy; it does not create extra provider allowance.`, 'warn')
-        : null}
       {Section(
         c,
-        dup ? 'Review the existing registration' : 'Review and save the new identity',
-        KV(c, 'Verified identity', `${id?.display ?? `account #${id?.account ?? '?'}`}${id?.display ? ' (shown for review; not stored)' : ''}`),
-        KV(c, 'Account', `#${id?.account ?? '?'} · ${kindText(id?.kind, id?.subscription) || '?'}`),
-        dup ? KV(c, 'Existing registration', `${dup} / ${dupAccount?.groups.join(', ') || 'no group'}`) : null,
-        si.reauth && !asNew ? KV(c, 'Reauthenticating', `"${label(s, si.reauth)}"`) : KV(c, dup ? 'New requested name' : 'Account name', asNew ? c.form['add:label'] || '(type a name below)' : si.label),
-        !si.reauth || asNew ? KV(c, 'Destination group', group) : null,
+        dup ? 'This account is already registered' : si.reauth && !asNew ? `Signed in again for "${label(s, si.reauth)}"` : 'Signed in',
+        KV(c, 'Signed in as', `${id?.display ?? `account #${id?.account ?? '?'}`} \u00b7 ${kindText(id?.kind, id?.subscription) || '?'}`),
+        dup ? KV(c, 'Registered as', `"${dup}" in ${dupAccount?.groups.join(', ') || 'no group'}`) : null,
       )}
-      {asNew && Field($, c, 'add:label', 'Name', { placeholder: 'name', submitLabel: 'set', autoFocus: true, onSubmit: v => void (v.trim() ? flash($, 'info', `Name set: "${v.trim()}".`) : undefined) })}
-      {asNew && Pick(c, 'add:group', 'Group (required)', groupOptions(c), group, v => setForm($, 'add:group', v))}
-      {Toggle(c, 'add:consent', 'Save this reusable login in my protected local vault', consent, v => setForm($, 'add:consent', v ? '1' : ''))}
-      {Alert(c, 'What happens next', 'After saving, Quayflow retires the temporary sign-in copy without signing out (signing out could revoke the stored login). That temporary environment runs no sessions.')}
-      {Hint(c, 'The account is not activated: your live login stays as it is.')}
+      {dup ? Line(c, 'Saving refreshes its saved login; it adds no extra allowance.', { dim: true }) : null}
+      {naming && Field($, c, 'add:label', 'Name', { placeholder: 'name', submitLabel: 'save', autoFocus: true, initial: suggestion, onSubmit: v => void confirmSignin($, c, asNew, v) })}
+      {taken ? Line(c, `\u26a0 "${taken.label}" is already a name here; pick another.`, { tone: 'warn' }) : null}
+      {naming && Pick(c, 'add:group', 'Group', groupOptions(c), group, v => setForm($, 'add:group', v))}
+      {problem ? Line(c, `\u26a0 ${problem}`, { tone: 'warn' }) : null}
+      {Hint(c, 'The e-mail address is shown for your review only and never stored. Saving retires the temporary sign-in copy without signing out; your live login stays as it is.')}
       {Row(
         c,
-        Btn(c, 'signin-save', dup ? 'Update existing registration' : 'Save account', () => void confirmSignin($, c, asNew), true),
-        dupAccount && Btn(c, 'signin-review-existing', 'Existing', () => go($, { tab: 'accounts', sub: 'detail', arg: dupAccount.id })),
-        Btn(c, 'signin-discard', 'Cancel', () => void cancelSignin($, c, st.id)),
+        Btn(c, 'signin-save', dup || (si.reauth && !asNew) ? 'Update' : 'Save', () => void confirmSignin($, c, asNew), true),
+        Btn(c, 'signin-discard', 'Discard', () => void cancelSignin($, c, st.id)),
       )}
     </Box>
   )
 }
-async function startSignin($: EngineInterface, c: Ctx, typed?: string): Promise<void> {
+
+/** A name for a newly signed-in account: the e-mail's local part, made unique. */
+export function suggestName(id: SigninIdentity | null | undefined, accounts: { label: string }[]): string {
+  const local = (id?.display ?? '').split('@')[0] ?? ''
+  const base = local.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || (id?.kind === 'personal' ? 'personal' : 'account')
+  const used = new Set(accounts.map(a => a.label.toLowerCase()))
+  if (!used.has(base)) return base
+  for (let n = 2; ; n++) if (!used.has(`${base}-${n}`)) return `${base}-${n}`
+}
+
+async function startSignin($: EngineInterface, c: Ctx): Promise<void> {
   const s = c.s
   if (!s) return
   const reauth = c.view.arg
-  const labelText = (typed ?? c.form['add:label'] ?? '').trim()
   const group = c.form['add:group'] ?? s.defaultGroup
-  if (!reauth && !labelText) return void flash($, 'warn', 'Type a name for the account first.')
-  if (!reauth && s.accounts.some(a => a.label.toLowerCase() === labelText.toLowerCase())) {
-    return void flash($, 'warn', `"${labelText}" is already a name here; pick another.`)
-  }
+  await setForm($, 'add:problem', '')
   if (!s.consents.credentialStorage) {
     if (c.form['add:vault'] !== '1') {
-      return void flash($, 'warn', 'Tick "Keep the logins I add in my protected local vault" first: signing in keeps a login until you save or cancel it.')
+      return void setForm($, 'add:problem', 'Tick the vault box first: the sign-in keeps a login until you save or discard it.')
     }
     const given = await run($, 'recording your vault consent', () => actOnboarding($, { credentialStorage: true }, false))
     if (!given) return
   }
-  const st = await run($, 'opening a native sign-in', () => actSigninStart($, reauth))
+  const st = await run($, 'opening the sign-in window', () => actSigninStart($, reauth))
   if (!st) return
-  await setSignin($, { status: st, label: labelText || label(s, reauth), group, reauth })
+  await clearForm($, 'add:label')
+  await setSignin($, { status: st, label: reauth ? label(s, reauth) : '', group, reauth })
   void followSignin($, st.id)
 }
 
@@ -474,18 +479,26 @@ async function closeSignin($: EngineInterface, c: Ctx): Promise<void> {
   go($, { tab: c.s?.onboarded ? 'accounts' : 'onboarding', sub: c.s?.onboarded ? undefined : 'readiness' })
 }
 
-async function confirmSignin($: EngineInterface, c: Ctx, asNew = false): Promise<void> {
+async function confirmSignin($: EngineInterface, c: Ctx, asNew = false, typed?: string): Promise<void> {
   const si = c.signin
-  if (!si) return
-  if (c.form['add:consent'] !== '1') return void flash($, 'warn', 'Saving a login needs your storage consent: tick the vault box.')
-  const labelText = asNew ? (c.form['add:label'] ?? '').trim() : si.label
-  const group = asNew ? (c.form['add:group'] ?? c.s?.defaultGroup ?? '') : si.group
-  if (asNew && !labelText) return void flash($, 'warn', 'Type an account name first (Enter in the field).')
+  const s = c.s
+  if (!si || !s) return
+  const id = si.status.identity
+  const dup = id?.duplicateOf ?? undefined
+  const naming = !dup && (!si.reauth || asNew)
+  // `typed`: the value Enter submitted (the form state seen here may predate it).
+  const labelText = dup ?? (naming ? (typed ?? c.form['add:label'] ?? suggestName(id, s.accounts)).trim() : si.label)
+  const group = naming ? (c.form['add:group'] ?? si.group) : si.group
+  await setForm($, 'add:problem', '')
+  if (naming && !labelText) return void setForm($, 'add:problem', 'Type a name for this account.')
+  if (naming && s.accounts.some(a => a.label.toLowerCase() === labelText.toLowerCase())) {
+    return void setForm($, 'add:problem', `"${labelText}" is already a name here; pick another.`)
+  }
   const r = await run(
     $,
     'saving to the vault',
     async () => {
-      if (!c.s?.consents.credentialStorage) await actOnboarding($, { credentialStorage: true }, false)
+      if (!s.consents.credentialStorage) await actOnboarding($, { credentialStorage: true }, false)
       return actSigninConfirm($, si.status.id, labelText, group, false, asNew)
     },
     undefined,
@@ -497,7 +510,7 @@ async function confirmSignin($: EngineInterface, c: Ctx, asNew = false): Promise
 export async function afterConfirm($: EngineInterface, c: Ctx, labelText: string, group: string, message?: string): Promise<void> {
   signinPoll++
   await setSignin($, null)
-  await clearForm($, 'add:label', 'add:consent', 'add:asnew')
+  await clearForm($, 'add:label', 'add:asnew', 'add:problem', 'add:vault')
   await setView($, c.s?.onboarded ? { tab: 'accounts' } : { tab: 'onboarding', sub: 'done' })
   await flash($, 'info', message ?? `Saved "${labelText}" to the vault in group ${group}. The temporary sign-in copy is retired; nothing was switched.`)
 }

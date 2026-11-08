@@ -213,7 +213,7 @@ export function Row(c: Ctx, ...children: unknown[]): JSX.Element {
 }
 
 /** A text field; falls back to a note on a surface without Input. */
-export function Field($: EngineInterface, c: Ctx, key: string, labelText: string, opts: { placeholder?: string; submitLabel?: string; autoFocus?: boolean; onSubmit: (value: string) => void }): JSX.Element {
+export function Field($: EngineInterface, c: Ctx, key: string, labelText: string, opts: { placeholder?: string; submitLabel?: string; autoFocus?: boolean; initial?: string; onSubmit: (value: string) => void }): JSX.Element {
   if (!c.canType) return Line(c, `${labelText}: type this in a terminal or desktop session (/quay).`, { dim: true })
   const { Input } = c.els
   return (
@@ -221,7 +221,7 @@ export function Field($: EngineInterface, c: Ctx, key: string, labelText: string
       key={key}
       label={`${labelText}: `}
       placeholder={opts.placeholder}
-      value={c.form[key] ?? ''}
+      value={c.form[key] ?? opts.initial ?? ''}
       submitLabel={opts.submitLabel}
       autoFocus={opts.autoFocus ? true : undefined}
       onInput={(value: string) => setForm($, key, value)}

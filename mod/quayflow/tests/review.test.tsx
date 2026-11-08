@@ -128,76 +128,123 @@ describe('registration', () => {
     await quay($, 'register')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'hints' })
-    expect(await ui.find({ type: 'Text', text: /Identity\s+avery@harbor\.example/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Signed in as\s+avery@harbor\.example/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Organization\s+Harbor Studio/ })).toBeDefined()
     expect(w.bodies('/v1/identity')).toEqual([{}])
+    // A new group is behind its button, not an always-open field.
+    expect(await ui.find({ key: 'reg:newgroup' })).toBeUndefined()
+    await ui.press({ key: 'reg-newgroup' })
     await ui.input({ key: 'reg:newgroup', text: 'Harbor' })
     expect(w.bodies('/v1/groups/create')).toEqual([{ name: 'Harbor' }])
     await ui.unmount()
   })
 
-  test('a duplicate identity offers the existing registration; saving needs the storage box', async ($, on) => {
+  test('registering before any vault consent asks for it once, with the reason on screen', async ($, on) => {
+    const fresh: StateView = { ...STATE, consents: { ...STATE.consents, credentialStorage: null }, envs: [{ ...ENV, live: { account: 'c3c3c3c3c3c3', known: false, kind: 'organization' } }] }
+    const w = world(on, {
+      state: fresh,
+      routes: {
+        '/v1/identity': { account: 'c3c3c3c3c3c3', kind: 'organization', display: 'Sam@harbor.example' },
+        '/v1/accounts/register': { id: 'c3c3c3c3c3c3', label: 'sam', kind: 'organization' },
+      },
+    })
+    await start($, w, true)
+    await quay($, 'register')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'reg-save' })
+    expect(w.routes()).not.toContain('/v1/accounts/register')
+    expect(await ui.find({ type: 'Text', text: /Tick the vault box first/ })).toBeDefined()
+    await ui.press({ key: 'reg:consent' })
+    await ui.press({ key: 'reg-save' })
+    expect(w.bodies('/v1/onboarding')).toContainEqual({ consents: { credentialStorage: true }, complete: false })
+    // The name came from the e-mail.
+    expect(w.bodies('/v1/accounts/register')).toEqual([expect.objectContaining({ label: 'sam', group: 'Default' })])
+    await ui.unmount()
+  })
+
+  test('adding signs in first, then suggests a name from the account and saves', async ($, on) => {
+    const ready = { id: 'si-4', state: 'ready', configDir: '/t', command: 'claude', identity: { account: 'f6f6f6f6f6f6', kind: 'personal', display: 'Avery.Lee@example.com' } }
+    const w = world(on, { routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
+    await start($, w, true)
+    await quay($, 'add')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    // No name is asked before signing in: one button.
+    expect(await ui.find({ key: 'add:label' })).toBeUndefined()
+    await ui.press({ key: 'add-continue' })
+    expect(w.routes()).toContain('/v1/accounts/signin/start')
+    expect(await ui.find({ type: 'Text', text: /Avery\.Lee@example\.com/ })).toBeDefined()
+    // The name is suggested from the e-mail; saving needs no further box.
+    await ui.press({ key: 'signin-save' })
+    expect(w.bodies('/v1/accounts/signin/confirm')).toEqual([{ id: 'si-4', label: 'avery.lee', group: 'Default', acceptDisclosure: false }])
+    await ui.unmount()
+  })
+
+  test('a suggested name that is taken gets a number; a typed one that is taken stays on screen', async ($, on) => {
+    const ready = { id: 'si-5', state: 'ready', configDir: '/t', command: 'claude', identity: { account: 'a7a7a7a7a7a7', kind: 'personal', display: 'personal@example.com' } }
+    const w = world(on, { routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
+    await start($, w, true)
+    await quay($, 'add')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'add-continue' })
+    // "personal" is registered already: the suggestion is "personal-2".
+    await ui.input({ key: 'add:label', text: 'Personal', kind: 'change' } as never)
+    expect(await ui.find({ type: 'Text', text: /"personal" is already a name here/ })).toBeDefined()
+    await ui.press({ key: 'signin-save' })
+    expect(w.routes()).not.toContain('/v1/accounts/signin/confirm')
+    await ui.input({ key: 'add:label', text: 'home' })
+    expect(w.bodies('/v1/accounts/signin/confirm')).toEqual([{ id: 'si-5', label: 'home', group: 'Default', acceptDisclosure: false }])
+    await ui.unmount()
+  })
+
+  test('a duplicate identity is updated under its existing name', async ($, on) => {
     const ready = { id: 'si-1', state: 'ready', configDir: 'C:\\t', command: 'claude', identity: { account: 'a1a1a1a1a1a1', kind: 'organization', duplicateOf: 'work' } }
     const w = world(on, { routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
     await start($, w, true)
     await quay($, 'add')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    await ui.press({ key: 'hints' })
-    // A name already in use is refused before any sign-in opens.
-    await ui.input({ key: 'add:label', text: 'Personal', kind: 'change' } as never)
-    expect(await ui.find({ type: 'Text', text: /"personal" is already a name here/ })).toBeDefined()
     await ui.press({ key: 'add-continue' })
-    expect(w.routes()).not.toContain('/v1/accounts/signin/start')
-    // Enter in the name field signs in.
-    await ui.input({ key: 'add:label', text: 'work backup' })
     expect(await ui.find({ type: 'Text', text: /This account is already registered/ })).toBeDefined()
-    expect(await ui.find({ key: 'signin-review-existing' })).toBeDefined()
+    expect(await ui.find({ key: 'add:label' })).toBeUndefined()
     await ui.press({ key: 'signin-save' })
-    expect(w.routes()).not.toContain('/v1/accounts/signin/confirm')
-    await ui.press({ key: 'add:consent' })
-    await ui.press({ key: 'signin-save' })
-    expect(w.bodies('/v1/accounts/signin/confirm')).toEqual([{ id: 'si-1', label: 'work backup', group: 'Default', acceptDisclosure: false }])
+    expect(w.bodies('/v1/accounts/signin/confirm')).toEqual([{ id: 'si-1', label: 'work', group: 'Default', acceptDisclosure: false }])
     await ui.unmount()
   })
 
-  test('adding an account before any vault consent asks for it on the add screen, then signs in', async ($, on) => {
-    const ready = { id: 'si-3', state: 'ready', configDir: '/t', command: 'claude', identity: { account: 'e5e5e5e5e5e5', kind: 'personal' } }
+  test('before any vault consent, the add screen asks for it once and keeps the reason on screen', async ($, on) => {
+    const ready = { id: 'si-3', state: 'ready', configDir: '/t', command: 'claude', identity: { account: 'e5e5e5e5e5e5', kind: 'personal', display: 'home@example.com' } }
     const fresh: StateView = { ...STATE, consents: { ...STATE.consents, credentialStorage: null } }
     const w = world(on, { state: fresh, routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
     await start($, w, true)
     await quay($, 'add')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ key: 'add:vault' })).toBeDefined()
-    // Enter on the name without the box: nothing opens, and the screen says why.
-    await ui.input({ key: 'add:label', text: 'home' })
+    await ui.press({ key: 'add-continue' })
     expect(w.routes()).not.toContain('/v1/accounts/signin/start')
-    expect(await ui.find({ type: 'Text', text: /Tick the vault box above first/ })).toBeDefined()
-    // With the box: the consent is recorded, then the sign-in opens.
+    expect(await ui.find({ type: 'Text', text: /Tick the vault box first/ })).toBeDefined()
     await ui.press({ key: 'add:vault' })
-    await ui.input({ key: 'add:label', text: 'home' })
+    await ui.press({ key: 'add-continue' })
     expect(w.bodies('/v1/onboarding')).toContainEqual({ consents: { credentialStorage: true }, complete: false })
     const r = w.routes()
     expect(r.indexOf('/v1/onboarding')).toBeLessThan(r.indexOf('/v1/accounts/signin/start'))
+    // Saving asks nothing more.
+    await ui.press({ key: 'signin-save' })
+    expect(w.bodies('/v1/accounts/signin/confirm')).toHaveLength(1)
     await ui.unmount()
   })
 
-  test('a reauthentication that returned another identity can be registered as new, never over the old one', async ($, on) => {
+  test('a reauthentication that returned another identity can be saved as new, never over the old one', async ($, on) => {
     const ready = { id: 'si-2', state: 'ready', configDir: 'C:\\t', command: 'claude', identity: { account: 'd4d4d4d4d4d4', kind: 'personal', unexpected: true } }
     const w = world(on, { routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
     await start($, w, true)
     await quay($, '')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    await ui.press({ key: 'hints' })
     await ui.press({ key: 'tab:accounts' })
     await ui.press({ key: 'acct:b2b2b2b2b2b2' })
     await ui.press({ key: 'ad-reauth' })
     await ui.press({ key: 'add-continue' })
-    expect(await ui.find({ type: 'Text', text: /Reauthentication returned a different identity/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /You signed in to a different account/ })).toBeDefined()
     expect(await ui.find({ key: 'signin-save' })).toBeUndefined()
     await ui.press({ key: 'signin-as-new' })
     await ui.input({ key: 'add:label', text: 'travel' })
-    await ui.press({ key: 'add:consent' })
-    await ui.press({ key: 'signin-save' })
     expect(w.bodies('/v1/accounts/signin/confirm')).toEqual([{ id: 'si-2', label: 'travel', group: 'Default', acceptDisclosure: false, asNew: true }])
     await ui.unmount()
   })

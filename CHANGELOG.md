@@ -9,7 +9,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - Releases carry `quayflow-macos-arm64` and `quayflow-macos-x86_64`, built twice and compared like the other programs.
 
 ### Changed
-- `/quay add` before any login was registered seemed to do nothing after you typed a name: it only flashed a short warning that the vault consent was missing. The add screen now shows the vault box itself; tick it and press Enter to sign in.
+- Adding an account (`/quay add`) now signs in first and names the account after: pick the group, choose **Sign in with Claude**, and save with a name suggested from the account's e-mail address. Before, it asked for a name first, and when nothing was registered yet it only flashed a short warning about the missing vault consent, so it looked stuck.
+- The credential storage consent is asked once, the first time you save a login, instead of a box on every save. Problems on the register and add screens (a name in use, the box not ticked) now stay on the screen instead of a passing message. Registering suggests a name from the e-mail address too, and Enter on the name saves.
 - A switch also waits for Claude Code's `.storage-write.lock`, which Claude holds while it saves its login, on every platform. On Linux and macOS the legacy lock is named after the resolved folder, as Claude names it.
 
 ## [0.1.5] - 2026-11-08
