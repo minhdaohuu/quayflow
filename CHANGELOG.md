@@ -17,6 +17,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - In the terminal, a status change could cancel a read the `/quay` pane was waiting for, so a screen such as Register showed "not readable (engine unreachable (ui.render: superseded))". The status line no longer redraws the pane, and a cancelled read is asked again.
 - Linux: adding an account or Open New Session opened no window when the engine had started without a desktop (over SSH, or from systemd). The Mod now tells the engine which desktop its session runs on, and the command shown when no window can open is written for bash, not PowerShell.
 - Linux: the sign-in window's link could open in LibreOffice instead of the browser (the window lacked the desktop's `XDG_DATA_DIRS`, where a snap browser is listed). The desktop's own variables are now passed on. The window also stays open after `claude auth login` and says whether the sign-in finished.
+- After `quayflow stop` from a terminal, the status line said "engine not running" instead of "engine stopped by you (/quay start)" in sessions that were already open.
 - An update from a local build says the Mod was left as it is, instead of "Skipped the Claude Code plugin (-NoPlugin)".
 
 ## [0.1.4] - 2026-11-07

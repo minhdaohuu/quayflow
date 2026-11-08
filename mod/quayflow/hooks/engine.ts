@@ -317,7 +317,12 @@ async function attempt($: EngineInterface, options: { allowStart: boolean; expli
     // failure words) over a bare "unreachable".
     const r = Q.link.reason
     const keep = r === 'no_consent' || r === 'stopped_by_user' || r === 'not_installed' || r === 'start_failed'
-    if (!keep || Q.link.on) await applyLink($, ticket, { on: false, reason: 'unreachable', message: outcome.message })
+    // `quayflow stop` leaves this marker: an engine stopped from a terminal after this session
+    // started says so, not "not running".
+    const marker = await dataPath($, 'engine.stopped').catch(() => '')
+    const stopped = !!marker && (await $.fs.exists(marker).catch(() => false))
+    if (stopped && r !== 'stopped_by_user') await applyLink($, ticket, { on: false, reason: 'stopped_by_user' })
+    else if (!stopped && (!keep || Q.link.on)) await applyLink($, ticket, { on: false, reason: 'unreachable', message: outcome.message })
   }
 }
 

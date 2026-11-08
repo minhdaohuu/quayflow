@@ -408,6 +408,24 @@ describe('interactive sessions', () => {
     expect(status).toMatch(/^Quayflow · work · Suggest/)
   })
 
+  test('quayflow stop from a terminal says "stopped by you"; quayflow start brings the line back', async ($, on) => {
+    const w = world(on)
+    await start($, w, true)
+    const last = () => w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+    expect(last()).toMatch(/^Quayflow · work · Suggest/)
+    w.stopByPerson()
+    await w.clock.advance(10_000)
+    await w.clock.settle()
+    expect(last()).toBe('Quayflow · off · engine stopped by you (/quay start)')
+    // Not restarted by the Mod: only the person's own start brings it back.
+    expect(w.runs).toEqual([])
+    // The Mod looks again every 30 s while stopped (a handshake only, never a start).
+    w.up()
+    await w.clock.advance(65_000)
+    await w.clock.settle()
+    expect(last()).toMatch(/^Quayflow · work · Suggest/)
+  })
+
   test('after a reconnect the status line is repainted "on"', async ($, on) => {
     const w = world(on)
     await start($, w, true)

@@ -98,7 +98,9 @@ export function world(on: On, a: Answers = {}) {
     if (file !== undefined) return { value: file }
     return { deny: 'ENOENT: no such file' }
   })
-  on('fs.exists', () => ({ value: true }))
+  // Every file exists except `engine.stopped`, the marker `quayflow stop` leaves.
+  let stoppedMarker = false
+  on('fs.exists', (_$, e) => ({ value: /engine\.stopped$/.test(e.path) ? stoppedMarker : true }))
   on('fs.write', () => ({ value: undefined }))
   on('process.run', async (_$, e) => {
     runs.push([...e.argv])
@@ -179,10 +181,16 @@ export function world(on: On, a: Answers = {}) {
     /** The engine comes up by other means (installed, set up or started from the command line). */
     up: () => {
       down = false
+      stoppedMarker = false
     },
     /** The engine goes away: engine.json gone, connections refused. */
     down: () => {
       down = true
+    },
+    /** `quayflow stop` from a terminal: the engine goes away and leaves its marker. */
+    stopByPerson: () => {
+      down = true
+      stoppedMarker = true
     },
     /** The process goes on under another session id (a resume or /clear). */
     newSession: (id: string) => {
