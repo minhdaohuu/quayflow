@@ -96,7 +96,16 @@ write_sums() { # dir [name=hash override]
     done ) > "$d/SHA256SUMS"
 }
 
-SYS=/usr/local/bin:/usr/bin:/bin
+# The system's programs without a real gh (CI runners ship one): links in one folder, so
+# "no gh" means no gh, and only the fake gh in $FAKEBIN answers when a case wants one.
+SYS="$W/sys"
+mkdir -p "$SYS"
+for d in /usr/local/bin /usr/bin /bin; do
+  for f in "$d"/*; do
+    n=${f##*/}
+    [ "$n" = gh ] || [ -e "$SYS/$n" ] || ln -s "$f" "$SYS/$n"
+  done
+done
 export HOME="$W/home" QF_FAKE_LOG="$W/fake.log" QF_FAKE_CLAUDE_STATE="$W/claude-state" QF_FAKE_CLAUDE_CLONE="$CLONE"
 unset XDG_DATA_HOME XDG_CONFIG_HOME
 mkdir -p "$HOME"
