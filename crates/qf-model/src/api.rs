@@ -22,6 +22,15 @@ pub struct HelloRequest {
     /// Session window opens on the person's desktop even when the engine started without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<std::collections::BTreeMap<String, String>>,
+    /// The session's `CLAUDE_CONFIG_DIR` exactly as set (`None` when unset). On macOS Claude
+    /// names its Keychain item after this exact text, so the engine checks that the session
+    /// reads the item Quayflow writes. Not logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_dir: Option<String>,
+    /// The session's `CLAUDE_SECURESTORAGE_CONFIG_DIR` exactly as set (`None` when unset): a
+    /// login store outside the configuration folder, which Quayflow does not switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secure_storage_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

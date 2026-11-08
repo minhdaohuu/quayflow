@@ -5,6 +5,7 @@
 pub mod canary;
 pub mod env;
 pub mod history;
+pub mod keychain;
 pub mod lanes;
 pub mod lock;
 pub mod login;

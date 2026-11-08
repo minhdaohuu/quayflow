@@ -583,6 +583,7 @@ version = "0.1.5"
 dependencies = [
  "hex",
  "junction",
+ "libc",
  "memchr",
  "qf-model",
  "qf-vault",
@@ -658,6 +659,7 @@ name = "quayflow"
 version = "0.1.5"
 dependencies = [
  "hex",
+ "libc",
  "native-tls",
  "qf-adapter",
  "qf-engine",

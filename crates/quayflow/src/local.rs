@@ -138,9 +138,62 @@ pub fn set_startup(on: bool) -> Result<(), String> {
     }
 }
 
+/// macOS: a LaunchAgent that runs `quayflow start` when the user signs in. The engine runs in
+/// the user's login session, which it needs to use the Keychain.
+#[cfg(target_os = "macos")]
+pub fn set_startup(on: bool) -> Result<(), String> {
+    let plist = qf_adapter::env::home_dir()
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{LAUNCH_AGENT}.plist"));
+    // SAFETY: getuid has no preconditions.
+    let domain = format!("gui/{}", unsafe { libc::getuid() });
+    let launchctl = |args: &[&str]| -> Result<(), String> {
+        let o = std::process::Command::new("/bin/launchctl")
+            .args(args)
+            .output()
+            .map_err(|e| format!("launchctl: {e}"))?;
+        if o.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&o.stderr).trim().to_string())
+        }
+    };
+    // Unload first: a loaded agent keeps the old definition.
+    let _ = launchctl(&["bootout", &format!("{domain}/{LAUNCH_AGENT}")]);
+    if on {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        if let Some(d) = plist.parent() {
+            std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+        }
+        qf_vault::atomic_write(&plist, launch_agent(&exe).as_bytes()).map_err(|e| e.to_string())?;
+        launchctl(&["bootstrap", &domain, &plist.display().to_string()])
+    } else {
+        if plist.exists() {
+            std::fs::remove_file(&plist).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+const LAUNCH_AGENT: &str = "com.quayflow.engine";
+
+/// The LaunchAgent that starts the engine at sign-in. `start` returns once the engine runs in
+/// its own process group; `AbandonProcessGroup` keeps launchd from stopping anything when it
+/// returns.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn launch_agent(exe: &Path) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>com.quayflow.engine</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>start</string>\n  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>AbandonProcessGroup</key>\n  <true/>\n  <key>ProcessType</key>\n  <string>Background</string>\n</dict>\n</plist>\n",
+        esc(&exe.display().to_string())
+    )
+}
+
 /// Linux: a systemd user unit that runs `quayflow start` when the user's session manager
 /// starts (a desktop or SSH sign-in; with `loginctl enable-linger`, at boot).
-#[cfg(not(windows))]
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn set_startup(on: bool) -> Result<(), String> {
     let unit_dir = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
@@ -183,12 +236,12 @@ pub fn set_startup(on: bool) -> Result<(), String> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const STARTUP_UNIT: &str = "quayflow.service";
 
 /// The systemd user unit that starts the engine at sign-in. `start` returns once the engine
 /// runs on its own; the unit then stays active until the engine is stopped.
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 pub fn startup_unit(exe: &Path) -> String {
     format!(
         "[Unit]\nDescription=Quayflow engine (Claude account switching)\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=\"{}\" start\n\n[Install]\nWantedBy=default.target\n",
@@ -690,9 +743,17 @@ fn download(assets: &[&str], dest: &Path, tag: &str, gh_ready: bool) -> Result<(
 /// The release assets this platform installs, and their names in the program folder.
 #[cfg(windows)]
 pub const PROGRAMS: &[(&str, &str)] = &[("quayflow.exe", "quayflow.exe"), ("quayflow-bg.exe", "quayflow-bg.exe")];
-#[cfg(all(not(windows), target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub const PROGRAMS: &[(&str, &str)] = &[("quayflow-linux-x86_64", "quayflow")];
-#[cfg(all(not(windows), not(target_arch = "x86_64")))]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub const PROGRAMS: &[(&str, &str)] = &[("quayflow-macos-arm64", "quayflow")];
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub const PROGRAMS: &[(&str, &str)] = &[("quayflow-macos-x86_64", "quayflow")];
+#[cfg(not(any(
+    windows,
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "macos", any(target_arch = "aarch64", target_arch = "x86_64"))
+)))]
 pub const PROGRAMS: &[(&str, &str)] = &[];
 
 /// The release's installer for this platform.
@@ -1453,6 +1514,15 @@ mod tests {
         );
         let a = installer_args(Path::new("install.sh"), None, Some(Path::new("/dist")), false, true);
         assert_eq!(a, ["install.sh", "--update", "--source", "/dist", "--no-plugin"]);
+    }
+
+    #[test]
+    fn the_launch_agent_runs_quayflow_start() {
+        let a = launch_agent(Path::new("/Users/u/.local/share/quayflow/bin/quayflow"));
+        assert!(a.contains("<string>/Users/u/.local/share/quayflow/bin/quayflow</string>\n    <string>start</string>"));
+        assert!(a.contains("<key>RunAtLoad</key>\n  <true/>"));
+        assert!(a.contains("<key>AbandonProcessGroup</key>\n  <true/>"));
+        assert!(launch_agent(Path::new("/a&b/q")).contains("/a&amp;b/q"));
     }
 
     #[test]

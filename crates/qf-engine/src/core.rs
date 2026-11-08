@@ -216,6 +216,9 @@ pub struct Inner {
     pub activity: VecDeque<ActivityItem>,
     /// Last model a session reported.
     pub session_model: HashMap<String, String>,
+    /// macOS: session id -> (the Keychain service it reads, whether it uses a separate login
+    /// store through CLAUDE_SECURESTORAGE_CONFIG_DIR, when it said so), from its handshake.
+    pub session_keychain: HashMap<String, (String, bool, i64)>,
     /// A support report built for review and not saved yet: (id, text).
     pub pending_report: Option<(String, String)>,
 }
@@ -329,6 +332,7 @@ impl Engine {
                 request_cache: VecDeque::new(),
                 activity: VecDeque::new(),
                 session_model: HashMap::new(),
+                session_keychain: HashMap::new(),
                 pending_report: None,
             }),
             cred_lock: Mutex::new(()),
@@ -480,6 +484,35 @@ impl Engine {
             .find(|(_, st)| st.sessions.iter().any(|s| s.session_id == session_id))
             .map(|(id, _)| id.clone())
             .unwrap_or_else(|| self.default_env.id.clone())
+    }
+
+    /// macOS: why a session cannot follow a switch of its environment in place, when it reads
+    /// its login from another Keychain item than the one Quayflow writes there (it was started
+    /// with another spelling of `CLAUDE_CONFIG_DIR`, or with `CLAUDE_SECURESTORAGE_CONFIG_DIR`).
+    /// Only sessions listed in an environment's registry are checked.
+    pub fn keychain_mismatch(&self, inner: &Inner, session_id: &str) -> Option<String> {
+        let (service, separate, _) = inner.session_keychain.get(session_id)?;
+        let st = inner
+            .envs
+            .values()
+            .find(|st| st.sessions.iter().any(|s| s.session_id == session_id))?;
+        let ours = qf_adapter::keychain::service_name(&st.env)?;
+        if *separate {
+            return Some(
+                "it was started with CLAUDE_SECURESTORAGE_CONFIG_DIR, so its login is stored outside this environment"
+                    .into(),
+            );
+        }
+        (*service != ours).then(|| {
+            if ours == qf_adapter::keychain::BASE_SERVICE {
+                "it reads another Keychain item than Quayflow writes here; start it without CLAUDE_CONFIG_DIR".into()
+            } else {
+                format!(
+                    "it reads another Keychain item than Quayflow writes here; start it with CLAUDE_CONFIG_DIR set to exactly {}",
+                    st.env.config_dir.display()
+                )
+            }
+        })
     }
 
     /// Groups governing an environment: the running sessions' groups, or the default group.
@@ -1193,6 +1226,22 @@ impl Engine {
     pub fn tick(self: &Arc<Self>) {
         self.watch();
         let ids: Vec<EnvId> = self.lock().envs.keys().cloned().collect();
+        if cfg!(target_os = "macos") {
+            // A switch on a Keychain environment leaves a marker so running sessions re-read at
+            // once; it goes when every session has read the new login anyway (also leftovers of
+            // an earlier engine run).
+            let envs: Vec<qf_adapter::Env> = {
+                let inner = self.lock();
+                ids.iter()
+                    .filter_map(|id| inner.envs.get(id).map(|s| s.env.clone()))
+                    .collect()
+            };
+            for env in envs {
+                if qf_adapter::login::sweep_marker(&env, qf_adapter::login::MARKER_LIFETIME) {
+                    self.log.log("info", "marker.removed", json!({"env": env.id}), &[]);
+                }
+            }
+        }
         {
             let mut inner = self.lock();
             for id in &ids {
@@ -1407,6 +1456,11 @@ fn prune_session_state(inner: &mut Inner) {
         .flat_map(|st| st.sessions.iter().map(|s| s.session_id.clone()))
         .collect();
     inner.session_model.retain(|sid, _| alive.contains(sid));
+    // A handshake can come before the session shows in its registry: keep it a while.
+    let now = now_ms();
+    inner
+        .session_keychain
+        .retain(|sid, (_, _, at)| alive.contains(sid) || now - *at < 10 * 60_000);
     inner.progressed.retain(|sid, _| alive.contains(sid));
     inner.verified.retain(|sid, _| alive.contains(sid));
 }

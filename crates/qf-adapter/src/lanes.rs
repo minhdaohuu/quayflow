@@ -306,8 +306,10 @@ pub fn delete(lane: &Env) -> std::io::Result<()> {
     for f in LINKED_FILES {
         let _ = std::fs::remove_file(lane.config_dir.join(f));
     }
+    // The legacy lock is named after the resolved folder: name it while the folder exists.
+    let legacy = lane.legacy_lock();
     std::fs::remove_dir_all(&lane.config_dir)?;
-    let _ = std::fs::remove_dir(lane.legacy_lock());
+    let _ = std::fs::remove_dir(legacy);
     Ok(())
 }
 

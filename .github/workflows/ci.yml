@@ -1,4 +1,4 @@
-# CI: Rust workspace, Mod, installers and scripts, on Windows and Linux.
+# CI: Rust workspace, Mod, installers and scripts, on Windows, Linux and macOS.
 
 name: CI
 
@@ -97,17 +97,68 @@ jobs:
       - name: Build the program for the smoke test
         run: cargo build --locked -p quayflow
       - name: ShellCheck
-        run: shellcheck -S warning installer/install.sh installer/test-install.sh tests/e2e/smoke-linux.sh
-      - name: Installer sandbox test (install.sh)
-        run: sh installer/test-install.sh
+        run: shellcheck -S warning installer/install.sh installer/test-install.sh tests/e2e/smoke-unix.sh
+      # Under both shells users run it with: dash (/bin/sh on Debian, Ubuntu) and bash.
+      - name: Installer sandbox test (install.sh, dash and bash)
+        run: |
+          QF_SH=dash sh installer/test-install.sh
+          QF_SH=bash bash installer/test-install.sh
       # The real program against a fake environment: install.sh from a local release folder,
       # engine start and stop, quayflow update handing off to install.sh, uninstall.
       - name: Linux smoke test (fake environment)
-        run: sh tests/e2e/smoke-linux.sh target/debug/quayflow
+        run: sh tests/e2e/smoke-unix.sh target/debug/quayflow
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
       - name: Mod tests on Linux (claude plugin test)
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.319
+          export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/claude-empty"
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          claude plugin test mod/quayflow
+
+  macos:
+    name: macOS (clippy, test, smoke, installer, Mod)
+    runs-on: macos-15
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-apple-darwin
+          rustc -Vv
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Unit tests only ever touch throwaway Keychain items (hashed names of temporary folders);
+      # the Keychain round trip skips itself where the runner has no usable Keychain.
+      - name: cargo test
+        run: cargo test --workspace --locked
+      - name: Build the program for the smoke test
+        run: cargo build --locked -p quayflow
+      - name: Build for Intel Macs (compile check)
+        run: cargo build --locked -p quayflow --target x86_64-apple-darwin
+      - name: Installer sandbox test (install.sh)
+        run: sh installer/test-install.sh
+      - name: macOS smoke test (fake environment, Keychain off)
+        run: sh tests/e2e/smoke-unix.sh target/debug/quayflow
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Mod tests on macOS (claude plugin test)
         run: |
           npm install -g @anthropic-ai/claude-code@2.1.319
           export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/claude-empty"

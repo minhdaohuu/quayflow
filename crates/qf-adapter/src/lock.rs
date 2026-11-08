@@ -2,8 +2,9 @@
 //!
 //! `mkdir` is the mutex. Holders touch the directory's mtime periodically; a lock older
 //! than its stale age belongs to a dead holder and may be removed. Quayflow takes the
-//! refresh lock, then the legacy lock, then the config lock; never removes a lock younger
-//! than its stale age; and gives up after a bounded wait with nothing changed.
+//! refresh lock, then the legacy lock, then the storage lock (held by Claude around every
+//! write to its login store), then the config lock; never removes a lock younger than its
+//! stale age; and gives up after a bounded wait with nothing changed.
 
 use crate::env::Env;
 use std::fmt;
@@ -30,6 +31,11 @@ pub fn specs(env: &Env) -> Vec<LockSpec> {
             name: "legacy",
             path: env.legacy_lock(),
             stale: Duration::from_secs(60),
+        },
+        LockSpec {
+            name: "storage",
+            path: env.storage_lock(),
+            stale: Duration::from_secs(15),
         },
         LockSpec {
             name: "config",
@@ -317,10 +323,12 @@ mod tests {
         std::fs::create_dir_all(&e.config_dir).unwrap();
         {
             let held = acquire_env(&e, Duration::from_secs(1)).unwrap();
-            assert_eq!(held.names(), 3);
+            assert_eq!(held.names(), 4);
             assert!(e.refresh_lock().exists() && e.legacy_lock().exists() && e.config_lock().exists());
+            assert!(e.storage_lock().exists());
         }
         assert!(!e.refresh_lock().exists() && !e.legacy_lock().exists() && !e.config_lock().exists());
+        assert!(!e.storage_lock().exists());
     }
 
     #[test]

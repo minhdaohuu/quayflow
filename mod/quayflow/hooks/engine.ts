@@ -205,6 +205,12 @@ async function hello($: EngineInterface, timeoutMs: number): Promise<HelloRespon
   const desktop = await desktopVars($)
   const body: HelloRequest = { protocol: PROTOCOL, modVersion: MOD_VERSION, sessionId: Q.sessionId, headless: Q.headless, claudeVersion: Q.claudeVersion || undefined }
   if (desktop) body.desktop = desktop
+  // Exactly as set: on macOS Claude names its Keychain item after this text, and the engine
+  // checks that this session reads the item Quayflow writes (`keychain_mismatch`).
+  const configDir = await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined)
+  const secureStorageDir = await $.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR').catch(() => undefined)
+  if (configDir !== undefined && configDir !== null) body.configDir = configDir
+  if (secureStorageDir !== undefined && secureStorageDir !== null) body.secureStorageDir = secureStorageDir
   return call<HelloResponse>($, 'POST', '/v1/hello', body, { timeoutMs })
 }
 

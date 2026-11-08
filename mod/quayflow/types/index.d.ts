@@ -144,7 +144,18 @@ export type DOrgSetting = { enabled: boolean; confirmedOrg?: string | null; conf
 
 // ---------------------------------------------------------------- api.rs
 
-export type HelloRequest = { protocol: number; modVersion?: string; sessionId?: string; headless: boolean; claudeVersion?: string; desktop?: Record<string, string> }
+export type HelloRequest = {
+  protocol: number
+  modVersion?: string
+  sessionId?: string
+  headless: boolean
+  claudeVersion?: string
+  desktop?: Record<string, string>
+  /** The session's CLAUDE_CONFIG_DIR exactly as set (absent when unset). */
+  configDir?: string
+  /** The session's CLAUDE_SECURESTORAGE_CONFIG_DIR exactly as set (absent when unset). */
+  secureStorageDir?: string
+}
 export type HelloResponse = {
   compatible: boolean
   protocol: number

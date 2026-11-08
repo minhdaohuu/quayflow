@@ -27,6 +27,9 @@ hex.workspace = true
 ureq.workspace = true
 native-tls.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true
 

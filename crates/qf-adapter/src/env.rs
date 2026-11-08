@@ -63,11 +63,20 @@ impl Env {
     pub fn refresh_lock(&self) -> PathBuf {
         self.config_dir.join(".oauth_refresh.lock")
     }
-    /// `<configDir>.lock` (sibling of the folder)
+    /// `<configDir>.lock` (sibling of the folder). Claude names it after the resolved folder
+    /// (symbolic links followed), so on Unix the path is resolved when the folder exists.
     pub fn legacy_lock(&self) -> PathBuf {
-        let mut s = self.config_dir.as_os_str().to_owned();
+        #[cfg(unix)]
+        let dir = std::fs::canonicalize(&self.config_dir).unwrap_or_else(|_| self.config_dir.clone());
+        #[cfg(not(unix))]
+        let dir = self.config_dir.clone();
+        let mut s = dir.into_os_string();
         s.push(".lock");
         PathBuf::from(s)
+    }
+    /// `<configDir>\.storage-write.lock`: Claude holds it around every write to its login store.
+    pub fn storage_lock(&self) -> PathBuf {
+        self.config_dir.join(".storage-write.lock")
     }
     /// `<.claude.json>.lock`
     pub fn config_lock(&self) -> PathBuf {
@@ -96,6 +105,7 @@ mod tests {
         assert_eq!(e.legacy_lock(), home.join(".claude.lock"));
         assert_eq!(e.config_lock(), home.join(".claude.json.lock"));
         assert_eq!(e.refresh_lock(), home.join(".claude").join(".oauth_refresh.lock"));
+        assert_eq!(e.storage_lock(), home.join(".claude").join(".storage-write.lock"));
         let lanes = Path::new("data").join("lanes");
         let l = Env::at(EnvId("work".into()), lanes.join("work"));
         assert_eq!(l.claude_json, lanes.join("work").join(".claude.json"));

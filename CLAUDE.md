@@ -1,6 +1,6 @@
 # Quayflow: working notes for Claude
 
-Quayflow switches a Claude Code environment between the user's approved Claude accounts in place: running sessions continue on the new account at their next request. It watches usage, suggests or makes switches, recovers a request that hit a usage limit (one switch, one retry), and is built for unattended `claude -p` jobs. It ships for Windows x64 and Linux x86_64; macOS is next (never call it Windows-only).
+Quayflow switches a Claude Code environment between the user's approved Claude accounts in place: running sessions continue on the new account at their next request. It watches usage, suggests or makes switches, recovers a request that hit a usage limit (one switch, one retry), and is built for unattended `claude -p` jobs. It ships for Windows x64 and Linux x86_64; macOS (Keychain) is built for the next release and not yet tested with real logins (never call it Windows-only).
 
 Read `CHANGELOG.md` first for what changed recently; it is kept accurate.
 
@@ -55,7 +55,7 @@ The first type check needs `mod/quayflow/.claude-plugin/types/`, which Claude Co
 
 Fake-environment end-to-end (safe anywhere, run in CI): `pwsh -File tests/e2e/smoke-fake-env.ps1`, `cli-fake-env.ps1`, `sim-usage.ps1` (fake usage API `tests/sim/fake_api.py`, `QUAYFLOW_SIM_API`). Also `shell/test-Quayflow.ps1` and `installer/test-install.ps1`.
 
-Linux (CI job `linux`, or a Linux machine): `cargo clippy`/`cargo test` as above, `sh installer/test-install.sh`, `sh tests/e2e/smoke-linux.sh target/debug/quayflow`, `shellcheck -S warning installer/*.sh tests/e2e/*.sh`, `claude plugin test mod/quayflow`. Platform code is behind `cfg(windows)` / `cfg(not(windows))`: Linux paths and facts are in `qf-adapter` (`process.rs`, `env.rs`, `lock.rs`, `lanes.rs`, `policy.rs`), `qf-engine/src/paths.rs`, `qf-vault` and `quayflow/src/local.rs`; the Mod picks the layout in `hooks/engine.ts` (`layout`).
+Linux (CI job `linux`, or a Linux machine): `cargo clippy`/`cargo test` as above, `sh installer/test-install.sh`, `sh tests/e2e/smoke-unix.sh target/debug/quayflow`, `shellcheck -S warning installer/*.sh tests/e2e/*.sh`, `claude plugin test mod/quayflow`. macOS (CI job `macos`): the same, plus the Keychain backend (`qf-adapter/src/keychain.rs`, `login.rs` `Store`). On a Mac with your real login, run tests with `QUAYFLOW_KEYCHAIN=off` unless you are working on the Keychain: an environment that resolves to the bare `Claude Code-credentials` item is your live login (only your real `~/.claude` may resolve to it). Platform code is behind `cfg(windows)` / `cfg(not(windows))`: Linux paths and facts are in `qf-adapter` (`process.rs`, `env.rs`, `lock.rs`, `lanes.rs`, `policy.rs`), `qf-engine/src/paths.rs`, `qf-vault` and `quayflow/src/local.rs`; the Mod picks the layout in `hooks/engine.ts` (`layout`).
 
 Real-login scripts (`tests/e2e/real-*.ps1`) switch the user's live login. Never run them; give the user the command and read the results they paste.
 

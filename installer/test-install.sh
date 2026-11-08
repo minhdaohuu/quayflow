@@ -15,7 +15,14 @@ check() { # condition-result name [detail]
 ok() { "$@" >/dev/null 2>&1; echo $?; }
 trap 'pkill -f "$W/" 2>/dev/null; rm -rf "$W"' EXIT
 
-ASSET=quayflow-linux-x86_64
+case "$(uname -s)/$(uname -m)" in
+  Darwin/arm64) ASSET=quayflow-macos-arm64 ;;
+  Darwin/x86_64) ASSET=quayflow-macos-x86_64 ;;
+  *) ASSET=quayflow-linux-x86_64 ;;
+esac
+# Portable helpers (macOS has shasum, and BSD stat).
+sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 ASSETS="$W/assets" FAKEBIN="$W/fakebin" NOGH="$W/nogh"
 mkdir -p "$ASSETS" "$FAKEBIN" "$NOGH"
 
@@ -90,7 +97,7 @@ write_sums() { # dir [name=hash override]
   d=$1; shift
   ( cd "$d" && for f in "$ASSET" SOURCE_COMMIT; do
       [ -f "$f" ] || continue
-      h=$(sha256sum "$f" | cut -d' ' -f1)
+      h=$(sha "$f" | cut -d' ' -f1)
       for o in "$@"; do case "$o" in "$f="*) h=${o#*=} ;; esac; done
       [ "$h" = omit ] || printf '%s  %s\n' "$h" "$f"
     done ) > "$d/SHA256SUMS"
@@ -111,8 +118,15 @@ unset XDG_DATA_HOME XDG_CONFIG_HOME
 mkdir -p "$HOME"
 ROOT="$HOME/.local/share/quayflow" BIN="$HOME/.local/share/quayflow/bin" EXE="$HOME/.local/share/quayflow/bin/quayflow"
 LOGL() { cat "$QF_FAKE_LOG" 2>/dev/null; }
-run() { OUT=$(PATH="$NOGH:$SYS" sh "$INSTALLER" --source "$ASSETS" --yes --no-plugin --skip-attestation "$@" 2>&1); CODE=$?; }
-runwith() { dirs=$1; shift; OUT=$(PATH="$dirs:$SYS" sh "$INSTALLER" --yes "$@" 2>&1); CODE=$?; }
+# The shell that runs install.sh: users pipe it into their /bin/sh, which is dash on Debian
+# and Ubuntu and bash on macOS and Fedora. CI runs this test with QF_SH=dash and QF_SH=bash.
+QF_SH=${QF_SH:-sh}
+run() { OUT=$(PATH="$NOGH:$SYS" "$QF_SH" "$INSTALLER" --source "$ASSETS" --yes --no-plugin --skip-attestation "$@" 2>&1); CODE=$?; }
+runwith() { dirs=$1; shift; OUT=$(PATH="$dirs:$SYS" "$QF_SH" "$INSTALLER" --yes "$@" 2>&1); CODE=$?; }
+# once NAME=value helper args...: NAME is set for this one helper call only. Never write
+# `NAME=value helper`: for a shell function, bash (macOS /bin/sh) keeps NAME set afterwards,
+# while dash drops it, so later cases would run with a fault switched on.
+once() { _kv=$1; shift; export "${_kv%%=*}=${_kv#*=}"; "$@"; unset "${_kv%%=*}"; }
 sim() { # a running "engine": a quayflow* process named in engine.json, not our child
   cp "$ASSETS/$ASSET" "$W/quayflow-engine"; mkdir -p "$ROOT"
   ( "$W/quayflow-engine" engine-sim >/dev/null 2>&1 & echo $! > "$W/sim.pid" )
@@ -125,13 +139,13 @@ echo '=== install.sh ==='
 write_sums "$ASSETS"
 run
 check "$([ $CODE = 0 ]; echo $?)" 'install succeeds' "$OUT"
-check "$([ "$(sha256sum < "$EXE")" = "$(sha256sum < "$ASSETS/$ASSET")" ]; echo $?)" 'program installed'
+check "$([ "$(sha < "$EXE")" = "$(sha < "$ASSETS/$ASSET")" ]; echo $?)" 'program installed'
 check "$([ "$(readlink "$HOME/.local/bin/quayflow")" = "$EXE" ]; echo $?)" 'the ~/.local/bin link points to it'
 check "$(LOGL | grep -qx 'consent engine-start on'; echo $?)" 'engine-start consent recorded'
 check "$(LOGL | grep -q 'consent signin-startup on'; [ $? = 1 ]; echo $?)" 'no sign-in startup without --startup'
 check "$(printf '%s' "$OUT" | grep -q 'Not affiliated with or endorsed by Anthropic'; echo $?)" 'consent text shown'
 check "$(printf '%s' "$OUT" | grep -q 'skipped (--skip-attestation)'; echo $?)" 'attestation status reported'
-check "$([ "$(stat -c %a "$ROOT")" = 700 ]; echo $?)" 'data folder owner-only'
+check "$([ "$(mode_of "$ROOT")" = 700 ]; echo $?)" 'data folder owner-only'
 
 run --startup
 check "$([ $CODE = 0 ] && LOGL | grep -qx 'consent signin-startup on'; echo $?)" '--startup records sign-in consent' "$OUT"
@@ -147,7 +161,7 @@ check "$([ ! -f "$ROOT/engine.stopped" ]; echo $?)" 'stopped-by-user marker clea
 check "$(printf '%s' "$OUT" | grep -q 'Engine restarted (started)'; echo $?)" 'restart state reported' "$OUT"
 
 sim; rm -f "$QF_FAKE_LOG"
-QF_FAKE_VERSION_FAIL=1 run
+once QF_FAKE_VERSION_FAIL=1 run
 gone "$SIM"
 check "$([ $CODE != 0 ] && LOGL | grep -qx start && printf '%s' "$OUT" | grep -q 'engine was restarted (started)'; echo $?)" 'failed upgrade after stop restarts the engine' "$OUT"
 check "$([ ! -f "$ROOT/engine.stopped" ]; echo $?)" 'no stopped-by-user marker after a failed upgrade'
@@ -164,10 +178,10 @@ write_sums "$ASSETS"
 
 # ---- attestation fails closed
 runwith "$NOGH" --source "$ASSETS" --no-plugin
-check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'gh) is not installed' && printf '%s' "$OUT" | grep -q 'sudo apt install gh' && printf '%s' "$OUT" | grep -q -- '--skip-attestation' && [ ! -e "$EXE" ]; echo $?)" 'no gh: refused, told how to install gh and how to skip' "$OUT"
-QF_FAKE_GH_AUTH=fail runwith "$FAKEBIN" --source "$ASSETS" --no-plugin
+check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'gh) is not installed' && printf '%s' "$OUT" | grep -qE 'sudo apt install gh|brew install gh' && printf '%s' "$OUT" | grep -q -- '--skip-attestation' && [ ! -e "$EXE" ]; echo $?)" 'no gh: refused, told how to install gh and how to skip' "$OUT"
+once QF_FAKE_GH_AUTH=fail runwith "$FAKEBIN" --source "$ASSETS" --no-plugin
 check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'not signed in' && [ ! -e "$EXE" ]; echo $?)" 'gh signed out: refused, nothing installed' "$OUT"
-QF_FAKE_GH_ATTEST=fail runwith "$FAKEBIN" --source "$ASSETS" --no-plugin
+once QF_FAKE_GH_ATTEST=fail runwith "$FAKEBIN" --source "$ASSETS" --no-plugin
 check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q "REFUSED: attestation verification failed for $ASSET" && [ ! -e "$EXE" ]; echo $?)" 'unattested program refused' "$OUT"
 
 REL="$W/release"; mkdir -p "$REL"
@@ -196,7 +210,7 @@ check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'REFUSED: the Mod source
 check "$([ "$(cat "$STATE/market.txt")" = 'minhdaohuu/quayflow#v9.9.9' ] && [ -f "$STATE/plugin.txt" ]; echo $?)" 'moved tag: previous Mod restored'
 check "$(LOGL | grep -qx 'consent engine-start on'; echo $?)" 'Mod failure: engine consent still recorded'
 git -C "$CLONE" reset -q --hard "$HEAD_COMMIT"
-QF_FAKE_CLAUDE_ADD_FAIL=broken runwith "$FAKEBIN" --source "$REL" --skip-attestation --marketplace-source 'minhdaohuu/quayflow#broken'
+once QF_FAKE_CLAUDE_ADD_FAIL=broken runwith "$FAKEBIN" --source "$REL" --skip-attestation --marketplace-source 'minhdaohuu/quayflow#broken'
 check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'marketplace add minhdaohuu/quayflow#broken failed' && printf '%s' "$OUT" | grep -q 'previous Mod (minhdaohuu/quayflow#v9.9.9) was restored'; echo $?)" 'failed add reported, previous Mod restored' "$OUT"
 check "$([ "$(cat "$STATE/market.txt")" = 'minhdaohuu/quayflow#v9.9.9' ] && [ -f "$STATE/plugin.txt" ]; echo $?)" 'failed add: marketplace and plugin back'
 

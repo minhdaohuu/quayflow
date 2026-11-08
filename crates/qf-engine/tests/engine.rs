@@ -764,6 +764,82 @@ fn lanes_switch_independently() {
     assert!(!lane_env.config_dir.exists());
 }
 
+/// macOS: a session started with another spelling of the lane's CLAUDE_CONFIG_DIR reads another
+/// Keychain item; it is named in a notice and never counts against the Claude version.
+#[cfg(target_os = "macos")]
+#[test]
+fn session_reading_another_keychain_item_is_flagged() {
+    if std::env::var("QUAYFLOW_KEYCHAIN").is_ok_and(|v| v == "off") {
+        eprintln!("Keychain turned off; skipped");
+        return;
+    }
+    let w = world();
+    let e = engine_with_accounts(&w);
+    e.lane_create("work").unwrap();
+    let lane_env = qf_adapter::lanes::lane_env(&w.dd.lanes(), "work");
+    // Its own id: the world already runs SID in the default environment.
+    const SID: &str = "22222222-3333-4444-8555-666666666666";
+    session_file(&lane_env, SID, "/tmp/p", "idle");
+    let dir = lane_env.config_dir.display().to_string();
+    let notice = |e: &qf_engine::Shared| {
+        e.tick();
+        let v = e.state_view(None, None);
+        v.envs
+            .iter()
+            .find(|x| x.id.0 == "work")
+            .and_then(|x| x.notices.iter().find(|n| n.kind == "keychain_mismatch").cloned())
+    };
+    // The exact folder: the item Quayflow writes; nothing to say.
+    qf_engine::http::route(
+        &e,
+        "POST",
+        "/v1/hello",
+        "",
+        &json!({"protocol": 1, "sessionId": SID, "headless": false, "configDir": dir}),
+    )
+    .unwrap();
+    assert!(notice(&e).is_none());
+    assert!(e.keychain_mismatch(&e.lock(), SID).is_none());
+    // A trailing slash names another item.
+    qf_engine::http::route(
+        &e,
+        "POST",
+        "/v1/hello",
+        "",
+        &json!({"protocol": 1, "sessionId": SID, "headless": false, "configDir": format!("{dir}/")}),
+    )
+    .unwrap();
+    let n = notice(&e).expect("a notice for the stray session");
+    assert!(
+        n.text.contains("will not follow a switch") && n.text.contains(&dir),
+        "{}",
+        n.text
+    );
+    // A separate login store.
+    qf_engine::http::route(&e, "POST", "/v1/hello", "", &json!({"protocol": 1, "sessionId": SID, "headless": false, "configDir": dir, "secureStorageDir": "/elsewhere"})).unwrap();
+    assert!(notice(&e).unwrap().text.contains("CLAUDE_SECURESTORAGE_CONFIG_DIR"));
+    // Its report after a switch is not adoption evidence against the version.
+    let r: qf_model::api::AdoptionReport = serde_json::from_value(
+        json!({"sessionId": SID, "account": "someone-else", "transition": null, "startedAt": null}),
+    )
+    .unwrap();
+    assert!(e.adoption(&r).unwrap().starts_with("not adoption evidence"));
+    assert!(e.lock().compat.get(VERSION).is_none_or(|c| c.live_pass != Some(false)));
+    // A session nobody lists in a registry is never flagged.
+    qf_engine::http::route(
+        &e,
+        "POST",
+        "/v1/hello",
+        "",
+        &json!({"protocol": 1, "sessionId": "other", "headless": false, "configDir": "/nowhere"}),
+    )
+    .unwrap();
+    assert!(e.keychain_mismatch(&e.lock(), "other").is_none());
+    std::fs::remove_dir_all(lane_env.sessions_dir()).unwrap();
+    e.tick();
+    e.lane_delete("work").unwrap();
+}
+
 /// Wait (bounded) until `f` holds.
 fn wait_until(what: &str, secs: u64, f: impl Fn() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);

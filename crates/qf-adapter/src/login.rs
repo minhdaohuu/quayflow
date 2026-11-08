@@ -1,15 +1,123 @@
-//! Login read and atomic in-place swap (docs/tech-spec.md §3).
+//! Login read and atomic in-place swap (docs/tech-spec.md §3, §1b).
 //!
-//! Only `claudeAiOauth` in `.credentials.json` and `oauthAccount` in `.claude.json`
-//! are replaced; every other key is kept in order.
+//! Only `claudeAiOauth` in the login store and `oauthAccount` in `.claude.json` are
+//! replaced; every other key is kept in order. The login store is `.credentials.json`, or on
+//! macOS the environment's Keychain item when it has one (Claude reads the Keychain first and
+//! the file only when the Keychain holds nothing).
 
 use crate::env::Env;
+use crate::keychain;
 use crate::lock::{self, LockError};
 use qf_vault::{atomic_write, Login};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
+
+/// Where an environment's login lives.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Store {
+    /// `<configDir>/.credentials.json` (Windows, Linux, and Claude's fallback on macOS).
+    File,
+    /// The environment's Keychain item (macOS).
+    Keychain(keychain::Item),
+}
+
+/// The login store Claude reads for this environment. On macOS that is the Keychain item when
+/// one exists; an environment without one is read from `.credentials.json`, as Claude does,
+/// and stays file-backed until Claude itself moves it into the Keychain at its next save.
+pub fn store(env: &Env) -> Result<Store, String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(Store::File);
+    }
+    let Some(service) = keychain::service_name(env) else {
+        return Ok(Store::File);
+    };
+    Ok(match keychain::find(&service)? {
+        Some(item) => Store::Keychain(item),
+        None => Store::File,
+    })
+}
+
+fn read_store(env: &Env, store: &Store) -> Result<Map<String, Value>, String> {
+    match store {
+        Store::File => read_json(&env.credentials()),
+        Store::Keychain(item) => Ok(keychain::read(item)?.unwrap_or_default()),
+    }
+}
+
+/// How long the marker stays after a Keychain switch: Claude caches a Keychain read for 30 s,
+/// so after this every running session has read the new login either way.
+pub const MARKER_LIFETIME: Duration = Duration::from_secs(35);
+
+/// Marker bytes written per environment by this process, to recognize our own marker.
+static MARKERS: Mutex<Option<HashMap<PathBuf, Vec<u8>>>> = Mutex::new(None);
+
+/// After a Keychain write: put the same login store into `.credentials.json` (owner-only).
+/// Claude checks that file's modification time before each request; a change makes it drop
+/// its 30 s Keychain cache, so every running session uses the new login from its next request.
+/// The file holds the real login, not an empty object, so a Keychain read that fails while
+/// it exists still finds the right login.
+fn write_marker(env: &Env, data: &Map<String, Value>) -> Result<(), String> {
+    let bytes = serde_json::to_vec(data).map_err(|e| e.to_string())?;
+    atomic_write(&env.credentials(), &bytes).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(env.credentials(), std::fs::Permissions::from_mode(0o600));
+    }
+    if let Ok(mut g) = MARKERS.lock() {
+        g.get_or_insert_with(HashMap::new).insert(env.credentials(), bytes);
+    }
+    Ok(())
+}
+
+/// Remove the marker of a Keychain environment once it is `max_age` old, and only when it is
+/// still ours: the bytes this process wrote, or the same login store as the Keychain item.
+/// Anything else (Claude's own fallback login) is left alone. Returns whether it was removed.
+pub fn sweep_marker(env: &Env, max_age: Duration) -> bool {
+    let path = env.credentials();
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return false;
+    };
+    let old = meta
+        .modified()
+        .ok()
+        .and_then(|m| SystemTime::now().duration_since(m).ok())
+        .is_some_and(|a| a >= max_age);
+    if !old {
+        return false;
+    }
+    let Ok(Store::Keychain(item)) = store(env) else {
+        return false;
+    };
+    // Claude writes its fallback login under the storage lock; never race it.
+    let Ok(held) = lock::acquire(&lock::specs(env)[2..3], Duration::from_millis(500)) else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(&path) else { return false };
+    let ours = MARKERS
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|m| m.get(&path).cloned()))
+        .is_some_and(|b| b == bytes);
+    let same_as_keychain = || {
+        let file: Option<Map<String, Value>> = serde_json::from_slice(&bytes).ok();
+        file.is_some() && keychain::read(&item).ok().flatten() == file
+    };
+    let removed = (ours || same_as_keychain()) && std::fs::remove_file(&path).is_ok();
+    drop(held);
+    if removed {
+        if let Ok(mut g) = MARKERS.lock() {
+            if let Some(m) = g.as_mut() {
+                m.remove(&path);
+            }
+        }
+    }
+    removed
+}
 
 #[derive(Debug)]
 pub enum SwapError {
@@ -64,7 +172,7 @@ fn file_name(p: &Path) -> String {
 
 /// The environment's current login, or `None` when signed out.
 pub fn read_login(env: &Env) -> Result<Option<Login>, String> {
-    let creds = read_json(&env.credentials())?;
+    let creds = read_store(env, &store(env)?)?;
     let config = read_json(&env.claude_json)?;
     match (creds.get("claudeAiOauth"), config.get("oauthAccount")) {
         (Some(o), Some(a)) if o.is_object() && a.is_object() => Ok(Some(Login {
@@ -85,8 +193,13 @@ pub fn read_identity(env: &Env) -> Option<String> {
         .map(String::from)
 }
 
-/// Stamp of the credential file, to detect changes cheaply.
+/// Stamp of the login store, to detect changes cheaply (no secret is read). For a Keychain
+/// item it is the item's modification time (one-second resolution).
 pub fn credentials_stamp(env: &Env) -> Option<(u128, u64)> {
+    if let Ok(Store::Keychain(item)) = store(env) {
+        let digits: String = item.modified.chars().filter(char::is_ascii_digit).collect();
+        return digits.parse::<u128>().ok().map(|t| (t, 1));
+    }
     let m = std::fs::metadata(env.credentials()).ok()?;
     let t = m
         .modified()
@@ -133,7 +246,8 @@ pub fn swap_with(
     let started = Instant::now();
     let held = lock::acquire_env(env, wait_each).map_err(SwapError::Lock)?;
     let t0 = Instant::now();
-    let mut creds = read_json(&env.credentials()).map_err(SwapError::Read)?;
+    let store = store(env).map_err(SwapError::Read)?;
+    let mut creds = read_store(env, &store).map_err(SwapError::Read)?;
     let mut config = read_json(&env.claude_json).map_err(SwapError::Read)?;
     let previous = match (creds.get("claudeAiOauth"), config.get("oauthAccount")) {
         (Some(o), Some(a)) if o.is_object() && a.is_object() => Some(Login {
@@ -159,6 +273,9 @@ pub fn swap_with(
         });
     }
     before_write(previous.as_ref()).map_err(SwapError::PreWrite)?;
+    if let Store::Keychain(item) = &store {
+        return swap_keychain(env, item, creds, config, target, previous, held, t0);
+    }
 
     creds.insert("claudeAiOauth".into(), target.oauth.clone());
     config.insert("oauthAccount".into(), target.account.clone());
@@ -211,19 +328,100 @@ pub fn swap_with(
     })
 }
 
+/// The Keychain half of [`swap_with`], under the same locks: write the item, read it back,
+/// write `oauthAccount`, then the marker that makes running sessions re-read at once.
+#[allow(clippy::too_many_arguments)]
+fn swap_keychain(
+    env: &Env,
+    item: &keychain::Item,
+    mut creds: Map<String, Value>,
+    mut config: Map<String, Value>,
+    target: &Login,
+    previous: Option<Login>,
+    held: lock::HeldLocks,
+    t0: Instant,
+) -> Result<SwapOutcome, SwapError> {
+    let before = creds.clone();
+    creds.insert("claudeAiOauth".into(), target.oauth.clone());
+    config.insert("oauthAccount".into(), target.account.clone());
+    let config_text =
+        serde_json::to_string_pretty(&Value::Object(config)).map_err(|e| SwapError::PreWrite(e.to_string()))?;
+    if let Err(e) = keychain::write(item, &creds) {
+        // `-U` replaces the item in one step; make sure nothing changed before saying so.
+        return Err(match keychain::read(item) {
+            Ok(Some(now)) if now == before => SwapError::PreWrite(format!("Keychain login not written: {e}")),
+            _ => SwapError::PostWrite(format!("Keychain write failed and its state is unclear: {e}")),
+        });
+    }
+    let written = keychain::read(item).map_err(SwapError::PostWrite)?;
+    if written.as_ref() != Some(&creds) {
+        return Err(SwapError::PostWrite(
+            "the Keychain login did not read back as written".into(),
+        ));
+    }
+    if let Err(e) = atomic_write(&env.claude_json, config_text.as_bytes()) {
+        // Put the Keychain back so tokens and account record never disagree.
+        return Err(match keychain::write(item, &before) {
+            Ok(()) => SwapError::PreWrite(format!(
+                "account record not written ({e}); the Keychain write was rolled back"
+            )),
+            Err(r) => SwapError::PostWrite(format!(
+                "account record not written after the Keychain write: {e}; rollback failed: {r}"
+            )),
+        });
+    }
+    // Without the marker the switch still lands, within Claude's 30 s Keychain cache.
+    let _ = write_marker(env, &creds);
+    let stamp = credentials_stamp(env);
+    let after = read_login(env).map_err(SwapError::PostWrite)?;
+    let verified = after
+        .as_ref()
+        .is_some_and(|a| a.account_uuid() == target.account_uuid() && a.refresh_token() == target.refresh_token());
+    let locked_ms = t0.elapsed().as_millis() as u64;
+    drop(held);
+    if !verified {
+        return Err(SwapError::PostWrite(
+            "written login did not read back as the destination".into(),
+        ));
+    }
+    Ok(SwapOutcome {
+        previous,
+        locked_ms,
+        changed: true,
+        stamp,
+    })
+}
+
 /// Remove the login from an environment without signing out (retire a sign-in copy).
 pub fn retire(env: &Env, wait_each: Duration) -> Result<(), SwapError> {
     let held = lock::acquire_env(env, wait_each).map_err(SwapError::Lock)?;
+    if let Ok(Store::Keychain(item)) = store(env) {
+        // The item first: keep its other keys, delete it when nothing else is in it.
+        let mut kc = keychain::read(&item).map_err(SwapError::Read)?.unwrap_or_default();
+        kc.remove("claudeAiOauth");
+        let r = if kc.is_empty() {
+            keychain::delete(&item)
+        } else {
+            keychain::write(&item, &kc)
+        };
+        r.map_err(SwapError::PostWrite)?;
+    }
     let mut creds = read_json(&env.credentials()).map_err(SwapError::Read)?;
     let mut config = read_json(&env.claude_json).map_err(SwapError::Read)?;
     creds.remove("claudeAiOauth");
     config.remove("oauthAccount");
-    let r = atomic_write(
-        &env.credentials(),
-        serde_json::to_string(&Value::Object(creds))
-            .unwrap_or_default()
-            .as_bytes(),
-    )
+    // Rewrite the credential file only where one exists: an empty one would be a login store
+    // that holds nothing, which Claude on macOS could fall back to.
+    let r = if env.credentials().exists() {
+        atomic_write(
+            &env.credentials(),
+            serde_json::to_string(&Value::Object(creds))
+                .unwrap_or_default()
+                .as_bytes(),
+        )
+    } else {
+        Ok(())
+    }
     .and_then(|_| {
         atomic_write(
             &env.claude_json,

@@ -7,9 +7,11 @@
 # --locked, SOURCE_DATE_EPOCH = tag commit time, path prefixes remapped,
 # /Brepro for a deterministic PE header, release profile strips and disables
 # incremental builds. The same commit is built twice in separate jobs and
-# separate directories, for Windows and for Linux; the release fails if the
+# separate directories, for Windows, Linux and macOS; the release fails if the
 # binaries differ. Linux builds on Ubuntu 22.04, so the program runs on
-# distributions with glibc 2.35 and OpenSSL 3 or newer.
+# distributions with glibc 2.35 and OpenSSL 3 or newer. macOS builds both
+# Apple silicon and Intel programs on one runner; they carry the linker's
+# ad-hoc signature only.
 #
 # Attestations: GitHub only issues artifact attestations for public
 # repositories (or private ones on GitHub Enterprise Cloud). While this
@@ -160,8 +162,56 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-macos:
+    needs: prepare
+    runs-on: macos-15
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - slot: a
+            dir: src-a
+          - slot: b
+            dir: deeper/second/src-b
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.epoch }}
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          path: ${{ matrix.dir }}
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        working-directory: ${{ matrix.dir }}
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustc -Vv
+      - name: Build (reproducible; the linker's ad-hoc signature)
+        working-directory: ${{ matrix.dir }}
+        run: |
+          src=$(pwd)
+          cargo_home=${CARGO_HOME:-$HOME/.cargo}
+          # -Wl,-S: no debug map at link time. The linker hashes the output into LC_UUID before
+          # `strip` runs, and the debug map names object files by absolute path, so without it
+          # two checkouts in different folders give different programs.
+          export RUSTFLAGS="--remap-path-prefix=$src=. --remap-path-prefix=$cargo_home=/cargo -C link-arg=-Wl,-S"
+          mkdir -p out
+          for t in aarch64-apple-darwin:arm64 x86_64-apple-darwin:x86_64; do
+            cargo build --release --locked -p quayflow --bin quayflow --target "${t%%:*}"
+            cp "target/${t%%:*}/release/quayflow" "out/quayflow-macos-${t##*:}"
+          done
+          codesign -dv out/* 2>&1 | grep -E 'Signature|Identifier' || true
+          shasum -a 256 out/*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: build-macos-${{ matrix.slot }}
+          path: ${{ matrix.dir }}/out/quayflow-macos-*
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
-    needs: [prepare, build, build-linux]
+    needs: [prepare, build, build-linux, build-macos]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -187,11 +237,19 @@ jobs:
         with:
           name: build-linux-b
           path: build-b
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: build-macos-a
+          path: build-a
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: build-macos-b
+          path: build-b
       - name: Compare the two builds
         shell: pwsh
         run: |
           $diff = 0
-          foreach ($n in 'quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64') {
+          foreach ($n in 'quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64', 'quayflow-macos-arm64', 'quayflow-macos-x86_64') {
             $a = (Get-FileHash "build-a/$n" -Algorithm SHA256).Hash
             $b = (Get-FileHash "build-b/$n" -Algorithm SHA256).Hash
             Write-Host "$n  a=$a  b=$b"
@@ -202,7 +260,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force assets | Out-Null
-          Copy-Item build-a/quayflow.exe, build-a/quayflow-bg.exe, build-a/quayflow-linux-x86_64 assets/
+          Copy-Item build-a/quayflow.exe, build-a/quayflow-bg.exe, build-a/quayflow-linux-x86_64, build-a/quayflow-macos-arm64, build-a/quayflow-macos-x86_64 assets/
           Copy-Item installer/install.ps1, installer/install.sh, shell/Quayflow.psm1 assets/
           # The commit this release was built from. The installer adds the Mod from this
           # tag and refuses it unless the tag still points at this commit (tags can move).
@@ -222,6 +280,8 @@ jobs:
             assets/quayflow.exe
             assets/quayflow-bg.exe
             assets/quayflow-linux-x86_64
+            assets/quayflow-macos-arm64
+            assets/quayflow-macos-x86_64
             assets/install.ps1
             assets/install.sh
             assets/Quayflow.psm1
@@ -242,7 +302,7 @@ jobs:
             '**Not attested**: this repository is private, and GitHub issues artifact attestations only for public repositories. Verify the SHA-256 hashes; the installer refuses unattested files unless run with `-SkipAttestation`.'
           }
           $notes = @"
-          Quayflow $tag for Windows (x64) and Linux (x86_64).
+          Quayflow $tag for Windows (x64), Linux (x86_64) and macOS (Apple silicon and Intel).
 
           Install (per user, no administrator rights). Windows, in PowerShell:
 
@@ -250,7 +310,7 @@ jobs:
           irm https://github.com/${{ github.repository }}/releases/download/$tag/install.ps1 | iex
           ``````
 
-          Linux (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later):
+          Linux (glibc 2.35 and OpenSSL 3 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later) and macOS:
 
           ``````sh
           curl -fsSL https://github.com/${{ github.repository }}/releases/download/$tag/install.sh | sh
@@ -258,7 +318,7 @@ jobs:
 
           Safer: download the installer, check it against SHA256SUMS below, read it, then run it. See docs/verify-release.md.
 
-          Integrity: reproducible build (verified by two independent builds in this workflow), SHA-256 hashes below. Not Authenticode-signed. $attest Built from commit $($env:GITHUB_SHA) (also in ``SOURCE_COMMIT``); the installer adds the Mod only if the tag still points there.
+          Integrity: reproducible build (verified by two independent builds in this workflow), SHA-256 hashes below. Not Authenticode-signed; the macOS programs carry only the linker's ad-hoc signature (installed with curl, they are not quarantined). $attest Built from commit $($env:GITHUB_SHA) (also in ``SOURCE_COMMIT``); the installer adds the Mod only if the tag still points there.
 
           ``````text
           $sums``````
@@ -292,7 +352,7 @@ jobs:
         shell: pwsh
         run: |
           $bad = 0
-          $expected = @('quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64', 'install.ps1', 'install.sh', 'Quayflow.psm1', 'SOURCE_COMMIT')
+          $expected = @('quayflow.exe', 'quayflow-bg.exe', 'quayflow-linux-x86_64', 'quayflow-macos-arm64', 'quayflow-macos-x86_64', 'install.ps1', 'install.sh', 'Quayflow.psm1', 'SOURCE_COMMIT')
           $seen = @()
           foreach ($line in Get-Content dl/SHA256SUMS) {
             if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { Write-Host "::error::Bad line: $line"; $bad++; continue }

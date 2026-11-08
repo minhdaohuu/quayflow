@@ -38,6 +38,23 @@ impl Engine {
                     true,
                 );
             }
+            let stray: Vec<String> = st
+                .sessions
+                .iter()
+                .filter_map(|s| self.keychain_mismatch(&inner, &s.session_id))
+                .collect();
+            if let Some(why) = stray.first() {
+                push(
+                    "warn",
+                    "keychain_mismatch",
+                    format!(
+                        "{} Claude session{} here will not follow a switch: {why}.",
+                        stray.len(),
+                        if stray.len() == 1 { "" } else { "s" }
+                    ),
+                    true,
+                );
+            }
             if st.other_switcher {
                 push("warn", "other_switcher", "The login changed repeatedly without Quayflow: another tool may be switching. Automation is paused.".into(), true);
             }

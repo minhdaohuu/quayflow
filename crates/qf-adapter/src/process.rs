@@ -1,5 +1,5 @@
 //! Process helpers: liveness, parent process, window-less and new-console launches.
-//! Windows uses Win32; Linux reads `/proc`.
+//! Windows uses Win32; Linux reads `/proc`; macOS asks the kernel (`proc_pidinfo`).
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -32,9 +32,41 @@ pub fn is_alive(pid: u32) -> bool {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn is_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[cfg(target_os = "macos")]
+pub fn is_alive(pid: u32) -> bool {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks that the process exists and may be signalled.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    // EPERM: it exists but belongs to another user.
+    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// The kernel's BSD record of a process (parent, start time, name).
+#[cfg(target_os = "macos")]
+fn bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return None;
+    }
+    // SAFETY: proc_bsdinfo is plain data; the kernel fills at most `size` bytes.
+    unsafe {
+        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let n = libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        );
+        (n == size).then_some(info)
+    }
 }
 
 /// Creation time of a running process, in Unix milliseconds (`None` when unknown).
@@ -69,14 +101,20 @@ pub fn start_time_ms(pid: u32) -> Option<i64> {
 
 /// Fields of `/proc/<pid>/stat` after the command name (which may hold spaces): index 0 is
 /// the state (field 3), 1 the parent pid (field 4), 19 the start time in clock ticks (field 22).
-#[cfg(not(windows))]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn proc_stat(pid: u32) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = &text[text.rfind(')')? + 1..];
     Some(rest.split_whitespace().map(String::from).collect())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn start_time_ms(pid: u32) -> Option<i64> {
+    let i = bsd_info(pid)?;
+    Some(i.pbi_start_tvsec as i64 * 1000 + i.pbi_start_tvusec as i64 / 1000)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn start_time_ms(pid: u32) -> Option<i64> {
     if pid == 0 {
         return None;
@@ -123,9 +161,14 @@ pub fn parent_pid(pid: u32) -> Option<u32> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn parent_pid(pid: u32) -> Option<u32> {
     proc_stat(pid)?.get(1)?.parse().ok()
+}
+
+#[cfg(target_os = "macos")]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    Some(bsd_info(pid)?.pbi_ppid)
 }
 
 /// Image name of a process (lower-case, e.g. "pwsh.exe").
@@ -161,10 +204,18 @@ pub fn process_name(pid: u32) -> Option<String> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn process_name(pid: u32) -> Option<String> {
     let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
     Some(name.trim().to_ascii_lowercase())
+}
+
+/// The short command name (`pbi_comm`, at most 16 bytes), as `/proc/<pid>/comm` on Linux.
+#[cfg(target_os = "macos")]
+pub fn process_name(pid: u32) -> Option<String> {
+    let i = bsd_info(pid)?;
+    let bytes: Vec<u8> = i.pbi_comm.iter().take_while(|c| **c != 0).map(|c| *c as u8).collect();
+    Some(String::from_utf8_lossy(&bytes).to_ascii_lowercase())
 }
 
 /// The nearest PowerShell ancestor of a process (the terminal a Claude session runs in).
@@ -254,9 +305,61 @@ pub fn spawn_detached(exe: &Path, args: &[&str]) -> std::io::Result<Child> {
     }
 }
 
+/// Open a new Terminal window running a command (macOS).
+#[cfg(target_os = "macos")]
+pub fn spawn_new_console(
+    exe: &Path,
+    args: &[String],
+    env: &[(&str, Option<&OsStr>)],
+    cwd: Option<&Path>,
+) -> std::io::Result<Child> {
+    // Terminal opens a `.command` file in a new window. The script sets the environment
+    // and folder itself (Terminal starts it in a fresh login shell), removes itself, and
+    // runs the program. It holds no secret: only names such as CLAUDE_CONFIG_DIR.
+    let script = std::env::temp_dir().join(format!(
+        "quayflow-{}-{}.command",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
+    let mut text = String::from("#!/bin/sh\nrm -f \"$0\"\n");
+    for (k, v) in env {
+        match v {
+            Some(v) => text.push_str(&format!("export {k}={}\n", sh_quote(&v.to_string_lossy()))),
+            None => text.push_str(&format!("unset {k}\n")),
+        }
+    }
+    if let Some(d) = cwd {
+        text.push_str(&format!("cd {} || exit 1\n", sh_quote(&d.to_string_lossy())));
+    }
+    text.push_str("exec");
+    for a in std::iter::once(exe.to_string_lossy().to_string()).chain(args.iter().cloned()) {
+        text.push(' ');
+        text.push_str(&sh_quote(&a));
+    }
+    text.push('\n');
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&script)?;
+        f.write_all(text.as_bytes())?;
+    }
+    let mut c = Command::new("/usr/bin/open");
+    c.args(["-a", "Terminal"]).arg(&script);
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    c.spawn()
+}
+
 /// Open a new console window running a command (user-visible on purpose: sign-in, Open New Session).
 /// On Linux this needs a desktop session and a terminal emulator; without one it fails, and
 /// the caller shows the command to run instead.
+#[cfg(not(target_os = "macos"))]
 pub fn spawn_new_console(
     exe: &Path,
     args: &[String],
@@ -269,7 +372,7 @@ pub fn spawn_new_console(
         c.args(args);
         c
     };
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     let mut c = {
         let desktop = desktop_env();
         let graphical = desktop.iter().any(|(k, _)| k == "DISPLAY" || k == "WAYLAND_DISPLAY");
@@ -346,8 +449,14 @@ pub fn set_desktop(vars: &std::collections::BTreeMap<String, String>) {
     }
 }
 
+/// Quote a value for a POSIX shell.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// The desktop to open a window on: this process's own, else the latest session's.
-#[cfg(not(windows))]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn desktop_env() -> Vec<(String, String)> {
     let own: Vec<(String, String)> = DESKTOP_VARS
         .iter()
@@ -365,7 +474,7 @@ fn desktop_env() -> Vec<(String, String)> {
 }
 
 /// Terminal emulators tried, in order, for a new console window on Linux.
-#[cfg(not(windows))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const TERMINALS: &[&str] = &[
     "x-terminal-emulator",
     "gnome-terminal",
@@ -438,6 +547,12 @@ mod tests {
             .as_millis() as i64;
         let t = start_time_ms(std::process::id()).unwrap();
         assert!(t <= now && t > now - 24 * 3_600_000, "{t} vs {now}");
+    }
+
+    #[test]
+    fn shell_quoting() {
+        assert_eq!(sh_quote("a b"), "'a b'");
+        assert_eq!(sh_quote("it's"), "'it'\\''s'");
     }
 
     #[test]

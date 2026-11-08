@@ -601,6 +601,15 @@ impl Engine {
                 return Ok("request was in flight at the switch; still pending".into());
             }
         }
+        // A session that reads another Keychain item cannot follow the switch: that is about how
+        // it was started, not about the Claude version. Stop waiting for it.
+        if let Some(why) = self.keychain_mismatch(&inner, &r.session_id) {
+            if let Some(st) = inner.envs.get_mut(&env) {
+                st.adoption
+                    .retain(|a| !(a.session_id == r.session_id && a.state == AdoptionState::PendingNextRequest));
+            }
+            return Ok(format!("not adoption evidence: {why}"));
+        }
         let Some(st) = inner.envs.get_mut(&env) else {
             return Ok("unknown environment".into());
         };

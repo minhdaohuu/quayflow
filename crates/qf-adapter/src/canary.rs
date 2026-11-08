@@ -16,6 +16,25 @@ pub const MARKERS: &[(&str, &str)] = &[
     ("account entry (oauthAccount)", "oauthAccount"),
 ];
 
+/// What the macOS switch relies on in addition (docs/tech-spec.md §1b): the Keychain service,
+/// how Claude reads it, and the storage lock around its writes.
+pub const MACOS_MARKERS: &[(&str, &str)] = &[
+    // The service name is assembled at run time: `Claude Code${OAUTH_FILE_SUFFIX}-credentials`.
+    ("Keychain service name (OAUTH_FILE_SUFFIX)", "OAUTH_FILE_SUFFIX"),
+    ("Keychain read (find-generic-password)", "find-generic-password"),
+    ("Keychain write (add-generic-password)", "add-generic-password"),
+    ("login store write lock (.storage-write)", ".storage-write"),
+];
+
+/// The markers checked on this platform.
+pub fn markers() -> Vec<(&'static str, &'static str)> {
+    let mut m = MARKERS.to_vec();
+    if cfg!(target_os = "macos") {
+        m.extend_from_slice(MACOS_MARKERS);
+    }
+    m
+}
+
 /// Where the native installer keeps a version's binary.
 pub fn version_binary(version: &str) -> Option<PathBuf> {
     if version.is_empty()
@@ -36,13 +55,14 @@ pub fn version_binary(version: &str) -> Option<PathBuf> {
 
 /// Stream-search a file for every marker. Returns (label, found) per marker.
 pub fn scan(path: &Path) -> std::io::Result<Vec<(String, bool)>> {
+    let markers = markers();
     let mut f = std::fs::File::open(path)?;
-    let longest = MARKERS.iter().map(|(_, m)| m.len()).max().unwrap_or(0);
-    let finders: Vec<memchr::memmem::Finder> = MARKERS
+    let longest = markers.iter().map(|(_, m)| m.len()).max().unwrap_or(0);
+    let finders: Vec<memchr::memmem::Finder> = markers
         .iter()
         .map(|(_, m)| memchr::memmem::Finder::new(m.as_bytes()))
         .collect();
-    let mut found = vec![false; MARKERS.len()];
+    let mut found = vec![false; markers.len()];
     let mut buf = vec![0u8; 8 << 20];
     let mut carry: Vec<u8> = vec![];
     loop {
@@ -63,7 +83,7 @@ pub fn scan(path: &Path) -> std::io::Result<Vec<(String, bool)>> {
         let keep = window.len().min(longest);
         carry = window[window.len() - keep..].to_vec();
     }
-    Ok(MARKERS
+    Ok(markers
         .iter()
         .zip(found)
         .map(|((label, _), ok)| (label.to_string(), ok))
@@ -81,6 +101,7 @@ mod tests {
         data.extend_from_slice(
             b"claudeAiOauth .oauth_refresh.lock tengu_oauth_refresh_legacy_lock_contended .credentials.json",
         );
+        data.extend_from_slice(b" OAUTH_FILE_SUFFIX find-generic-password add-generic-password .storage-write");
         std::fs::write(&p, &data).unwrap();
         let r = scan(&p).unwrap();
         assert!(r.iter().filter(|(l, _)| !l.contains("oauthAccount")).all(|(_, ok)| *ok));
@@ -89,8 +110,11 @@ mod tests {
 
     #[test]
     fn real_binary_if_present() {
-        if let Some(p) = version_binary("2.1.316") {
-            assert!(scan(&p).unwrap().iter().all(|(_, ok)| *ok));
+        for v in ["2.1.311", "2.1.316", "2.1.317", "2.1.319"] {
+            if let Some(p) = version_binary(v) {
+                let r = scan(&p).unwrap();
+                assert!(r.iter().all(|(_, ok)| *ok), "{v}: {r:?}");
+            }
         }
     }
 }

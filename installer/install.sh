@@ -1,7 +1,8 @@
 #!/bin/sh
-# Install, upgrade or remove Quayflow for the current Linux user (no administrator rights).
+# Install, upgrade or remove Quayflow for the current Linux or macOS user (no administrator
+# rights).
 #
-# Downloads the Linux program from a GitHub Release of minhdaohuu/quayflow, verifies it
+# Downloads the Linux or macOS program from a GitHub Release of minhdaohuu/quayflow, verifies it
 # against the release's SHA256SUMS and the GitHub build-provenance attestation of the
 # release workflow (this needs the GitHub CLI, signed in; --skip-attestation skips that
 # check explicitly), installs it to ~/.local/share/quayflow/bin (or $XDG_DATA_HOME), links
@@ -22,7 +23,8 @@
 #   --marketplace-source S  Claude plugin marketplace source for the Mod (a local repository
 #                           path, owner/repo or owner/repo#tag).
 #   --no-path               Do not link ~/.local/bin/quayflow.
-#   --startup               Also start the engine when you sign in (systemd user unit).
+#   --startup               Also start the engine when you sign in (a systemd user unit on
+#                           Linux, a LaunchAgent on macOS).
 #   --no-plugin             Install the engine only; do not touch Claude Code plugins.
 #   --skip-attestation      Do not run `gh attestation verify` (builds you made yourself,
 #                           releases before v0.1.5, or no GitHub CLI). Hashes are still checked.
@@ -65,10 +67,13 @@ done
 if [ "$UPDATE" = 1 ]; then YES=1; NO_PATH=1; fi
 
 # ------------------------------------------------------------------ platform
-[ "$(uname -s)" = Linux ] || die "This installer is for Linux; Quayflow does not support this platform yet."
-case "$(uname -m)" in
-  x86_64|amd64) ASSET=quayflow-linux-x86_64 ;;
-  *) die "Quayflow has no Linux build for $(uname -m) yet (x86_64 only)." ;;
+OS=$(uname -s)
+case "$OS/$(uname -m)" in
+  Linux/x86_64|Linux/amd64) ASSET=quayflow-linux-x86_64 ;;
+  Linux/*) die "Quayflow has no Linux build for $(uname -m) yet (x86_64 only)." ;;
+  Darwin/arm64) ASSET=quayflow-macos-arm64 ;;
+  Darwin/x86_64) ASSET=quayflow-macos-x86_64 ;;
+  *) die "This installer is for Linux and macOS; on Windows use install.ps1." ;;
 esac
 [ -n "${HOME:-}" ] || die "HOME is not set; cannot choose an install folder."
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/quayflow"
@@ -77,7 +82,11 @@ EXE="$BIN_DIR/quayflow"
 LINK="$HOME/.local/bin/quayflow"
 
 have() { command -v "$1" >/dev/null 2>&1; }
-sha256() { sha256sum "$1" | cut -d' ' -f1; }
+if have sha256sum; then
+  sha256() { sha256sum "$1" | cut -d' ' -f1; }
+else
+  sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+fi
 find_claude() {
   if have claude; then command -v claude
   elif [ -x "$HOME/.local/bin/claude" ]; then printf '%s\n' "$HOME/.local/bin/claude"
@@ -111,16 +120,24 @@ if [ "$UPDATE" = 1 ]; then
   step 'Updating Quayflow (your settings and consents are kept)'
 else
   if [ "$STARTUP" = 1 ]; then
-    startup_text="  - Engine start at sign-in: ENABLED by --startup (a systemd user unit; no window)."
+    if [ "$OS" = Darwin ]; then how='a LaunchAgent'; else how='a systemd user unit'; fi
+    startup_text="  - Engine start at sign-in: ENABLED by --startup ($how; no window)."
   else
     startup_text="  - Engine start at sign-in: not enabled (re-run with --startup to enable)."
+  fi
+  if [ "$OS" = Darwin ]; then
+    who="your macOS user"
+    claude_keeps="Claude Code keeps its own login in your Keychain"
+  else
+    who="your Linux user"
+    claude_keeps="as Claude Code keeps its own login in ~/.claude/.credentials.json"
   fi
   cat <<EOF
 
 Quayflow - manage approved Claude accounts and switch between them.
 Not affiliated with or endorsed by Anthropic.
 
-What this installs, for your Linux user only (no administrator rights):
+What this installs, for $who only (no administrator rights):
   - the quayflow program in $BIN_DIR, linked as $LINK
   - the "quayflow" Mod (a Claude Code plugin, user scope): /quay, the status
     line, usage-limit detection and one retry of a failed request.
@@ -134,8 +151,8 @@ $startup_text
 How your logins are handled:
   - Nothing is stored by this installer. When you register an account later
     (in Claude: /quay), Quayflow keeps a reusable copy of that login in its
-    vault, a folder readable by your user only (as Claude Code keeps its own
-    login in ~/.claude/.credentials.json). It is not encrypted.
+    vault, a folder readable by your user only ($claude_keeps).
+    It is not encrypted.
   - Claude refreshes the live login and Quayflow saves the result. Quayflow
     refreshes only the saved copy of an idle account, so its usage stays readable.
     Logins never go into logs, reports or the Mod. There is no telemetry.
@@ -193,8 +210,13 @@ if [ "$SKIP_ATTEST" = 0 ] && [ "$GH_READY" = 0 ]; then
     fix="    gh auth login"
   else
     why="the GitHub CLI (gh) is not installed"
-    fix="    sudo apt install gh   (or see https://cli.github.com)
+    if [ "$OS" = Darwin ]; then
+      fix="    brew install gh   (or see https://cli.github.com)
     gh auth login"
+    else
+      fix="    sudo apt install gh   (or see https://cli.github.com)
+    gh auth login"
+    fi
   fi
   die "REFUSED: the build-provenance attestation cannot be verified because $why. Nothing was installed.
 The attestation proves the program was built by this repository's release workflow. To check it, run:
@@ -203,7 +225,7 @@ then run the installer again.
 Or install with the SHA-256 check alone (it proves the files match this release's SHA256SUMS, not who built them) by adding --skip-attestation:
     curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | sh -s -- --skip-attestation"
 fi
-have sha256sum || die "sha256sum is needed to verify the download (coreutils)."
+have sha256sum || have shasum || die "sha256sum or shasum is needed to verify the download."
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/quayflow-install-XXXXXXXX")
 STOPPED_FOR_UPGRADE=0
@@ -231,7 +253,21 @@ start_engine() {
 }
 
 # A process that exists and has not ended (a zombie waiting for its parent has ended).
-running() { [ -d "/proc/$1" ] && ! sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | grep -q '^Z'; }
+if [ "$OS" = Darwin ]; then
+  running() { kill -0 "$1" 2>/dev/null && ! ps -o stat= -p "$1" 2>/dev/null | grep -q '^Z'; }
+  # The program's name; for a script, the script's name rather than its interpreter.
+  comm_of() {
+    # shellcheck disable=SC2046 # split the argument list on purpose
+    set -- $(ps -o args= -p "$1" 2>/dev/null)
+    case "$(basename "${1:-x}")" in
+      sh|bash|dash|zsh) basename "${2:-x}" ;;
+      *) basename "${1:-x}" ;;
+    esac
+  }
+else
+  running() { [ -d "/proc/$1" ] && ! sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | grep -q '^Z'; }
+  comm_of() { cat "/proc/$1/comm" 2>/dev/null; }
+fi
 
 engine_pid() {
   # The engine named in engine.json, when that process is alive and is quayflow.
@@ -239,7 +275,7 @@ engine_pid() {
   [ -f "$f" ] || return 1
   pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$f" | head -n 1)
   [ -n "$pid" ] && running "$pid" || return 1
-  case "$(cat "/proc/$pid/comm" 2>/dev/null)" in quayflow*) printf '%s\n' "$pid" ;; *) return 1 ;; esac
+  case "$(comm_of "$pid")" in quayflow*) printf '%s\n' "$pid" ;; *) return 1 ;; esac
 }
 
 download() { # name -> $WORK/name
@@ -345,6 +381,9 @@ fi
 # Replace by rename: a running program keeps its old file until it exits.
 cp "$WORK/$ASSET" "$EXE.new"
 chmod 755 "$EXE.new"
+# macOS: a copy of a file downloaded by a browser keeps its quarantine flag, and Gatekeeper
+# would refuse the program. Its hash (and attestation) were verified above.
+[ "$OS" = Darwin ] && xattr -d com.apple.quarantine "$EXE.new" 2>/dev/null || true
 mv -f "$EXE.new" "$EXE"
 [ "$(sha256 "$EXE")" = "$(sum_of "$ASSET")" ] || die 'Installed quayflow does not match the verified hash.'
 version=$("$EXE" version 2>&1) || die "quayflow does not run: $version"
@@ -363,7 +402,7 @@ if [ "$NO_PATH" = 0 ]; then
     info "Linked $LINK."
     case ":$PATH:" in
       *":$HOME/.local/bin:"*) ;;
-      *) info "Add ~/.local/bin to your PATH to run quayflow by name (most distributions do this at sign-in)." ;;
+      *) info "Add ~/.local/bin to your PATH to run quayflow by name (most Linux distributions do this at sign-in; on macOS add it to ~/.zprofile)." ;;
     esac
   fi
 fi
@@ -482,7 +521,11 @@ if [ "$UPDATE" = 0 ]; then
   info 'On-demand engine start: on'
   if [ "$STARTUP" = 1 ]; then
     if out=$("$EXE" consent signin-startup on 2>&1); then
-      info 'Engine start at sign-in: on (systemd user unit quayflow.service)'
+      if [ "$OS" = Darwin ]; then
+        info 'Engine start at sign-in: on (LaunchAgent com.quayflow.engine)'
+      else
+        info 'Engine start at sign-in: on (systemd user unit quayflow.service)'
+      fi
     else
       warn "Engine start at sign-in was not set up: $out"
     fi

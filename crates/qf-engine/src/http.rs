@@ -132,7 +132,17 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
                     h.protocol, ENGINE_VERSION, PROTOCOL
                 )
             });
-            let inner = e.lock();
+            let mut inner = e.lock();
+            if cfg!(target_os = "macos") {
+                if let Some(sid) = &h.session_id {
+                    let service =
+                        qf_adapter::keychain::session_service(h.config_dir.as_deref(), h.secure_storage_dir.as_deref());
+                    inner.session_keychain.insert(
+                        sid.clone(),
+                        (service, h.secure_storage_dir.is_some(), qf_model::time::now_ms()),
+                    );
+                }
+            }
             e.record(
                 &inner,
                 "hello",

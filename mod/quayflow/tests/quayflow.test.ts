@@ -147,6 +147,22 @@ describe('request hook', () => {
     expect(w.bodies('/v1/hello')[0]?.desktop).toBeUndefined()
   })
 
+  test('the session hands its config folder variables to the engine exactly as set', async ($, on) => {
+    const w = world(on, { linux: true, env: { CLAUDE_CONFIG_DIR: '/Users/t/work/', CLAUDE_SECURESTORAGE_CONFIG_DIR: '' } })
+    await start($, w, false)
+    const body = w.bodies('/v1/hello')[0]
+    expect(body?.configDir).toBe('/Users/t/work/')
+    expect(body?.secureStorageDir).toBe('')
+  })
+
+  test('unset config folder variables are not sent', async ($, on) => {
+    const w = world(on, { linux: true })
+    await start($, w, true)
+    const body = w.bodies('/v1/hello')[0]
+    expect(body?.configDir).toBeUndefined()
+    expect(body?.secureStorageDir).toBeUndefined()
+  })
+
   test('Linux: no engine runs bin/quayflow start --if-consented', async ($, on) => {
     const w = world(on, { linux: true, down: true, start: 'no_consent' })
     await start($, w, false)
