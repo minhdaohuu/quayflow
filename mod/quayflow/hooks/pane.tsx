@@ -1059,10 +1059,10 @@ function Settings($: EngineInterface, c: Ctx): JSX.Element {
       {Section(
         c,
         'Privacy',
-        Line(c, `Logins: DPAPI, this Windows user \u00b7 logs ${s.tuning.logRetentionDays} days`),
+        Line(c, `Logins: ${s.engine.dataDir.includes('\\') ? 'DPAPI, this Windows user' : 'owner-only files, this user'} \u00b7 logs ${s.tuning.logRetentionDays} days`),
         Hint(c, `No separate vault password. Logs at most ${s.tuning.logMaxMb} MB per day; unresolved journal records kept until reconciled; history-transfer copies only while a handoff needs them.`),
         Hint(c, 'No cloud vault, export or sync; protected-storage failure never falls back to plaintext. Before a manual switch away from an unknown login, a protected backup of it is stored.'),
-        Hint(c, 'This does not protect against malware running as the same Windows user.'),
+        Hint(c, 'This does not protect against malware running as the same user.'),
         Hint(c, 'Update the engine and this Mod together (hash-verified; never during a transition): quayflow update'),
       )}
     </Box>

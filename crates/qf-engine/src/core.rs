@@ -355,6 +355,17 @@ impl Engine {
             let mut inner = engine.lock();
             let ids: Vec<EnvId> = inner.envs.keys().cloned().collect();
             for id in ids {
+                // Mixed login files are held in memory only: find them again after a restart,
+                // so another account's tokens are never read or stored as the named account's.
+                let login = inner
+                    .envs
+                    .get(&id)
+                    .and_then(|st| qf_adapter::read_login(&st.env).ok().flatten());
+                if let Some(login) = login {
+                    if let LiveOwner::Mixed { owner, claimed, .. } = engine.live_owner(&inner, &login) {
+                        engine.hold_mixed(&mut inner, &id, &owner, Some(&claimed));
+                    }
+                }
                 engine.read_live(&mut inner, &id, true);
                 engine.refresh_env(&mut inner, &id);
             }
@@ -721,6 +732,10 @@ impl Engine {
             // completed since the snapshot above. Our own write is never an external change.
             if stamp.is_some() && stamp == st.own_stamp {
                 st.last_stamp = stamp;
+                continue;
+            }
+            // Another caller (the tick, or a switch request) already handled this change.
+            if stamp == st.last_stamp {
                 continue;
             }
             if st.blocking_transition() {
@@ -1416,8 +1431,27 @@ impl Engine {
             .collect();
         for id in stale {
             if let Some(s) = inner.signins.remove(&id) {
-                let _ = qf_adapter::login::retire(&s.env, Duration::from_secs(3));
-                let _ = std::fs::remove_dir_all(&s.env.config_dir);
+                retire_signin(&s.env);
+            }
+        }
+        // Saved sign-ins are answered for a while, then forgotten.
+        inner
+            .signins
+            .retain(|_, s| !(s.state == "saved" && now - s.started_at > 30 * 60_000));
+        // Folders left by an earlier retire that failed (or an earlier engine run): retire
+        // their login, then remove them.
+        if let Ok(rd) = std::fs::read_dir(self.dd.signin_dir()) {
+            for e in rd.flatten() {
+                let id = e.file_name().to_string_lossy().into_owned();
+                let old = e
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|m| m.elapsed().ok())
+                    .is_some_and(|age| age > Duration::from_secs(30 * 60));
+                if old && !inner.signins.contains_key(&id) && e.path().is_dir() {
+                    retire_signin(&qf_adapter::Env::at(EnvId(format!("signin-{id}")), e.path()));
+                }
             }
         }
     }
@@ -1570,4 +1604,13 @@ pub fn static_check(version: &str) -> CompatRecord {
         },
     }
     rec
+}
+
+/// Retire a sign-in's temporary login (no sign-out call), then remove its folder. When the
+/// login cannot be removed (a lock, a Keychain that does not answer), the folder is kept, so
+/// the login can still be found and retired later instead of staying behind unreachable.
+pub(crate) fn retire_signin(env: &qf_adapter::Env) {
+    if qf_adapter::login::retire(env, Duration::from_secs(3)).is_ok() {
+        let _ = std::fs::remove_dir_all(&env.config_dir);
+    }
 }

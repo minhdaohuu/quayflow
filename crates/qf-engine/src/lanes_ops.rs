@@ -112,7 +112,9 @@ impl Engine {
             let env = st.env.clone();
             // Keep the newest token of the lane's account before its copy goes away; if that
             // cannot be done, the lane's login is not removed.
-            let login = qf_adapter::read_login(&env).ok().flatten();
+            // A login that cannot be read (a Keychain that does not answer) is not "signed out".
+            let login = qf_adapter::read_login(&env)
+                .map_err(|e| ApiErr::refused(format!("lane not deleted: its login cannot be read ({e})")))?;
             if let Some(l) = &login {
                 self.preserve_live(&mut inner, &id, l)
                     .map_err(|e| ApiErr::refused(format!("lane not deleted: {e}")))?;

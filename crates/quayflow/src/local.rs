@@ -662,6 +662,31 @@ fn have(cmd: &str) -> bool {
     qf_adapter::process::which(cmd).is_some()
 }
 
+/// `gh attestation verify` of a downloaded release file: built by this repository's release
+/// workflow from the tag `tag`.
+fn verify_attestation(file: &Path, tag: &str) -> Result<(), String> {
+    let o = qf_adapter::process::hidden("gh")
+        .args(["attestation", "verify"])
+        .arg(file)
+        .args(["--repo", REPO, "--signer-workflow"])
+        .arg(format!("{REPO}/.github/workflows/release.yml"))
+        .arg("--source-ref")
+        .arg(format!("refs/tags/{tag}"))
+        .output()
+        .map_err(|e| format!("could not run gh attestation verify: {e}"))?;
+    if o.status.success() {
+        return Ok(());
+    }
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Err(format!(
+        "REFUSED: attestation verification failed for {name} of {tag}. Nothing was installed.\n{}",
+        String::from_utf8_lossy(&o.stderr).trim()
+    ))
+}
+
 fn gh_signed_in() -> bool {
     qf_adapter::process::hidden("gh")
         .args(["auth", "status", "--hostname", "github.com"])
@@ -847,6 +872,8 @@ pub fn update(
     if !check_only && !skip_attestation && !gh_ready {
         let install_gh = if cfg!(windows) {
             "  winget install --id GitHub.cli -e\n  gh auth login"
+        } else if cfg!(target_os = "macos") {
+            "  brew install gh   (or see https://cli.github.com)\n  gh auth login"
         } else {
             "  sudo apt install gh   (or see https://cli.github.com)\n  gh auth login"
         };
@@ -919,6 +946,11 @@ fn hand_off(
     }
     let script = tmp.join(INSTALLER);
     verify_against(&sums, &script)?;
+    // SHA256SUMS comes from the same release, so the hash alone does not say who built the
+    // installer: check its attestation before running it, as the installer checks the programs.
+    if let (Some(tag), false, None) = (tag, skip_attestation, source) {
+        verify_attestation(&script, tag)?;
+    }
     let text = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
     let update_mode = if cfg!(windows) {
         "[switch]$Update"

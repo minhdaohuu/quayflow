@@ -232,10 +232,16 @@ pub fn check(shared: &Env, lane: &Env, repair: bool) -> Vec<LinkStatus> {
             let mut detail = "deleted from the shared setup; the lane still has its own copy".to_string();
             let mut ok = false;
             if repair {
-                match std::fs::remove_file(&link) {
+                // A former link and a file Claude made in the lane look the same here, so the
+                // copy is moved aside, never deleted: lane settings made there are kept.
+                let aside = lane.config_dir.join(format!("{f}.lane-copy"));
+                match std::fs::rename(&link, &aside) {
                     Ok(()) => {
                         ok = true;
-                        detail = "lane copy removed (deleted from the shared setup)".into();
+                        detail = format!(
+                            "lane copy moved to {} (deleted from the shared setup)",
+                            aside.file_name().unwrap_or_default().to_string_lossy()
+                        );
                     }
                     Err(e) => detail = format!("repair failed: {e}"),
                 }

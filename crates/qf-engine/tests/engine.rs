@@ -1648,3 +1648,44 @@ fn an_account_at_its_limit_is_named_so_and_never_suggested() {
     let p = st.accounts.iter().find(|a| a.id == id("uuid-personal")).unwrap();
     assert!(p.eligibility.as_ref().unwrap().reason.contains("worth a switch"));
 }
+
+#[test]
+fn switch_right_after_an_outside_change_is_not_refused_as_already_live() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    // The login changes outside Quayflow; no tick has run since, so the engine still
+    // records org as live.
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    login_files(&w.env, "uuid-personal", "P1", "max");
+    let t = e
+        .start_switch(
+            &EnvId::default_env(),
+            &id("uuid-org"),
+            SwitchHow::Manual,
+            "test",
+            false,
+            true,
+        )
+        .expect("the switch reads the login files before refusing as already live");
+    assert_eq!(t.to, id("uuid-org"));
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-org"));
+}
+
+#[test]
+fn mixed_login_files_are_held_again_after_a_restart() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    credentials_only(&w.env, "P1", "max");
+    e.watch();
+    assert!(e.lock().envs[&EnvId::default_env()].mixed.is_some());
+    drop(e);
+    // The engine starts again with the same inconsistent files.
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    {
+        let inner = e.lock();
+        let st = &inner.envs[&EnvId::default_env()];
+        assert_eq!(st.mixed, Some(id("uuid-personal")));
+        assert!(st.live.is_none(), "org is not shown live with personal's tokens");
+    }
+    assert!(paused(&e).unwrap().contains("inconsistent"));
+}

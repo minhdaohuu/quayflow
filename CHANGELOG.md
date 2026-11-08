@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+- `quayflow update` now checks the attestation of the release's installer before running it. Before, it checked the installer only against `SHA256SUMS` from the same release, which does not prove who built it.
+- When every approved account was at its limit, recovery could switch to an account whose last usage reading was out of date and showed room, as if it were available now. An out-of-date reading now never counts as room there either.
+- A `quayflow use` right after the login changed outside Quayflow could be refused with "already live". The engine now reads the login files before refusing.
+- Two failures at the same moment could leave the second one without its retry, when the first one's switch landed between the second one's check and its own switch request. The second now shares the first one's switch.
+- A session that the engine had not listed yet (a new `claude -p` job, for example in a lane) could have the default environment recovered instead of its own.
+- Inconsistent login files (one account's tokens, another account's record) were forgotten when the engine restarted. They are now found again at start, and automation stays paused until a switch repairs them.
+- macOS: a Keychain login that contains a non-ASCII character (in an MCP login, for example) could not be read, so switching stopped in that environment. `security` prints such a login as hex; Quayflow now reads it.
+- macOS: when the Keychain did not answer, deleting a lane, or saving or cancelling a sign-in, could leave a login behind in an item nothing could find again. A lane is now not deleted, and a sign-in folder is kept and retired later.
+- macOS: a Keychain write that did not read back as written is now rolled back, as a failed account-record write already was.
+- `quayflow lanes check` no longer deletes a lane's own `settings.json` or `CLAUDE.md` when the shared one is gone; it moves the lane's copy aside (`.lane-copy`).
+- Unknown options are refused. Before, a misspelled `--check` ran a full `quayflow update`, and a misspelled `--if-consented` started the engine without checking consent.
+- `curl ... | sh -s -- --uninstall` asks its question on the terminal; before, the uninstall read its answer from the piped script.
+- In `/quay add`, a "Save as new" choice no longer carries over to the next sign-in. Cancelling during a recovery retry is no longer reported as "the retry could not run". The headless hint of `/quay group remove` named `group add`.
+- Linux and macOS: the uninstall question, the startup consent and the `/quay` privacy line no longer say Windows; `quayflow update` suggests `brew install gh` on macOS.
+- Config files with a zero `backoffMaxS`, or a freshness limit shorter than the poll interval, are refused instead of re-polling a rate-limited endpoint on every tick or showing every reading as out of date.
+- Logs and the journal replace longer account labels first, so no part of a label like "Work Org" is left when another account is called "Work".
+
 ### Changed
 - On Linux and macOS, `quayflow shell install` now refuses with a message instead of writing a PowerShell prompt hook that cannot work there. Same-terminal Replace is Windows only; use Open New Session.
 

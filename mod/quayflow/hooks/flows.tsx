@@ -453,6 +453,8 @@ async function startSignin($: EngineInterface, c: Ctx): Promise<void> {
   const reauth = c.view.arg
   const group = c.form['add:group'] ?? s.defaultGroup
   await setForm($, 'add:problem', '')
+  // A "Save as new" choice belongs to the sign-in it was made for, never to the next one.
+  await setForm($, 'add:asnew', '')
   if (!s.consents.credentialStorage) {
     if (c.form['add:vault'] !== '1') {
       return void setForm($, 'add:problem', 'Tick the vault box first: the sign-in keeps a login until you save or discard it.')

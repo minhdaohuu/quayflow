@@ -101,7 +101,13 @@ if [ "$UNINSTALL" = 1 ]; then
     set -- uninstall
     [ "$DELETE_DATA" = 1 ] && set -- "$@" --delete-data
     [ "$YES" = 1 ] && set -- "$@" --yes
-    "$EXE" "$@" || die "quayflow uninstall failed (exit $?). Nothing else was changed by this script."
+    # Piped into sh (`curl ... | sh -s -- --uninstall`), standard input is this script: the
+    # question is asked on the terminal instead.
+    if [ "$YES" = 0 ] && { : </dev/tty; } 2>/dev/null; then
+      "$EXE" "$@" </dev/tty || die "quayflow uninstall failed (exit $?). Nothing else was changed by this script."
+    else
+      "$EXE" "$@" || die "quayflow uninstall failed (exit $?). Nothing else was changed by this script."
+    fi
   else
     warn "quayflow not found at $EXE; removing the plugin and link only."
     if [ -n "$CLAUDE" ] && [ "$NO_PLUGIN" = 0 ]; then

@@ -6,7 +6,7 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 INSTALLER="$HERE/install.sh"
-W=$(mktemp -d "${TMPDIR:-/tmp}/qf-installer-test-XXXXXXXX")
+W=$(mktemp -d "${TMPDIR:-/tmp}/qf-installer-test-XXXXXXXX") && [ -n "$W" ] || { echo "mktemp failed" >&2; exit 1; }
 PASS=0 FAIL=0
 check() { # condition-result name [detail]
   if [ "$1" = 0 ]; then PASS=$((PASS + 1)); printf '  PASS %s\n' "$2"

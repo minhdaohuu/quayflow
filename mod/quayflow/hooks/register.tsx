@@ -29,7 +29,7 @@ export const register: Register = (on, options) => {
       name: 'quay',
       description: 'Quayflow: accounts, usage and switching (/quay help)',
       argumentHint: '[status|accept|use <account>|unpin|mode|group|pause|resume|register|add|lanes|report|whoami|help]',
-    })
+    }).catch(() => {})
     // Off the startup path: the session never waits for the engine.
     let settle: () => void = () => {}
     Q.ready = new Promise<void>(resolve => (settle = resolve))

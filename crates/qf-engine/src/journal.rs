@@ -21,6 +21,9 @@ pub fn scrub(text: &str, labels: &[(String, String)]) -> String {
 fn replace_labels(text: &str, labels: &[(String, String)]) -> String {
     let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
     let mut out = text.to_string();
+    // Longer labels first: "Work Org" before "Work", so no part of a label is left behind.
+    let mut labels: Vec<&(String, String)> = labels.iter().collect();
+    labels.sort_by_key(|(l, _)| std::cmp::Reverse(l.len()));
     for (label, id) in labels {
         if label.chars().count() < 2 {
             continue;

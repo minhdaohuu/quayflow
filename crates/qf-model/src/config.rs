@@ -408,6 +408,14 @@ impl Config {
         if t.lock_wait_s == 0 || t.lock_wait_s > 60 {
             return Err("lockWaitS must be 1-60".into());
         }
+        // A zero backoff re-polls a rate-limited endpoint on every tick.
+        if !(60..=86_400).contains(&t.backoff_max_s) {
+            return Err("backoffMaxS must be 60-86400".into());
+        }
+        // A reading must be able to stay fresh between two polls.
+        if t.live_fresh_s < t.live_poll_s || t.idle_fresh_s < t.idle_poll_s {
+            return Err("liveFreshS and idleFreshS must be at least livePollS and idlePollS".into());
+        }
         Ok(())
     }
 }

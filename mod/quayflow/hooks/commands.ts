@@ -351,7 +351,7 @@ async function groupCommand($: EngineInterface, s: StateView, rest: string[], fl
         const accepted =
           flags.has('--accept-disclosure') || (await confirm($, `${text}\nApprove this group's account set?`, 'Approve group'))
         if (!accepted) {
-          return Q.headless ? `${text}\nNot saved. To accept: /quay group add ${g} ${rest.slice(2).join(' ')} --accept-disclosure` : 'Not saved: the disclosure was not accepted.'
+          return Q.headless ? `${text}\nNot saved. To accept: /quay group ${sub} ${g} ${rest.slice(2).join(' ')} --accept-disclosure` : 'Not saved: the disclosure was not accepted.'
         }
         r = await actMembers($, g, add, remove, true)
       }

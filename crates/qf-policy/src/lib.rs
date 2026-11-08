@@ -511,8 +511,10 @@ pub fn recovery_target(ctx: &Ctx) -> RecoveryTarget {
     if let Some(c) = picks.into_iter().next() {
         return RecoveryTarget::Capacity(c);
     }
-    // All exhausted: soonest available among permitted accounts with an observation
-    // (age does not matter for a reset time already known).
+    // All exhausted: soonest available among permitted accounts whose observation shows an
+    // exhausted window (age does not matter for a reset time already known). An account
+    // without one is not a candidate only because its reading is stale or missing: its
+    // availability is unknown, never "now" (stale is never zero).
     let mut best: Option<(AccountId, i64)> = None;
     let members = ctx.governing.first().map(|g| g.accounts.clone()).unwrap_or_default();
     for id in members.iter() {
@@ -520,6 +522,9 @@ pub fn recovery_target(ctx: &Ctx) -> RecoveryTarget {
             continue;
         }
         let Some(o) = ctx.observation(id) else { continue };
+        if !o.windows.iter().any(|w| w.pct >= hard && window_applies(w, ctx.model)) {
+            continue;
+        }
         if let Some(at) = available_at_for(o, hard, ctx.now, ctx.model) {
             if best.as_ref().is_none_or(|(_, b)| at < *b) {
                 best = Some((id.clone(), at));

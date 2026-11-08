@@ -353,11 +353,19 @@ fn swap_keychain(
             _ => SwapError::PostWrite(format!("Keychain write failed and its state is unclear: {e}")),
         });
     }
-    let written = keychain::read(item).map_err(SwapError::PostWrite)?;
-    if written.as_ref() != Some(&creds) {
-        return Err(SwapError::PostWrite(
-            "the Keychain login did not read back as written".into(),
-        ));
+    let written = keychain::read(item);
+    if written.as_ref().ok().and_then(|w| w.as_ref()) != Some(&creds) {
+        // Put the Keychain back so tokens and account record never disagree.
+        let why = match written {
+            Err(e) => format!("the Keychain login could not be read back ({e})"),
+            Ok(_) => "the Keychain login did not read back as written".into(),
+        };
+        return Err(match keychain::write(item, &before) {
+            Ok(()) if keychain::read(item).ok().flatten().as_ref() == Some(&before) => {
+                SwapError::PreWrite(format!("{why}; the Keychain write was rolled back"))
+            }
+            _ => SwapError::PostWrite(format!("{why}; rollback failed")),
+        });
     }
     if let Err(e) = atomic_write(&env.claude_json, config_text.as_bytes()) {
         // Put the Keychain back so tokens and account record never disagree.
@@ -395,7 +403,9 @@ fn swap_keychain(
 /// Remove the login from an environment without signing out (retire a sign-in copy).
 pub fn retire(env: &Env, wait_each: Duration) -> Result<(), SwapError> {
     let held = lock::acquire_env(env, wait_each).map_err(SwapError::Lock)?;
-    if let Ok(Store::Keychain(item)) = store(env) {
+    // A Keychain that cannot be asked (locked, a dialog, a timeout) is an error, never "no
+    // item": the login would stay behind under a name nothing can find once the folder goes.
+    if let Store::Keychain(item) = store(env).map_err(SwapError::Read)? {
         // The item first: keep its other keys, delete it when nothing else is in it.
         let mut kc = keychain::read(&item).map_err(SwapError::Read)?.unwrap_or_default();
         kc.remove("claudeAiOauth");

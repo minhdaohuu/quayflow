@@ -68,6 +68,29 @@ struct Args {
     errors: Vec<String>,
 }
 
+/// Every option the commands read. Anything else is refused: a misspelled `--check` or
+/// `--if-consented` must not run the command without it.
+fn known_flag(name: &str) -> bool {
+    takes_value(name)
+        || matches!(
+            name,
+            "accept-disclosure"
+                | "approve"
+                | "check"
+                | "delete-data"
+                | "delete-logs"
+                | "delete-vault"
+                | "help"
+                | "idle-wait"
+                | "if-consented"
+                | "json"
+                | "live"
+                | "preview"
+                | "skip-attestation"
+                | "yes"
+        )
+}
+
 fn takes_value(name: &str) -> bool {
     matches!(
         name,
@@ -250,6 +273,9 @@ fn run(a: &Args, dd: &DataDir) -> i32 {
     if !matches!(cmd, "help" | "-h" | "/?" | "version" | "-V") {
         if let Some(e) = a.errors.first() {
             return fail(e);
+        }
+        if let Some((f, _)) = a.flags.iter().find(|(f, _)| !known_flag(f)) {
+            return fail(format!("unknown option --{f} (quayflow help lists the options)"));
         }
     }
     match cmd {
@@ -678,7 +704,7 @@ Your default Claude folder and its current login are not touched. Continue?",
                 )
             } else {
                 format!(
-                    "Uninstall Quayflow from this Windows user?
+                    "Uninstall Quayflow for your user?
   Removed: the Mod, the startup entry, the prompt hook and the engine
   Left as it is: Claude's live login and its conversation history
   Protected vault copies: {}
@@ -918,7 +944,7 @@ fn onboard(dd: &DataDir) -> i32 {
             "credentialStorage",
             "Let Quayflow store reusable copies of my Claude logins in its protected vault",
         ),
-        ("signinStartup", "Start the engine when I sign in to Windows"),
+        ("signinStartup", "Start the engine when I sign in to this computer"),
     ];
     let mut consents = serde_json::Map::new();
     for (k, q) in items {

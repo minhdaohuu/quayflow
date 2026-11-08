@@ -12,7 +12,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 BIN=${1:-$REPO/target/debug/quayflow}
 [ -x "$BIN" ] || { echo "no program at $BIN (cargo build -p quayflow)"; exit 1; }
-W=$(mktemp -d "${TMPDIR:-/tmp}/qf-smoke-XXXXXXXX")
+W=$(mktemp -d "${TMPDIR:-/tmp}/qf-smoke-XXXXXXXX") && [ -n "$W" ] || { echo "mktemp failed" >&2; exit 1; }
 PASS=0 FAIL=0
 check() {
   if [ "$1" = 0 ]; then PASS=$((PASS + 1)); printf '  PASS %s\n' "$2"

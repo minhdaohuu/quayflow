@@ -404,3 +404,24 @@ fn recovery_soonest_ignores_other_models_windows() {
     ctx.model = None;
     assert_eq!(soonest(&ctx), ("c".into(), NOW + 90 * MIN));
 }
+
+#[test]
+fn recovery_soonest_never_counts_a_stale_reading_as_room() {
+    let mut w = World::new();
+    // b's reading is two hours old (stale) and showed room; c is exhausted with a known reset.
+    w.obs = vec![
+        obs("a", 0, &[("5h", 100.0, Some(NOW + 300 * MIN))]),
+        obs("b", 120, &[("5h", 60.0, Some(NOW + 30 * MIN))]),
+        obs("c", 5, &[("5h", 100.0, Some(NOW + 90 * MIN))]),
+    ];
+    match recovery_target(&w.ctx()) {
+        RecoveryTarget::Soonest { id, available_at } => {
+            assert_eq!(id.as_str(), "c");
+            assert_eq!(available_at, NOW + 90 * MIN);
+        }
+        r => panic!("{r:?}"),
+    }
+    // With only the stale account left, nothing is known: no switch.
+    w.obs.remove(2);
+    assert!(matches!(recovery_target(&w.ctx()), RecoveryTarget::None(_)));
+}

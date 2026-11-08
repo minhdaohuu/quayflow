@@ -200,6 +200,8 @@ export async function* onStep($: EngineInterface, e: TurnStepInput, next: Stream
     startedAt = Date.now()
     result = yield* next(e)
   } catch (err) {
+    // A cancellation during the retry is the person's: it is never turned into a result.
+    if (next.signal.aborted) throw err
     uiLog($, `Quayflow: the retry could not run (${errorText(err)}).`)
     return result
   }

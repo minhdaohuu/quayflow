@@ -1,13 +1,12 @@
 //! Onboarding, account lifecycle (FR-01..FR-04), groups and projects (FR-05, FR-06),
 //! managed-login settings (FR-06a).
 
-use crate::core::{random_hex, Engine, Inner, Signin};
+use crate::core::{random_hex, retire_signin, Engine, Inner, Signin};
 use qf_model::api::{GroupChangeResponse, SigninIdentity, SigninStatus};
 use qf_model::time::now_ms;
 use qf_model::*;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct ApiErr {
@@ -705,8 +704,7 @@ impl Engine {
         }
         self.save_config(&inner).map_err(ApiErr::invalid)?;
         // Retire the temporary copy: remove the keys and the folder; no sign-out call.
-        let _ = qf_adapter::login::retire(&s.env, Duration::from_secs(3));
-        let _ = std::fs::remove_dir_all(&s.env.config_dir);
+        retire_signin(&s.env);
         if let Some(x) = inner.signins.get_mut(id) {
             x.state = "saved".into();
             x.login = None;
@@ -727,8 +725,7 @@ impl Engine {
             .signins
             .remove(id)
             .ok_or_else(|| ApiErr::not_found("no such sign-in"))?;
-        let _ = qf_adapter::login::retire(&s.env, Duration::from_secs(3));
-        let _ = std::fs::remove_dir_all(&s.env.config_dir);
+        retire_signin(&s.env);
         Ok(())
     }
 

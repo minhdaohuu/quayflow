@@ -387,7 +387,12 @@ impl Schedule {
                 code: 429,
                 retry_after_s,
             } => {
-                let doubled = self.backoff_ms.get(id.as_str()).copied().unwrap_or(60_000) * 2;
+                let doubled = self
+                    .backoff_ms
+                    .get(id.as_str())
+                    .copied()
+                    .unwrap_or(60_000)
+                    .saturating_mul(2);
                 // A server-supplied Retry-After can be any number: saturate, never overflow.
                 let ra = retry_after_s.map(secs_to_ms).unwrap_or(0);
                 let w = doubled.max(ra).min(secs_to_ms(max_backoff_s));

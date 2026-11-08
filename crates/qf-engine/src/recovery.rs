@@ -48,6 +48,22 @@ impl Engine {
             r.index.map(|i| i.to_string()).unwrap_or_default(),
             r.agent_id.as_deref().unwrap_or("main")
         );
+        // The session list is refreshed each tick; a session that started since (a new
+        // `claude -p` job, perhaps in a lane) is looked for now, so its own environment is the
+        // one recovered, not the default.
+        {
+            let mut inner = self.lock();
+            let known = inner
+                .envs
+                .values()
+                .any(|st| st.sessions.iter().any(|s| s.session_id == r.session_id));
+            if !known {
+                let ids: Vec<EnvId> = inner.envs.keys().cloned().collect();
+                for id in ids {
+                    self.refresh_env(&mut inner, &id);
+                }
+            }
+        }
         // The account the failed request used: the environment's live login before any switch.
         let from = {
             let inner = self.lock();
@@ -309,6 +325,25 @@ impl Engine {
                         t.detail.unwrap_or_default()
                     )),
                     None => no("a switch for a concurrent failure is still in progress; Claude's own result stands"),
+                }
+            }
+            Err(e) if e.code == "noop" => {
+                // A concurrent failure's switch to the same account was written between our check
+                // and our request: share it, as if we had seen it at the check.
+                let inner = self.lock();
+                let st = inner.envs.get(&env);
+                let last = st.and_then(|s| s.last_switch.clone().or_else(|| s.transition.clone()));
+                let live = st.and_then(|s| s.live.clone());
+                match last {
+                    Some(t)
+                        if shareable(t.how)
+                            && t.written_at
+                                .is_some_and(|w| now_ms() - w < tuning.concurrent_window_s as i64 * 1000)
+                            && live.as_ref() == Some(&t.to) =>
+                    {
+                        self.share(&inner, r, &env, &t, &pcts)
+                    }
+                    _ => no(format!("switch not made: {}", e.message)),
                 }
             }
             Err(e) => no(format!("switch not made: {}", e.message)),

@@ -43,6 +43,13 @@ impl Engine {
         idle_wait: bool,
         sync: bool,
     ) -> Result<Transition, Refusal> {
+        // The engine notices a login changed outside Quayflow at its next tick. Before refusing
+        // a switch as "already live", read the login files now, so a change made just before
+        // this request is seen.
+        let looks_live = self.lock().envs.get(env).is_some_and(|st| st.live.as_ref() == Some(to));
+        if looks_live {
+            self.watch();
+        }
         let tid;
         {
             let mut inner = self.lock();

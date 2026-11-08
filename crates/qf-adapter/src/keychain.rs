@@ -190,6 +190,19 @@ pub fn find(service: &str) -> Result<Option<Item>, String> {
     }
 }
 
+/// `security -w` prints a password as text, or as hex when it holds a byte that is not
+/// printable ASCII (any non-ASCII character in the JSON).
+fn parse_password(out: &str) -> Option<Map<String, Value>> {
+    let object = |s: &str| match serde_json::from_str::<Value>(s) {
+        Ok(Value::Object(m)) => Some(m),
+        _ => None,
+    };
+    object(out).or_else(|| {
+        let bytes = hex::decode(out).ok()?;
+        object(std::str::from_utf8(&bytes).ok()?)
+    })
+}
+
 /// The login store held by an item (`None` when the item does not exist).
 pub fn read(item: &Item) -> Result<Option<Map<String, Value>>, String> {
     let (code, out, err) = run(
@@ -197,10 +210,9 @@ pub fn read(item: &Item) -> Result<Option<Map<String, Value>>, String> {
         None,
     )?;
     match code {
-        0 => match serde_json::from_str::<Value>(out.trim()) {
-            Ok(Value::Object(m)) => Ok(Some(m)),
-            _ => Err("the Keychain login is not a JSON object".into()),
-        },
+        0 => parse_password(out.trim())
+            .map(Some)
+            .ok_or_else(|| "the Keychain login is not a JSON object".into()),
         NOT_FOUND => Ok(None),
         _ => Err(format!("the Keychain refused to read the login ({code}: {err})")),
     }
@@ -255,6 +267,15 @@ pub fn new_item(env: &Env) -> Option<Item> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn passwords_printed_as_hex_are_read() {
+        let m = parse_password("7b2261223a22636166c3a9227d").unwrap();
+        assert_eq!(m["a"], "caf\u{e9}");
+        assert_eq!(parse_password(r#"{"a":1}"#).unwrap()["a"], 1);
+        assert!(parse_password("not json").is_none());
+        assert!(parse_password("7b").is_none());
+    }
     use super::*;
     use std::path::Path;
 
@@ -355,7 +376,7 @@ mod tests {
             "claudeAiOauth".into(),
             serde_json::json!({"accessToken": "t", "refreshToken": "r"}),
         );
-        m.insert("mcpOAuth".into(), serde_json::json!({"k": 1}));
+        m.insert("mcpOAuth".into(), serde_json::json!({"k": 1, "name": "caf\u{e9}"}));
         if write(&item, &m).is_err() {
             eprintln!("Keychain not writable; skipped");
             return;
