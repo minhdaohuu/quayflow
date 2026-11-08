@@ -1,6 +1,6 @@
 # Known limits of Quayflow v0.1
 
-Quayflow v0.1 (currently v0.1.4) is a pilot release. This page lists what it does not do, what depends on undocumented Claude Code behavior, and what has not yet been confirmed. Requirement references (FR-xx, AC-xx) are to [requirements.md](requirements.md) and [acceptance.md](acceptance.md).
+Quayflow v0.1 (currently v0.1.5) is a pilot release. This page lists what it does not do, what depends on undocumented Claude Code behavior, and what has not yet been confirmed. Requirement references (FR-xx, AC-xx) are to [requirements.md](requirements.md) and [acceptance.md](acceptance.md).
 
 ## Platform and scope
 
@@ -76,7 +76,7 @@ Any Claude update can change these. Quayflow checks each new Claude version auto
 
 ## Not yet confirmed (v0.1 release conditions)
 
-These were not confirmed as of v0.1.4 (2026-11-07). Each is required before v0.1 leaves the pilot ([release conditions](requirements.md#release-conditions-for-v01)):
+These were not confirmed as of v0.1.5 (2026-11-08). Each is required before v0.1 leaves the pilot ([release conditions](requirements.md#release-conditions-for-v01)):
 
 - Claude's own in-process usage-limit wait adopting a login switched during the wait (AC-23). A job that fails when every account is exhausted is not affected: a fresh `claude -p` uses the login that is live when it starts.
 - Claude reading and writing correctly through lane links on the release build. It passed on a local build on 2026-11-03 (AC-12).

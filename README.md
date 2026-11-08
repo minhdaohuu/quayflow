@@ -22,7 +22,7 @@ whether you are at the keyboard or a `claude -p` job is running on its own.
 > [!IMPORTANT]
 > **You are responsible for complying with your provider's terms and your organization's rules**, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is an independent open-source project and is **not affiliated with or endorsed by Anthropic**.
 
-**Status:** v0.1.4, public pilot. Quayflow targets every platform Claude Code runs on: **Windows x64 and Linux x86_64 now** (Linux from v0.1.5), macOS next. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts on Windows. **Linux is not fully tested:** switching and headless jobs ran with real accounts on one Ubuntu machine, but recovery from a real usage limit and an install from a published release have not. See [acceptance results](docs/acceptance.md) for what is proven and what is still open.
+**Status:** v0.1.5, public pilot. Quayflow targets every platform Claude Code runs on: **Windows x64 and Linux x86_64 now** (Linux from v0.1.5), macOS next. Switching, recovery from a real usage limit and headless `claude -p` jobs have been tested end to end with real accounts on Windows. **Linux is not fully tested:** switching and headless jobs ran with real accounts on one Ubuntu machine, but recovery from a real usage limit and an install from a published release have not. See [acceptance results](docs/acceptance.md) for what is proven and what is still open.
 
 ## What and why
 
@@ -273,7 +273,7 @@ The installer shows what it will do and asks for consent. It verifies the progra
 <summary><b>Safer: download, verify, read, then run</b></summary>
 
 ```powershell
-$v = 'v0.1.4'   # the release you want
+$v = 'v0.1.5'   # the release you want
 $base = "https://github.com/minhdaohuu/quayflow/releases/download/$v"
 Invoke-WebRequest -UseBasicParsing "$base/install.ps1" -OutFile install.ps1
 Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile SHA256SUMS
@@ -291,7 +291,7 @@ See [Verifying a release](docs/verify-release.md).
 
 | Option | Effect |
 |---|---|
-| `-Version v0.1.4` | A specific release instead of the latest |
+| `-Version v0.1.5` | A specific release instead of the latest |
 | `-Startup` | Also start the engine at Windows sign-in |
 | `-NoPath` | Do not add the install folder to your user PATH |
 | `-NoPlugin` | Engine only; do not touch Claude Code plugins |

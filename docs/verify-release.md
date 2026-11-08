@@ -26,7 +26,7 @@ The installer checks (1) always, and (2) unless you pass `-SkipAttestation`: it 
 ## Check the hashes by hand
 
 ```powershell
-$v = 'v0.1.4'
+$v = 'v0.1.5'
 $base = "https://github.com/minhdaohuu/quayflow/releases/download/$v"
 foreach ($f in 'quayflow.exe', 'quayflow-bg.exe', 'install.ps1', 'Quayflow.psm1', 'SOURCE_COMMIT', 'SHA256SUMS') {
     try { Invoke-WebRequest -UseBasicParsing "$base/$f" -OutFile $f } catch { "$f is not in this release" }   # v0.1.0 has no SOURCE_COMMIT
@@ -66,7 +66,7 @@ On Windows with Visual Studio Build Tools (MSVC) and rustup:
 
 ```powershell
 git clone https://github.com/minhdaohuu/quayflow; cd quayflow
-git checkout v0.1.4
+git checkout v0.1.5
 rustup toolchain install          # installs the version pinned in rust-toolchain.toml
 $env:SOURCE_DATE_EPOCH = git log -1 --format=%ct
 $env:CARGO_INCREMENTAL = '0'

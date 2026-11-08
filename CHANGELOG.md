@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-08
+
+Linux x86_64 support (not fully tested yet: see Known limits); the repository is public and releases are attested; a quiet status line.
+
 ### Added
 - Linux (x86_64; glibc 2.35 and OpenSSL 3 or newer, such as Ubuntu 22.04, Debian 12, Fedora 36 and later). Install with `curl -fsSL https://github.com/minhdaohuu/quayflow/releases/latest/download/install.sh | sh`; `install.sh` makes the same checks as `install.ps1` (hashes, attestation, the Mod's source commit) and takes the same choices as long options. The program goes to `~/.local/share/quayflow/bin`, linked as `~/.local/bin/quayflow`; `--startup` adds a systemd user unit; `quayflow update` hands off to `install.sh --update`. Saved logins are owner-only files (`0600`), not encrypted, the same protection Claude Code gives its own login on Linux. Same-terminal Replace is not available on Linux yet; Open New Session uses the desktop's terminal.
 - Releases carry `quayflow-linux-x86_64` and `install.sh`, built twice and compared like the Windows programs.
@@ -129,7 +133,8 @@ First release: a private pilot for Windows 10/11 x64 (Quayflow targets every pla
 - Release assets are not attested while the repository is private; install with `-SkipAttestation`.
 - An idle account's access token expires, so it is not observed until it is used again (see `docs/known-limits.md`).
 
-[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/minhdaohuu/quayflow/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/minhdaohuu/quayflow/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/minhdaohuu/quayflow/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/minhdaohuu/quayflow/compare/v0.1.1...v0.1.2

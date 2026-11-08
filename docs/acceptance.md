@@ -19,7 +19,8 @@ The [release conditions](requirements.md#release-conditions-for-v01) require rec
   - `real-lanes.ps1`: 8/8. Lane links (symbolic links on Linux) created and checked, a real headless job inside the lane on the second account, the default login unchanged, the shared setup intact after deleting the lane.
   - `real-headless.ps1 -Case X4`: 7/7. With the engine stopped, `claude -p` behaves as without Quayflow; with it running, stdout is exactly one JSON result and no Quayflow text appears.
   - After every switch, `~/.claude/.credentials.json` and `~/.claude.json` stayed `0600`; vault files `0600` in a `0700` folder.
-  - Not run on Linux: X1, X2, X3 and X5, which need an account at a real usage limit.
+  - Manual, in an interactive session on the desktop: adding both accounts through the sign-in window; a switch from the `/quay` pane and back; a suggestion (threshold lowered to 5%) shown pinned, accepted with `/quay accept`, and verified on the next request.
+  - Not run on Linux: X1, X2, X3 and X5, which need an account at a real usage limit; Open New Session; an install and update from a published release; any other distribution.
 
 Still open: Claude's own in-process usage-limit wait adopting a login switched during the wait (AC-23).
 
@@ -82,6 +83,6 @@ An earlier real run the same day found a defect, fixed in `0e657ca`: a request t
 | Claude's own usage-limit wait adopts a login switched during the wait | Open |
 | Claude reads and writes correctly through lane links | Passed on a local build (2026-11-03, `real-lanes.ps1` 8/8); repeat on the release build |
 | Crash reconciliation, version gating, dead-refresh-token handling built and passing | Built; logic passes (dead refresh token of an idle account also in Simulation); real runs open |
-| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (latest v0.1.4); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attestation open: v0.1.0 to v0.1.4 were built while the repository was private; the first attested release (v0.1.5) still has to be verified with `gh attestation verify` |
+| Release artifacts hashed, attested, reproducible; installer and updater refuse a mismatch | Hashes and the reproducible double build in every release since v0.1.0 (latest v0.1.5); the installer and `quayflow update` (which runs the installer) refuse a hash mismatch. Attestation open: v0.1.0 to v0.1.4 were built while the repository was private; the first attested release (v0.1.5) still has to be verified with `gh attestation verify` |
 | Disclaimer published | Done (README, installer, onboarding) |
 | Managed-login override documented with its risk | Done (`docs/security.md`); override not implemented in this build |

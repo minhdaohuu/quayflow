@@ -1,6 +1,6 @@
 # Quayflow v0.1 technical specification
 
-> Scope: this specification describes v0.1 on Windows x64 and Linux x86_64 as of v0.1.4. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated so that macOS can provide its own. See [requirements.md](requirements.md#platform-scope).
+> Scope: this specification describes v0.1 on Windows x64 and Linux x86_64 as of v0.1.5. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated so that macOS can provide its own. See [requirements.md](requirements.md#platform-scope).
 
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 

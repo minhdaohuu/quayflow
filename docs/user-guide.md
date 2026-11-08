@@ -1,6 +1,6 @@
 # Quayflow user guide
 
-Quayflow v0.1.4. This guide covers installing, setting up accounts and groups, how switching behaves, and how to remove Quayflow. Quayflow runs on Windows x64 and Linux x86_64 (macOS is next). Paths below are the Windows ones; [Linux](#linux) lists what differs there.
+Quayflow v0.1.5. This guide covers installing, setting up accounts and groups, how switching behaves, and how to remove Quayflow. Quayflow runs on Windows x64 and Linux x86_64 (macOS is next). Paths below are the Windows ones; [Linux](#linux) lists what differs there.
 
 > **Your responsibility.** You are responsible for complying with your provider's terms and your organization's rules, including rules about which accounts may process your organization's work. Use only accounts that are yours to use. Quayflow does not make sharing accounts, or getting around a provider's limits, allowed where its terms forbid it. Quayflow is not affiliated with or endorsed by Anthropic.
 
@@ -9,7 +9,7 @@ Contents: [Requirements](#requirements) · [Install](#install) · [First use](#f
 ## Requirements
 
 - Windows 10 or 11, x64; or Linux x86_64 with glibc 2.35 and OpenSSL 3 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later).
-- Claude Code installed and working (`claude --version`). Quayflow v0.1.4 was validated against Claude Code 2.1.316; other versions are checked automatically (see [Version checks](#version-checks)).
+- Claude Code installed and working (`claude --version`). Quayflow v0.1.5 was validated against Claude Code 2.1.316; other versions are checked automatically (see [Version checks](#version-checks)).
 - Windows: Windows PowerShell 5.1 or PowerShell 7 for the installer. Linux: `sh`, `curl`, `sha256sum`, and `python3` for the Mod step. No administrator rights.
 - Claude subscription logins (claude.ai sign-in). Quayflow never switches a subscription session to API-key billing.
 
@@ -33,7 +33,7 @@ It does not read, copy or change any Claude login. Running Claude sessions load 
 
 | Option | Effect |
 |---|---|
-| `-Version v0.1.4` | Install a specific release instead of the latest |
+| `-Version v0.1.5` | Install a specific release instead of the latest |
 | `-Startup` | Also start the engine at Windows sign-in (per-user startup entry, no window) |
 | `-NoPath` | Do not change your PATH |
 | `-NoPlugin` | Engine only; do not touch Claude Code plugins |
