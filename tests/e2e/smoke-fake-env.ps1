@@ -104,6 +104,14 @@ try {
     $s3 = Qf start --if-consented | ConvertFrom-Json
     Check 'intentional stop is respected by on-demand start' ($s3.state -eq 'stopped_by_user') $s3.state
     Check 'engine connection file removed on stop' (-not (Test-Path (Join-Path $env:QUAYFLOW_HOME 'engine.json')))
+
+    # An installer writes the marker before a stop that may not take effect; a plain start
+    # that finds the engine still running must clear it, or on-demand starts stay refused.
+    $s4 = Qf start | ConvertFrom-Json
+    $marker = Join-Path $env:QUAYFLOW_HOME 'engine.stopped'
+    Set-Content -LiteralPath $marker -Value '1' -NoNewline
+    $s5 = Qf start | ConvertFrom-Json
+    Check 'plain start on a running engine clears the stop marker' ($s4.state -eq 'started' -and $s5.state -eq 'running' -and -not (Test-Path $marker)) "$($s4.state) $($s5.state) marker=$(Test-Path $marker)"
 }
 finally {
     try { & $Exe stop 2>&1 | Out-Null } catch {}

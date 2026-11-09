@@ -1,6 +1,6 @@
 # Known limits of Quayflow
 
-Quayflow (currently v0.3.0) is a pilot release. This page lists what it does not do, what depends on undocumented Claude Code behavior, and what has not yet been confirmed. Requirement references (FR-xx, AC-xx) are to [requirements.md](requirements.md) and [acceptance.md](acceptance.md).
+Quayflow (currently v0.4.0) is a pilot release. This page lists what it does not do, what depends on undocumented Claude Code behavior, and what has not yet been confirmed. Requirement references (FR-xx, AC-xx) are to [requirements.md](requirements.md) and [acceptance.md](acceptance.md).
 
 ## Platform and scope
 

@@ -1163,6 +1163,10 @@ fn malformed_input_does_not_panic() {
 
 #[test]
 fn long_polls_are_capped() {
+    // Parallel recoveries (each up to about 40 s) and the long-polls together must leave
+    // workers for other sessions' per-request routes.
+    let free = qf_engine::http::HTTP_WORKERS - qf_engine::http::MAX_LONG_POLLS;
+    assert!(free >= 20, "{free} workers for per-request routes");
     let w = world();
     let e = engine_with_accounts(&w);
     let seq = e.seq();

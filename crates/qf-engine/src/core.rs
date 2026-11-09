@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub type Shared = Arc<Engine>;
 
@@ -243,6 +243,12 @@ pub struct Engine {
     pub started_at: i64,
     pub token: String,
     pub shutdown: AtomicBool,
+    /// Set once the first `tick()` has finished: stale readings polled and the first
+    /// decisions made (`GET /v1/ready`).
+    pub first_tick_done: AtomicBool,
+    /// Serializes usage polling between the tick and recovery, so an account is not polled
+    /// twice at once. Lock order: `observe_lock`, then `cred_lock`, then the engine lock.
+    pub observe_lock: Mutex<()>,
     pub exe_sha256: String,
     pub default_env: Env,
     /// Disable network calls (tests).
@@ -345,6 +351,8 @@ impl Engine {
             started_at: now_ms(),
             token,
             shutdown: AtomicBool::new(false),
+            first_tick_done: AtomicBool::new(false),
+            observe_lock: Mutex::new(()),
             exe_sha256,
             default_env,
             offline,
@@ -1002,9 +1010,32 @@ impl Engine {
     // ---------------- observation ----------------
 
     pub fn observe(&self, force: bool) {
+        self.observe_accounts(None, force, None);
+    }
+
+    /// Polls usage for `only` (every account when `None`): those due, or with `force` those
+    /// the schedule allows. A recovery passes the accounts whose readings are missing or
+    /// stale, and a `deadline` after which no further account is polled. Accounts read
+    /// within the last minute are skipped on that path (another caller just polled them).
+    pub fn observe_accounts(&self, only: Option<&[AccountId]>, force: bool, deadline: Option<Instant>) {
         if self.offline {
             return;
         }
+        // With a deadline (a recovery waiting), a poll already running (the tick's, which can
+        // take a while on a slow network) is waited for only until the deadline.
+        let _polling = match deadline {
+            None => self.observe_lock.lock().unwrap_or_else(|p| p.into_inner()),
+            Some(d) => loop {
+                match self.observe_lock.try_lock() {
+                    Ok(g) => break g,
+                    Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) if Instant::now() < d => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(std::sync::TryLockError::WouldBlock) => return,
+                }
+            },
+        };
         let now = now_ms();
         let jobs: Vec<(AccountId, Option<Env>)> = {
             let inner = self.lock();
@@ -1013,6 +1044,19 @@ impl Engine {
                 .accounts
                 .iter()
                 .filter(|a| a.health != Health::RefreshRejected)
+                .filter(|a| only.is_none_or(|ids| ids.contains(&a.id)))
+                .filter(|a| {
+                    only.is_none()
+                        || !inner
+                            .observations
+                            .iter()
+                            .any(|o| o.account == a.id && o.age_ms(now) < 60_000)
+                })
+                // A recovery does not ask again an account whose last poll failed and is not
+                // due yet: a hung or failing endpoint would cost every recovery the full wait.
+                .filter(|a| {
+                    only.is_none() || inner.schedule.due(&a.id, now) || !inner.schedule.note.contains_key(a.id.as_str())
+                })
                 .filter(|a| (force && inner.schedule.may_force(&a.id, now)) || inner.schedule.due(&a.id, now))
                 .map(|a| {
                     let live_env = inner
@@ -1026,6 +1070,9 @@ impl Engine {
         };
         let mut observed = false;
         for (id, live_env) in jobs {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                break;
+            }
             // The live account's freshest token is in the environment, not the vault.
             let login = match &live_env {
                 Some(env) => qf_adapter::read_login(env)
@@ -1271,6 +1318,7 @@ impl Engine {
         for id in ids {
             self.decide(&id);
         }
+        self.first_tick_done.store(true, Ordering::SeqCst);
     }
 
     pub fn finish_adoption(&self, inner: &mut Inner, env: &EnvId) {

@@ -26,7 +26,7 @@ describe('handshake and engine start', () => {
     expect(r.stopReason).toBeNull()
     expect(requests).toBe(1)
     expect(w.routes()).toEqual(['/v1/hello'])
-    expect(w.bodies('/v1/hello')[0]).toEqual({ protocol: 1, modVersion: '0.3.0', sessionId: 'S1', headless: true, claudeVersion: '2.1.316' })
+    expect(w.bodies('/v1/hello')[0]).toEqual({ protocol: 1, modVersion: '0.4.0', sessionId: 'S1', headless: true, claudeVersion: '2.1.316' })
   })
 
   test('nothing listening: the engine is started at once, without retrying the handshake for seconds', async ($, on) => {
@@ -548,5 +548,169 @@ describe('interactive sessions', () => {
     const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
     expect(status).toContain('incompatible with engine 0.3.0')
     expect(status).toContain('quayflow update')
+  })
+})
+
+describe('the engine is started again by requests (v0.4.0)', () => {
+  const START = [ENGINE_EXE, 'start', '--if-consented']
+
+  test('an engine that stopped mid-session is started by the next failed request, which is recovered', async ($, on) => {
+    const w = world(on, { start: 'started' })
+    let requests = 0
+    on('turn.step', async function* (_$, e) {
+      requests += 1
+      return requests === 2 ? failed(e) : ok(e)
+    })
+    await start($, w, false)
+    await step($)
+    expect(w.runs).toEqual([])
+    // The engine crashes between two requests; the next one fails at a usage limit.
+    w.down()
+    const r = await step($, { ...STEP, index: 1 })
+    expect(w.runs).toEqual([START])
+    expect(w.bodies('/v1/recover')).toHaveLength(1)
+    expect(r.answer).toBe('done')
+    expect(requests).toBe(3)
+  })
+
+  test('an engine stopped on purpose is never started: the CLI refuses once, then no request asks again', async ($, on) => {
+    const w = world(on, { start: 'stopped_by_user' })
+    let requests = 0
+    on('turn.step', async function* (_$, e) {
+      requests += 1
+      return failed(e)
+    })
+    await start($, w, false)
+    w.stopByPerson()
+    const r = await step($)
+    expect(r.stopReason).toBeNull()
+    expect(w.runs).toEqual([START])
+    await w.clock.advance(120_000)
+    await step($, { ...STEP, index: 1 })
+    expect(w.runs).toEqual([START])
+    expect(w.bodies('/v1/recover')).toHaveLength(0)
+    expect(requests).toBe(2)
+  })
+
+  test('a refused start is not run again, even when a handshake finishes after it', async ($, on) => {
+    const w = world(on, { down: true, start: 'no_consent', startDelayMs: 3_000 })
+    on('turn.step', async function* (_$, e) {
+      return failed(e)
+    })
+    // Interactive: the status watcher shakes hands while the session's start still runs.
+    await start($, w, true)
+    // The first request arrives while the session's start is still running.
+    const pending = step($)
+    await w.clock.advance(3_000)
+    await w.clock.settle()
+    await pending
+    const runs = w.runs.length
+    expect(runs).toBeGreaterThanOrEqual(1)
+    await w.clock.advance(61_000)
+    await step($, { ...STEP, index: 1 })
+    await w.clock.advance(61_000)
+    await step($, { ...STEP, index: 2 })
+    expect(w.runs).toHaveLength(runs)
+    const status = w.ui.filter(u => u.kind === 'ui.status').pop()?.text ?? ''
+    expect(status).not.toContain('not running')
+  })
+
+  test('a start that fails is tried again at most once a minute', async ($, on) => {
+    const w = world(on, { down: true, start: 'failed' })
+    on('turn.step', async function* (_$, e) {
+      return failed(e)
+    })
+    await start($, w, false)
+    expect(w.runs).toEqual([START])
+    await step($)
+    await step($, { ...STEP, index: 1 })
+    expect(w.runs).toEqual([START])
+    // Just under a minute after the session's start: still not tried again.
+    await w.clock.advance(56_500)
+    await step($, { ...STEP, index: 2 })
+    expect(w.runs).toEqual([START])
+    await w.clock.advance(2_000)
+    await step($, { ...STEP, index: 3 })
+    expect(w.runs).toEqual([START, START])
+  })
+
+  test('after a request that succeeded, a stopped engine is started in the background', async ($, on) => {
+    const w = world(on, { start: 'started', startDelayMs: 5_000 })
+    on('turn.step', async function* (_$, e) {
+      return ok(e)
+    })
+    await start($, w, false)
+    await step($)
+    w.down()
+    // Resolves with the start still under way (the mocked clock has not moved): not held.
+    const r = await step($, { ...STEP, index: 1 })
+    expect(r.answer).toBe('done')
+    await w.clock.settle()
+    expect(w.runs).toEqual([START])
+    await w.clock.advance(5_000)
+    await w.clock.settle()
+    // The next request finds it up again.
+    await step($, { ...STEP, index: 2 })
+    expect(w.bodies('/v1/step')).toHaveLength(2)
+  })
+})
+
+describe('the first request of a session waits for an engine that is starting', () => {
+  test('engine up and ready: one readiness check, no other wait; later requests skip it', async ($, on) => {
+    const w = world(on, { routes: { '/v1/ready': { ready: true } } })
+    on('turn.step', async function* (_$, e) {
+      return ok(e)
+    })
+    await start($, w, false)
+    await step($)
+    await step($, { ...STEP, index: 1 })
+    expect(w.routes().filter(r => r === '/v1/ready')).toHaveLength(1)
+    expect(w.sent.find(s => s.route === '/v1/ready')).toBeDefined()
+  })
+
+  test('the request goes out only after the engine started and finished its first round', async ($, on) => {
+    let readyAsked = 0
+    const w = world(on, { down: true, start: 'started', startDelayMs: 3_000, routes: { '/v1/ready': () => ((readyAsked += 1), { ready: true }) } })
+    let sentAfterReady = false
+    on('turn.step', async function* (_$, e) {
+      sentAfterReady = readyAsked > 0
+      return ok(e)
+    })
+    await start($, w, false)
+    const pending = step($)
+    await w.clock.advance(3_000)
+    await w.clock.settle()
+    const r = await pending
+    expect(r.answer).toBe('done')
+    expect(sentAfterReady).toBe(true)
+    expect(w.routes()).toContain('/v1/hello')
+  })
+
+  test('no consent: the first request is not held and nothing more is started', async ($, on) => {
+    const w = world(on, { down: true, start: 'no_consent' })
+    on('turn.step', async function* (_$, e) {
+      return ok(e)
+    })
+    await start($, w, false)
+    const refusedBefore = w.refused()
+    // Resolves without the mocked clock moving: nothing held the request.
+    await step($)
+    expect(w.runs).toEqual([[ENGINE_EXE, 'start', '--if-consented']])
+    // Calls to a down engine are refused before they are recorded: none was even tried.
+    expect(w.refused()).toBe(refusedBefore)
+  })
+
+  test('an engine before v0.4.0 (no /v1/ready) counts as ready', async ($, on) => {
+    const w = world(on, { routes: { '/v1/ready': { status: 404, body: { error: 'not found', code: 'not_found' } } } })
+    let requests = 0
+    on('turn.step', async function* (_$, e) {
+      requests += 1
+      return ok(e)
+    })
+    await start($, w, false)
+    const r = await step($)
+    expect(r.answer).toBe('done')
+    expect(requests).toBe(1)
+    expect(w.routes().filter(x => x === '/v1/ready')).toHaveLength(1)
   })
 })

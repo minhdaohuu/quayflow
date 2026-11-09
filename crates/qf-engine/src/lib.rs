@@ -132,6 +132,8 @@ pub fn serve(dd: DataDir, default_env: qf_adapter::Env, tick: Duration) -> Resul
                 let e = engine.clone();
                 // A panic in one tick must not take the engine down.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.tick()));
+                // Ready even when the first tick panicked: a waiting request must not wait on.
+                engine.first_tick_done.store(true, Ordering::SeqCst);
                 last = std::time::Instant::now();
             }
             std::thread::sleep(Duration::from_millis(200));

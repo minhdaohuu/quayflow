@@ -217,6 +217,47 @@ fn check(seed: u64) -> Result<(), String> {
         RecoveryTarget::None(_) => {}
     }
 
+    // Accounts a recovery polls on demand: exactly the allowed destinations with no reading or
+    // a stale one, whenever no account with known room exists (Soonest and None included).
+    let polled = poll_before_recovery(&ctx);
+    let has_room = matches!(recovery_target(&ctx), RecoveryTarget::Capacity(_));
+    if has_room && !polled.is_empty() {
+        return Err("polled although an account with known room exists".into());
+    }
+    let unknown = |id: &AccountId| {
+        ctx.observation(id)
+            .is_none_or(|o| o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(id))
+    };
+    for id in &polled {
+        allowed(&ctx, id).map_err(|e| format!("poll_before_recovery: {e}"))?;
+        if ctx.fresh_binding(id).is_ok() || !unknown(id) {
+            return Err("poll_before_recovery listed an account with a fresh reading".into());
+        }
+    }
+    if !has_room {
+        for g in &ctx.governing {
+            for id in &g.accounts {
+                if allowed(&ctx, id).is_ok() && unknown(id) && !polled.contains(id) {
+                    return Err(format!("{id:?} has unknown capacity but is not polled"));
+                }
+            }
+        }
+    }
+
+    // The live account is read before confirming only when its usage is unknown and the
+    // session sent no percentages; never with percentages, never for a fresh reading.
+    if live_usage_unknown(&ctx, &[("five_hour".into(), 100.0)], false).is_some()
+        || live_usage_unknown(&ctx, &[], true).is_some()
+    {
+        return Err("live usage read although the session sent percentages or simulated".into());
+    }
+    match (live_usage_unknown(&ctx, &[], false), ctx.live) {
+        (Some(l), Some(live)) if &l == live && unknown(live) => {}
+        (None, None) => {}
+        (None, Some(live)) if !unknown(live) => {}
+        (got, live) => return Err(format!("live_usage_unknown {got:?} for live {live:?}")),
+    }
+
     for (id, r) in explain_all(&ctx) {
         if r.is_ok() {
             allowed(&ctx, &id).map_err(|e| format!("explain_all: {e}"))?;
@@ -242,10 +283,13 @@ fn decisions_keep_the_invariants_in_generated_situations() {
 #[test]
 fn the_generator_reaches_every_decision() {
     // Guard against a generator that never produces the interesting cases.
-    let (mut switch, mut capacity, mut soonest) = (0, 0, 0);
+    let (mut switch, mut capacity, mut soonest, mut polled) = (0, 0, 0, 0);
     for seed in 1..=20_000 {
         let w = generate(seed);
         let ctx = w.ctx();
+        if !poll_before_recovery(&ctx).is_empty() {
+            polled += 1;
+        }
         if matches!(proactive(&ctx), Proactive::Switch { .. }) {
             switch += 1;
         }
@@ -256,7 +300,7 @@ fn the_generator_reaches_every_decision() {
         }
     }
     assert!(
-        switch > 100 && capacity > 100 && soonest > 100,
-        "{switch} {capacity} {soonest}"
+        switch > 100 && capacity > 100 && soonest > 100 && polled > 100,
+        "{switch} {capacity} {soonest} {polled}"
     );
 }

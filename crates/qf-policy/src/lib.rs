@@ -115,7 +115,7 @@ impl<'a> Ctx<'a> {
         self.observations.iter().find(|o| &o.account == id)
     }
 
-    fn fresh_limit_s(&self, id: &AccountId) -> i64 {
+    pub fn fresh_limit_s(&self, id: &AccountId) -> i64 {
         if self.live == Some(id) {
             self.tuning.live_fresh_s as i64
         } else {
@@ -503,6 +503,46 @@ fn live_limited_until(o: &Observation, hard: f64, now: i64, model: Option<&str>)
         }
     }
     latest
+}
+
+/// Permitted accounts of the governing group, other than the live one, whose capacity is
+/// unknown: no reading, or one past its freshness limit. (A fresh reading that only lacks a
+/// window for this model is not listed: polling it again would not add one.)
+pub fn unknown_capacity(ctx: &Ctx) -> Vec<AccountId> {
+    let members = ctx.governing.first().map(|g| g.accounts.as_slice()).unwrap_or(&[]);
+    members
+        .iter()
+        .filter(|id| ctx.live != Some(*id) && ctx.permitted(id).is_ok())
+        .filter(|id| {
+            ctx.observation(id)
+                .is_none_or(|o| o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(id))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Accounts a recovery polls before deciding: those of unknown capacity, unless an account
+/// with known room already exists. A `Soonest` or `None` target is decided only after asking
+/// them, so an account at its limit never wins over one whose room was simply not read.
+pub fn poll_before_recovery(ctx: &Ctx) -> Vec<AccountId> {
+    if matches!(recovery_target(ctx), RecoveryTarget::Capacity(_)) {
+        return vec![];
+    }
+    unknown_capacity(ctx)
+}
+
+/// The live account, when a limit is not confirmed only because its usage is unknown: the
+/// session saw no percentages, and the engine has no reading of it or one past its freshness
+/// limit. A recovery reads it once and asks `confirm_limit` again; the confirmation itself
+/// stays strict (a fresh reading at the limit).
+pub fn live_usage_unknown(ctx: &Ctx, session_pcts: &[(String, f64)], simulated: bool) -> Option<AccountId> {
+    if simulated || !session_pcts.is_empty() {
+        return None;
+    }
+    let live = ctx.live?;
+    ctx.observation(live)
+        .is_none_or(|o| o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(live))
+        .then(|| live.clone())
 }
 
 pub fn recovery_target(ctx: &Ctx) -> RecoveryTarget {

@@ -1,6 +1,6 @@
 {
   "name": "quayflow",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Quayflow: account usage, suggestions, switching and usage-limit recovery inside Claude Code (/quay), backed by the local Quayflow engine.",
   "author": { "name": "Minh Dao Huu", "url": "https://github.com/minhdaohuu" },
   "homepage": "https://github.com/minhdaohuu/quayflow",

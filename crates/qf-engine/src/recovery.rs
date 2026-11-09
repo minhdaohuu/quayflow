@@ -13,6 +13,12 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// How long a recovery may spend waiting for a running poll and polling accounts whose
+/// readings are unknown. No account is started after it; one already under way finishes
+/// (an idle token refresh, 15 s, and the usage call, 10 s plus connect), so the worst case
+/// is about 40 s, inside the Mod's 60 s wait for `/v1/recover`.
+const POLL_BEFORE_RECOVERY: Duration = Duration::from_secs(10);
+
 fn no(why: impl Into<String>) -> RecoverResponse {
     RecoverResponse {
         retry: false,
@@ -64,6 +70,7 @@ impl Engine {
                 }
             }
         }
+        self.poll_unknown_before_recovery(r, &key);
         // The account the failed request used: the environment's live login before any switch.
         let from = {
             let inner = self.lock();
@@ -79,6 +86,111 @@ impl Engine {
             true,
         );
         resp
+    }
+
+    /// Before deciding, reads usage that is unknown (an engine that just started, a machine
+    /// that slept), bounded, outside the engine lock, so the decision that follows uses fresh
+    /// readings. First the live account, when only its unknown usage keeps the limit from
+    /// being confirmed (the session sent no percentages); then, once the limit is confirmed
+    /// and no account has known room, the accounts whose readings are missing or stale, so
+    /// the switch or the soonest-available account is chosen from fresh readings. Stale
+    /// readings never count as room or as a limit; this only replaces them. Skipped when the
+    /// answer is a certain "no" anyway.
+    fn poll_unknown_before_recovery(&self, r: &RecoverRequest, key: &str) {
+        let started = Instant::now();
+        let deadline = started + POLL_BEFORE_RECOVERY;
+        let pcts: Vec<(String, f64)> = r
+            .rate_limits
+            .iter()
+            .filter_map(|l| Some((l.kind.clone().unwrap_or_else(|| "window".into()), l.percent_used?)))
+            .collect();
+        let mut polled: Vec<AccountId> = vec![];
+        let mut live_read = None;
+        // Two rounds at most: the live account, then the others.
+        for _ in 0..2 {
+            let ids: Vec<AccountId> = {
+                let inner = self.lock();
+                if inner.incidents.contains_key(key) {
+                    break;
+                }
+                let env = self.env_of_session(&inner, &r.session_id);
+                let Some(st) = inner.envs.get(&env) else { break };
+                if st.pause_reason(&inner.config).is_some() {
+                    break;
+                }
+                // A concurrent failure shares a switch made (or being made) for another one, as
+                // `recover_inner` decides: it ran on the switch's source account, so that is the
+                // account whose limit is confirmed, and no other account's room is needed.
+                let window_ms = inner.config.tuning.concurrent_window_s as i64 * 1000;
+                let in_flight = st
+                    .transition
+                    .as_ref()
+                    .is_some_and(|t| st.blocking_transition() && shareable(t.how));
+                let shared_from: Option<AccountId> = st
+                    .last_switch
+                    .as_ref()
+                    .or(st.transition.as_ref())
+                    .filter(|t| {
+                        shareable(t.how)
+                            && t.written_at.is_some_and(|w| now_ms() - w < window_ms)
+                            && st.live.as_ref() == Some(&t.to)
+                    })
+                    .and_then(|t| t.from.clone());
+                let sharing = in_flight || shared_from.is_some();
+                if !sharing
+                    && (inner.progressed.get(&r.session_id) == Some(&false)
+                        || qf_policy::effective_mode(&Engine::governing(&inner, &env)) == Mode::Manual)
+                {
+                    break;
+                }
+                let Some(mut ctx) = Engine::ctx(&inner, &env, r.model.as_deref()) else {
+                    break;
+                };
+                if shared_from.is_some() {
+                    ctx.live = shared_from.as_ref();
+                }
+                if qf_policy::confirm_limit(&ctx, &pcts, r.simulated).confirmed {
+                    if sharing {
+                        break;
+                    }
+                    qf_policy::poll_before_recovery(&ctx)
+                } else {
+                    // A failure with another known cause (sign-in, missing model) is not read as
+                    // a possible usage limit.
+                    let live =
+                        qf_policy::live_usage_unknown(&ctx, &pcts, r.simulated).filter(|_| r.error_kind.is_none());
+                    if live.is_some() {
+                        live_read = live.clone();
+                    }
+                    live.into_iter().collect()
+                }
+            };
+            let ids: Vec<AccountId> = ids.into_iter().filter(|i| !polled.contains(i)).collect();
+            if ids.is_empty() || Instant::now() >= deadline {
+                break;
+            }
+            self.observe_accounts(Some(&ids), true, Some(deadline));
+            polled.extend(ids);
+        }
+        if polled.is_empty() {
+            return;
+        }
+        let inner = self.lock();
+        let fresh: Vec<&AccountId> = polled
+            .iter()
+            .filter(|id| {
+                inner
+                    .observations
+                    .iter()
+                    .any(|o| &o.account == *id && o.age_ms(now_ms()) < started.elapsed().as_millis() as i64 + 1_000)
+            })
+            .collect();
+        self.record(
+            &inner,
+            "recovery.poll",
+            json!({"session": r.session_id, "accounts": polled, "live": live_read, "fresh": fresh, "ms": started.elapsed().as_millis() as u64}),
+            true,
+        );
     }
 
     fn recover_inner(self: &Arc<Self>, r: &RecoverRequest, key: &str) -> RecoverResponse {

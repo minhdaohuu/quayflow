@@ -3,7 +3,7 @@
 // open: the caller gets an error or `off`, Claude keeps working unchanged.
 import type { EngineInterface } from 'claude-code'
 
-import type { HelloRequest, HelloResponse, QuayLink, QuayOffReason, StartState, StateView } from '../types'
+import type { HelloRequest, HelloResponse, QuayLink, QuayOffReason, ReadyResponse, StartState, StateView } from '../types'
 import { MOD_VERSION, PROTOCOL, Q, errorText, pause, setLink } from './context'
 import type { Conn } from './context'
 
@@ -277,12 +277,15 @@ function offReason(state: StartState | 'not_installed'): QuayOffReason {
 }
 
 /**
- * Brings the link up: handshake with a running engine, else (once per
- * session, or when the person asks) start it and handshake again.
+ * Brings the link up: handshake with a running engine, else start it and
+ * handshake again: at a session's start, when a request finds it stopped
+ * (`again`, at most once a minute, see `ensureLink`), or when the person asks.
  * `explicit` is the person's own request (onboarding, `/quay start`): it
  * starts without `--if-consented` and retries after an earlier attempt.
  */
-export async function establish($: EngineInterface, options: { allowStart: boolean; explicit?: boolean } = { allowStart: true }): Promise<void> {
+export type EstablishOptions = { allowStart: boolean; explicit?: boolean; again?: boolean }
+
+export async function establish($: EngineInterface, options: EstablishOptions = { allowStart: true }): Promise<void> {
   Q.linkAttempts += 1
   try {
     await attempt($, options)
@@ -291,19 +294,29 @@ export async function establish($: EngineInterface, options: { allowStart: boole
   }
 }
 
-async function attempt($: EngineInterface, options: { allowStart: boolean; explicit?: boolean }): Promise<void> {
+async function attempt($: EngineInterface, options: EstablishOptions): Promise<void> {
   const ticket = ++Q.linkTicket
   Q.lastLinkTry = Date.now()
   // The session's first handshake runs while Claude Code (and maybe the engine) is still
   // starting up: one slow or refused hello is not yet "the engine is not running".
   const first = options.allowStart && !options.explicit && !Q.startAttempted
   let outcome = first ? await firstHello($) : await tryHello($)
-  if (outcome.kind === 'unreachable' && options.allowStart && (options.explicit || !Q.startAttempted)) {
+  if (outcome.kind === 'unreachable' && options.allowStart && (options.explicit || options.again || !Q.startAttempted)) {
     // Another attempt brought the link up meanwhile: nothing to start.
     if (cameOnSince(ticket)) return
     Q.startAttempted = true
+    Q.lastStartTry = await clockNow($)
     if (!Q.headless && !Q.link.on) await applyLink($, ticket, { on: false, reason: 'connecting', message: 'starting the engine' })
-    const started = await runStart($, !options.explicit)
+    Q.starting += 1
+    let started: Awaited<ReturnType<typeof runStart>>
+    try {
+      started = await runStart($, !options.explicit)
+    } finally {
+      Q.starting -= 1
+    }
+    // Every start answer replaces the remembered one (a later explicit start that failed for
+    // another reason is retried as usual); one made stale by a link that came on is ignored.
+    if (!cameOnSince(ticket)) Q.startRefused = started.state === 'no_consent' || started.state === 'stopped_by_user' ? started.state : ''
     // Whatever start reported, an engine that now runs (started meanwhile, or by the
     // CLI despite its answer) is the truth; with no engine.json this fails at once.
     Q.conn = undefined
@@ -317,6 +330,8 @@ async function attempt($: EngineInterface, options: { allowStart: boolean; expli
   if (outcome.kind === 'on') {
     await applyLink($, ticket, { on: true, engineVersion: outcome.version })
   } else if (outcome.kind === 'incompatible') {
+    // An engine answered: whatever refused a start before is no longer the state.
+    Q.startRefused = ''
     await applyLink($, ticket, { on: false, reason: 'incompatible', message: outcome.message, engineVersion: outcome.version })
   } else {
     // Keep a known start outcome (no consent, stopped by the person, the start's own
@@ -327,7 +342,13 @@ async function attempt($: EngineInterface, options: { allowStart: boolean; expli
     // started says so, not "not running".
     const marker = await dataPath($, 'engine.stopped').catch(() => '')
     const stopped = !!marker && (await $.fs.exists(marker).catch(() => false))
+    // A refusal this module was given stays the reason, even when a newer attempt (one
+    // that only shook hands) finishes after the start that was refused.
+    // `quayflow stop` since then is the newer fact, so the marker comes first.
     if (stopped && r !== 'stopped_by_user') await applyLink($, ticket, { on: false, reason: 'stopped_by_user' })
+    else if (!stopped && Q.startRefused && !Q.link.on) {
+      if (r !== Q.startRefused) await applyLink($, ticket, { on: false, reason: Q.startRefused })
+    }
     else if (!stopped && (!keep || Q.link.on)) await applyLink($, ticket, { on: false, reason: 'unreachable', message: outcome.message })
   }
 }
@@ -366,29 +387,86 @@ function cameOnSince(ticket: number): boolean {
  */
 async function applyLink($: EngineInterface, ticket: number, link: QuayLink): Promise<void> {
   if (!link.on && (ticket !== Q.linkTicket || cameOnSince(ticket))) return
-  if (link.on) Q.linkOnTicket = Q.linkTicket
+  if (link.on) {
+    Q.linkOnTicket = Q.linkTicket
+    // An engine answered (this attempt or another): a remembered refusal is over.
+    Q.startRefused = ''
+  }
   await setLink($, link)
 }
 
+/** The session clock (a test moves it), else the system's. */
+async function clockNow($: EngineInterface): Promise<number> {
+  return $.clock.now().catch(() => Date.now())
+}
+
+/** How often a request may start an engine that is not running (`quayflow start --if-consented`). */
+export const START_RETRY_MS = 60_000
+
 /**
- * Whether Quayflow may act for this request: waits for the first handshake
- * up to `waitMs`, and retries a lost link at most every 15 s. Incompatible,
- * unconsented and intentionally stopped engines stay off for the session.
+ * The link is off for a reason a start can fix: nothing answers (it crashed, was never
+ * started, or is starting). Never for no consent, an intentional stop (`quayflow stop`),
+ * no install or an incompatible engine; `start --if-consented` refuses the first two anyway.
  */
-export async function linkReady($: EngineInterface, waitMs: number): Promise<boolean> {
-  if (!Q.link.on && Q.link.reason === 'connecting' && waitMs > 0) {
-    await withTimeout($, Q.ready, waitMs, 'handshake').catch(() => {})
-  }
+function startable(): boolean {
+  const r = Q.link.reason
+  return !Q.link.on && (r === 'unreachable' || r === 'start_failed' || r === 'connecting')
+}
+
+/**
+ * Brings the link up for a request, the way a client makes sure its server runs: a
+ * handshake, and when nothing answers, `quayflow start --if-consented` (at most once a
+ * minute per module). While another start is under way this runs its own
+ * `quayflow start --if-consented` rather than awaiting that one (a promise made elsewhere
+ * counts against the budget): it finds the engine starting or running, and the engine's
+ * instance lock keeps a second one from serving. Waits at most `waitMs`.
+ *
+ * Every wait here is a call of the caller's own `$` (`$.process.run`, `$.http.fetch`):
+ * the host does not count those against a hook's 10 s budget, while a timer or a promise
+ * made elsewhere (`Q.ready`) would count, and a hook past its budget loses its result.
+ */
+export async function ensureLink($: EngineInterface, waitMs: number): Promise<boolean> {
   if (Q.link.on) return true
-  if (stuckConnecting()) {
-    await withTimeout($, establish($, { allowStart: false }), Math.max(waitMs, 3_000), 'reconnect').catch(() => {})
-    return Q.link.on
-  }
-  const retryable = Q.link.reason === 'unreachable' || Q.link.reason === 'start_failed'
-  if (retryable && Date.now() - Q.lastLinkTry > 15_000) {
-    await withTimeout($, establish($, { allowStart: false }), Math.max(waitMs, 3_000), 'reconnect').catch(() => {})
+  if (!startable()) return false
+  const joining = Q.starting > 0
+  const due = (await clockNow($)) - Q.lastStartTry >= START_RETRY_MS
+  // A refused start is not tried again; a handshake still finds an engine started by hand.
+  if (!Q.startRefused && (joining || due)) {
+    await withTimeout($, establish($, { allowStart: true, again: true }), waitMs, 'start').catch(() => {})
+  } else if (Date.now() - Q.lastLinkTry > 15_000 || stuckConnecting()) {
+    // Not yet time to start again: a handshake alone finds an engine started elsewhere.
+    await withTimeout($, establish($, { allowStart: false }), Math.min(waitMs, 5_000), 'reconnect').catch(() => {})
   }
   return Q.link.on
+}
+
+/**
+ * Whether the engine has finished its first round (usage polled, first decisions made),
+ * waiting up to `waitMs` in one long-poll on the engine's side. An engine without the
+ * route (before v0.4.0) or a failed call counts as ready: nothing more to wait for.
+ */
+export async function waitReady($: EngineInterface, waitMs: number): Promise<boolean> {
+  // The engine answers by `wait`; the call's own timeout keeps the whole wait within `waitMs`.
+  const wait = Math.max(0, Math.min(25, Math.floor((waitMs - 1_000) / 1000)))
+  try {
+    const r = await call<ReadyResponse>($, 'GET', `/v1/ready?wait=${wait}`, undefined, { timeoutMs: Math.max(1_000, waitMs) })
+    return r.ready !== false
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Whether Quayflow may act for this request, after it ran. A failed request (maybe a
+ * usage limit) brings the link up and waits for it, up to 35 s: covering `quayflow
+ * start`'s own 20 s and the handshake. After a request that succeeded nothing waits:
+ * a stopped engine is started in the background for the next request.
+ */
+export async function linkReady($: EngineInterface, failed: boolean): Promise<boolean> {
+  if (Q.link.on) return true
+  if (failed) return ensureLink($, 35_000)
+  void ensureLink($, 30_000).catch(() => {})
+  return false
 }
 
 /**

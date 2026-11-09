@@ -1,6 +1,6 @@
 # Quayflow technical specification
 
-> Scope: this specification describes Quayflow on Windows x64, Linux x86_64 and macOS as of v0.3.0. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux and [section 1b](#1b-macos) macOS. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated behind module boundaries. See [requirements.md](requirements.md#platform-scope). Linux and macOS are not fully tested; see [Known limits](known-limits.md#platform-and-scope).
+> Scope: this specification describes Quayflow on Windows x64, Linux x86_64 and macOS as of v0.4.0. Paths are given for Windows; [section 1a](#1a-linux) lists what differs on Linux and [section 1b](#1b-macos) macOS. Platform-specific parts (vault protection, paths and locks, process facts, shell integration, installer) are isolated behind module boundaries. See [requirements.md](requirements.md#platform-scope). Linux and macOS are not fully tested; see [Known limits](known-limits.md#platform-and-scope).
 
 Companion to [requirements.md](requirements.md). This file holds the engineering details: paths, schemas, constants, routes, commands, and the results of the early checks.
 
@@ -193,6 +193,7 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `POST /v1/hello` | `HelloRequest` | `HelloResponse` (protocol 1; accepted `[1]`) |
 | `GET /v1/state` | `?sessionId=&cwd=` | `StateView` |
 | `GET /v1/events` | `?since=<seq>&wait=<s, max 25>` | `EventsResponse` (long-poll; past a bounded number of open long-polls it answers at once) |
+| `GET /v1/ready` | `?wait=<s, max 25>` | `{ready}`: whether the first tick has finished (stale readings polled, first decisions made); waits up to `wait` seconds for it, as a bounded long-poll. A session's first request holds on it |
 | `POST /v1/onboarding` | `{"consents": {"engineStart": true, "credentialStorage": true, "terms": true, "signinStartup": false}, "complete": true}` | `OkResponse` |
 | `POST /v1/accounts/register` | `{"label", "group", "env"?, "acceptDisclosure"?}` (current live login) | `AccountView` (with `note` when relevant) or error |
 | `POST /v1/accounts/signin/start` | `{"reauth"?: accountId}` | `SigninStatus` (opens a new console window running `claude auth login`) |
@@ -215,7 +216,7 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | `POST /v1/unpin` | `{"env"?}` | `OkResponse` |
 | `POST /v1/step` | `StepReport` | `StepResponse` |
 | `POST /v1/adoption` | `AdoptionReport` | `OkResponse` |
-| `POST /v1/recover` | `RecoverRequest` | `RecoverResponse` (`retry`, `switched`, `to`, `why`, `availableAt` when every account is exhausted); journaled as `recovery.decision` |
+| `POST /v1/recover` | `RecoverRequest` | `RecoverResponse` (`retry`, `switched`, `to`, `why`, `availableAt` when every account is exhausted); journaled as `recovery.decision`. A confirmed limit with no account of known room (no target, or only the soonest-available one) while other accounts' readings are missing or stale first polls those accounts, then decides: no account is started after 10 s (a usage check already running is waited for within that time), the engine lock is not held, an account whose last poll failed is skipped until it is due, Manual mode and a request already recovered skip the poll; journaled as `recovery.poll`. When the session sent no usage percentages and the live account's reading is missing or stale, the live account is read first and the limit confirmed again from that reading (a reading below the limit declines) |
 | `POST /v1/failure` | `FailureShape` | `OkResponse` |
 | `POST /v1/unknown` | `{"env"?, "action": "ignore"}` | `OkResponse` |
 | `GET /v1/lanes` | | `[LaneView]` |
@@ -246,7 +247,7 @@ Refusals that need an explicit user decision use HTTP 409 with `code` `needs_dis
 
 The Mod's request hook calls `/v1/step` after every main or subagent request; when the response says `verify`, it reads the identity its request used (`$.session.authorize()` handle + profile endpoint, hashed) and posts `/v1/adoption`.
 
-Mod connection: the session's first handshake (`/v1/hello`) is tried up to three times (about 8 s at most) only while something answers or a try times out; a refused connection or a missing `engine.json` runs `quayflow start --if-consented` at once, at most once per session. After `/reload-plugins` the last link is kept until the new handshake answers. After a resume or `/clear` (a new session id without a session start) the Mod carries the link over and says hello under the new id. The pane and every `/quay` command connect when no handshake is under way, without starting the engine. `/quay` refuses an option it does not know and names the nearest known one.
+Mod connection: the session's first handshake (`/v1/hello`) is tried up to three times (about 8 s at most) only while something answers or a try times out; a refused connection or a missing `engine.json` runs `quayflow start --if-consented` at once. Later, a request that finds the engine gone (refused, or its report fails) runs it again, at most once a minute per session; a failed request waits for the start (up to 35 s) before asking for recovery, a request that succeeded starts it in the background. A session's first request waits up to 10 s, while a start can help, for the start and for `GET /v1/ready`. Every one of these waits is a call of the hook's own `$` (`$.process.run`, `$.http.fetch`): Claude Code gives a request hook 10 s of its own time, and a timer or a promise made elsewhere counts against it. `quayflow start --if-consented` refuses after `quayflow stop` (the `engine.stopped` marker) and without consent; the installers write that marker before stopping the engine for an upgrade. After `/reload-plugins` the last link is kept until the new handshake answers. After a resume or `/clear` (a new session id without a session start) the Mod carries the link over and says hello under the new id. The pane and every `/quay` command connect when no handshake is under way, without starting the engine. `/quay` refuses an option it does not know and names the nearest known one.
 
 ## 7. CLI
 

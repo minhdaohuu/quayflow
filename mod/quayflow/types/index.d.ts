@@ -437,6 +437,9 @@ export type CanaryStatus = { since: number; steps: unknown[] }
 /** `{"state": ...}` line printed by `quayflow start [--if-consented]`. */
 export type StartState = 'running' | 'started' | 'failed' | 'no_consent' | 'stopped_by_user'
 
+/** GET /v1/ready?wait=<s>: whether the engine's first round (usage polled, first decisions) is done. */
+export type ReadyResponse = { ready: boolean }
+
 // ---------------------------------------------------------------- Mod state
 
 /** Why Quayflow is off for this session (everything it does is off then). */

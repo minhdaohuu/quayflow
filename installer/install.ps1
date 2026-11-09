@@ -86,6 +86,9 @@ function Install-Quayflow {
     $Repo = 'minhdaohuu/quayflow'
     $Assets = @('quayflow.exe', 'quayflow-bg.exe')
     $DataRoot = Join-Path $env:LOCALAPPDATA 'Quayflow'
+    # The engine's own state (engine.json, engine.stopped, logs, vault): QUAYFLOW_HOME when set,
+    # the same rule as the program's paths.rs. Programs and the shell module stay under DataRoot.
+    $StateRoot = if ($env:QUAYFLOW_HOME) { $env:QUAYFLOW_HOME } else { $DataRoot }
     $BinDir = Join-Path $DataRoot 'bin'
     $Exe = Join-Path $BinDir 'quayflow.exe'
     # An update keeps every earlier choice: no consent prompt, no PATH change (see below for the Mod).
@@ -173,7 +176,7 @@ function Install-Quayflow {
     }
 
     function Get-EngineProcess {
-        $info = Join-Path $DataRoot 'engine.json'
+        $info = Join-Path $StateRoot 'engine.json'
         if (-not (Test-Path -LiteralPath $info)) { return $null }
         try {
             $enginePid = [int](Get-Content -LiteralPath $info -Raw | ConvertFrom-Json).pid
@@ -318,7 +321,7 @@ function Install-Quayflow {
         if ($claude -and -not $NoPlugin) { Remove-PocPlugin $claude }
         if (Remove-UserPath $BinDir) { Write-Info "Removed $BinDir from your user PATH." }
         Write-Info 'Your current Claude login was left as it is.'
-        if (-not $DeleteData) { Write-Info "Your vault, configuration and logs (if kept) are in $DataRoot." }
+        if (-not $DeleteData) { Write-Info "Your vault, configuration and logs (if kept) are in $StateRoot." }
         return
     }
 
@@ -514,10 +517,13 @@ Your responsibility:
         $engine = Get-EngineProcess
         $wasRunning = $null -ne $engine
         if ($wasRunning -and (Test-Path -LiteralPath $Exe)) {
-            # `stop` also writes the "stopped by user" marker; the engine is restarted below
+            # The "stopped by user" marker keeps sessions from starting the old engine while its
+            # files are replaced (`start --if-consented` honors it). `stop` writes it too, but a
+            # hung engine cannot, so it is written here first. The engine is restarted below
             # with a plain `start`, which clears it (or by the finally block if this fails).
             Write-Info "Stopping the running engine (pid $($engine.Id)) for the upgrade."
             $stoppedForUpgrade = $true
+            Set-Content -LiteralPath (Join-Path $StateRoot 'engine.stopped') -Value ([DateTime]::UtcNow.Ticks) -NoNewline -Encoding ASCII
             $null = Invoke-Native $Exe @('stop')
             if (-not $engine.WaitForExit(20000)) {
                 # Asked to stop and still running: end it, or the old version would keep serving
@@ -634,10 +640,10 @@ Your responsibility:
             if ($now -and -not $engine.HasExited -and $now.Id -eq $engine.Id) {
                 # `start` found the OLD engine still running: it is not the new version. Its
                 # "stopped by user" marker would block later on-demand starts, so it goes.
-                Remove-Item -LiteralPath (Join-Path $DataRoot 'engine.stopped') -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath (Join-Path $StateRoot 'engine.stopped') -Force -ErrorAction SilentlyContinue
                 Write-Warn "The previous engine (pid $($engine.Id)) is still running the old version. Run 'quayflow stop' and then 'quayflow start', or sign out of Windows and back in."
             } elseif ($state -eq 'started' -or $state -eq 'running') { Write-Info "Engine restarted ($state)." }
-            else { Write-Warn "The engine did not restart ($state). Run 'quayflow start' (log: $(Join-Path $DataRoot 'logs'))." }
+            else { Write-Warn "The engine did not restart ($state). Run 'quayflow start' (log: $(Join-Path $StateRoot 'logs'))." }
         }
 
         $shown = $tag; if (-not $shown) { $shown = '(local files)' }
@@ -658,7 +664,7 @@ Your responsibility:
                 $state = Start-Engine
                 Write-Warn "The upgrade did not finish; the engine was restarted ($state)."
             } else {
-                Remove-Item -LiteralPath (Join-Path $DataRoot 'engine.stopped') -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath (Join-Path $StateRoot 'engine.stopped') -Force -ErrorAction SilentlyContinue
             }
         }
     }

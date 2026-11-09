@@ -37,6 +37,11 @@ pub fn start(dd: &DataDir, if_consented: bool) -> i32 {
         }
         println!("{v}");
     };
+    // A plain start always means "I want it running": the marker goes even when an engine
+    // still answers (an installer that wrote it before a stop that did not take effect).
+    if !if_consented {
+        let _ = std::fs::remove_file(dd.stopped_marker());
+    }
     if engine_alive(dd).is_some() {
         out("running", json!({}));
         return 0;
@@ -51,8 +56,6 @@ pub fn start(dd: &DataDir, if_consented: bool) -> i32 {
             out("stopped_by_user", json!({}));
             return 0;
         }
-    } else {
-        let _ = std::fs::remove_file(dd.stopped_marker());
     }
     let exe = match std::env::current_exe() {
         Ok(e) => e,

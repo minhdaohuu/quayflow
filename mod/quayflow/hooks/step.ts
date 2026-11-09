@@ -6,7 +6,7 @@ import type { EngineInterface, StreamNext, TurnStepChunk, TurnStepInput, TurnSte
 
 import type { FailureShape, RecoverRequest, RecoverResponse, SessionRateLimitWire, StepReport, StepResponse } from '../types'
 import { Q, errorText, uiLog } from './context'
-import { call, dataPath, layout, linkReady, markUnreachable } from './engine'
+import { call, dataPath, ensureLink, layout, linkReady, markUnreachable, waitReady } from './engine'
 import { liveAccountHash } from './identity'
 
 type StepEvent = Pick<TurnStepInput, 'turnId' | 'index' | 'model' | 'agentId'>
@@ -161,9 +161,41 @@ async function askRecover($: EngineInterface, e: StepEvent, limits: SessionRateL
   }
 }
 
+/** How long a session's first request may wait for an engine that is starting. */
+export const FIRST_REQUEST_WAIT_MS = 10_000
+
+/** Resolves when `signal` aborts (never rejects): a wait raced against it ends with the request. */
+function aborted(signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal.aborted) return resolve()
+    signal.addEventListener('abort', () => resolve(), { once: true })
+  })
+}
+
+/**
+ * Before a session's first request: when the engine is not running or still starting,
+ * start it or join the start, then wait for its first round, so a proactive switch away
+ * from an account at its limit happens before the request is sent. At most 10 s in all,
+ * only while a start can help (never after `quayflow stop` or without consent), and none
+ * at all when the engine is up and ready. Only the hook's own `$` calls wait (budget).
+ */
+async function firstRequestGate($: EngineInterface, signal: AbortSignal): Promise<void> {
+  const until = Date.now() + FIRST_REQUEST_WAIT_MS
+  const gate = (async () => {
+    if (!Q.link.on) await ensureLink($, FIRST_REQUEST_WAIT_MS)
+    const left = until - Date.now()
+    if (Q.link.on && left >= 1_000) await waitReady($, left)
+  })().catch(() => {})
+  await Promise.race([gate, aborted(signal)])
+}
+
 /** The `turn.step` hook body. */
 export async function* onStep($: EngineInterface, e: TurnStepInput, next: StreamNext<'turn.step'>): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   if (!e.agentId && e.model) Q.model = e.model
+  if (!e.agentId && Q.gatedSession !== Q.sessionId) {
+    Q.gatedSession = Q.sessionId
+    await firstRequestGate($, next.signal)
+  }
   const simulated = Q.link.on ? await takeSimulatedLimit($, e).catch(() => false) : false
   // Taken before the request: a request already in flight when a switch is written finishes on
   // the previous account by design, so the engine must not read it as adoption evidence.
@@ -172,19 +204,25 @@ export async function* onStep($: EngineInterface, e: TurnStepInput, next: Stream
   // A cancelled request is never recovered or retried, and is not a failure to report.
   if (next.signal.aborted) return result
   const failed = isFailedRequest(result, false)
-  try {
-    if (!(await linkReady($, failed ? 15_000 : 2_000))) return result
-  } catch {
-    return result
-  }
+  // Waits for the engine end when the person cancels: a cancelled request is never recovered
+  // (no switch for it either), even while its hook is still waiting for the engine to start.
+  const ready = await Promise.race([linkReady($, failed).catch(() => false), aborted(next.signal).then(() => false)])
+  if (!ready || next.signal.aborted) return result
   const limits = await rateLimits($)
   await report($, e, result, !failed, limits, startedAt).catch(() => {})
-  if (!failed || !Q.link.on) return result
+  // The report is often what finds an engine gone (it crashed since the last request): a
+  // failed request starts it again and waits for it, as when the link was already off;
+  // after a request that succeeded it starts in the background, for the next request.
+  if (!Q.link.on) {
+    if (failed) await Promise.race([ensureLink($, 35_000).catch(() => false), aborted(next.signal)])
+    else void ensureLink($, 30_000).catch(() => false)
+  }
+  if (!failed || !Q.link.on || next.signal.aborted) return result
 
   const errorKind = errorKindOf(result)
   await postFailure($, e, result, limits, simulated, errorKind)
   const key = requestKey(e)
-  if (recovered.has(key)) return result
+  if (recovered.has(key) || next.signal.aborted) return result
   recovered.add(key)
 
   const rec = await askRecover($, e, limits, simulated, errorKind)

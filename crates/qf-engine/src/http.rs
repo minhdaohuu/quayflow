@@ -13,12 +13,14 @@ use std::time::Duration;
 
 const MAX_BODY: usize = 64 * 1024;
 
-/// HTTP worker threads.
-pub const HTTP_WORKERS: usize = 12;
+/// HTTP worker threads. Most sleep: a recovery can hold one for up to about 40 s (usage
+/// polled on demand, a concurrent switch waited for), so parallel jobs that hit a limit at
+/// once must still leave workers for every other session's per-request routes.
+pub const HTTP_WORKERS: usize = 32;
 /// Event long-polls that may wait at once; the remaining workers stay free for the
 /// per-request routes (/v1/step, /v1/adoption, /v1/recover). Extra pollers get an
 /// immediate answer.
-pub const MAX_LONG_POLLS: usize = HTTP_WORKERS - 3;
+pub const MAX_LONG_POLLS: usize = 9;
 
 fn q(query: &str, key: &str) -> Option<String> {
     query.split('&').find_map(|kv| {
@@ -174,6 +176,27 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
             let r = e.wait_events(since, Duration::from_secs(wait));
             drop(slot);
             ok(r)
+        }
+        ("GET", "/v1/ready") => {
+            // Whether the first tick has finished (stale readings polled, first decisions made),
+            // waiting up to `wait` seconds for it: a session's first request holds on this.
+            let wait = q(query, "wait")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0)
+                .min(25);
+            let slot = (wait > 0).then(|| LongPollSlot::take(e)).flatten();
+            let wait = if slot.is_some() { wait } else { 0 };
+            let until = std::time::Instant::now() + Duration::from_secs(wait);
+            while !e.first_tick_done.load(Ordering::SeqCst)
+                && !e.shutdown.load(Ordering::SeqCst)
+                && std::time::Instant::now() < until
+            {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            drop(slot);
+            ok(qf_model::api::ReadyResponse {
+                ready: e.first_tick_done.load(Ordering::SeqCst),
+            })
         }
         ("POST", "/v1/onboarding") => {
             e.onboarding(

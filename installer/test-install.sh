@@ -31,12 +31,17 @@ mkdir -p "$ASSETS" "$FAKEBIN" "$NOGH"
 cat > "$ASSETS/$ASSET" <<'EOF'
 #!/bin/sh
 [ -n "${QF_FAKE_LOG:-}" ] && printf '%s\n' "$*" >> "$QF_FAKE_LOG"
-root="${XDG_DATA_HOME:-$HOME/.local/share}/quayflow"
+root="${QUAYFLOW_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/quayflow}"
 alive() { pid=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$root/engine.json" 2>/dev/null); [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
 case "${1:-}" in
   version) [ "${QF_FAKE_VERSION_FAIL:-}" = 1 ] && { echo broken; exit 1; }; echo 'quayflow 0.0.0-test' ;;
   engine-sim) sleep 120 ;;
-  stop) echo 1 > "$root/engine.stopped"; [ "${QF_FAKE_STOP_HANG:-}" = 1 ] && exit 0
+  stop) # A hung engine answers nothing: no marker of its own; log whether the installer wrote one.
+        if [ "${QF_FAKE_STOP_HANG:-}" = 1 ]; then
+          [ -f "$root/engine.stopped" ] && [ -n "${QF_FAKE_LOG:-}" ] && echo stop-saw-marker >> "$QF_FAKE_LOG"
+          exit 1
+        fi
+        echo 1 > "$root/engine.stopped"
         pid=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$root/engine.json" 2>/dev/null); [ -n "$pid" ] && kill "$pid" 2>/dev/null; true ;;
   start) if alive; then echo '{"state":"running"}'; exit 0; fi
          [ "${2:-}" = --if-consented ] || rm -f "$root/engine.stopped"
@@ -167,6 +172,29 @@ check "$([ $CODE != 0 ] && LOGL | grep -qx start && printf '%s' "$OUT" | grep -q
 check "$([ ! -f "$ROOT/engine.stopped" ]; echo $?)" 'no stopped-by-user marker after a failed upgrade'
 rm -f "$ROOT/engine.json"
 
+# A hung engine: `stop` gets no answer and writes nothing. The installer's own marker keeps
+# sessions from starting the old engine; the engine is ended after 20 s and the new one started.
+sim; rm -f "$QF_FAKE_LOG" "$ROOT/engine.stopped"
+once QF_FAKE_STOP_HANG=1 run
+gone "$SIM"
+check "$([ $CODE = 0 ] && printf '%s' "$OUT" | grep -q 'did not stop within 20 s'; echo $?)" 'hung engine ended' "$OUT"
+check "$(if kill -0 "$SIM" 2>/dev/null; then echo 1; else echo 0; fi)" 'hung engine process gone'
+check "$(printf '%s' "$OUT" | grep -q 'Engine restarted (started)'; echo $?)" 'new engine started after the hung one' "$OUT"
+check "$(LOGL | grep -qx stop-saw-marker; echo $?)" 'marker written before a stop the engine cannot answer'
+check "$([ ! -f "$ROOT/engine.stopped" ]; echo $?)" 'marker cleared after the restart'
+rm -f "$ROOT/engine.json"
+
+# QUAYFLOW_HOME moves the engine's state: the installer finds the engine and writes and
+# clears the marker there, the same folder the program uses.
+SAVED_ROOT=$ROOT; ROOT="$W/qfhome"
+sim; rm -f "$QF_FAKE_LOG"
+export QUAYFLOW_HOME="$ROOT"; once QF_FAKE_STOP_HANG=1 run; unset QUAYFLOW_HOME
+gone "$SIM"
+check "$([ $CODE = 0 ] && printf '%s' "$OUT" | grep -q 'Engine restarted (started)'; echo $?)" 'QUAYFLOW_HOME: upgrade succeeds and restarts the engine' "$OUT"
+check "$(LOGL | grep -qx stop-saw-marker; echo $?)" 'QUAYFLOW_HOME: marker written in that folder before the stop'
+check "$([ ! -f "$ROOT/engine.stopped" ] && [ ! -f "$SAVED_ROOT/engine.stopped" ]; echo $?)" 'QUAYFLOW_HOME: no marker left behind'
+rm -f "$ROOT/engine.json"; ROOT=$SAVED_ROOT
+
 rm -rf "$BIN"
 write_sums "$ASSETS" "$ASSET=$(printf '0%.0s' $(seq 64))"
 run
@@ -233,6 +261,11 @@ check "$(printf '%s' "$OUT" | grep -q 'The Mod was left as it is (local build)';
 ln -sfn "$EXE" "$HOME/.local/bin/quayflow"; rm -f "$QF_FAKE_LOG"
 OUT=$(PATH="$NOGH:$SYS" sh "$INSTALLER" --uninstall --delete-data --yes 2>&1); CODE=$?
 check "$([ $CODE = 0 ] && LOGL | grep -qx 'uninstall --delete-data --yes' && [ ! -e "$HOME/.local/bin/quayflow" ]; echo $?)" 'uninstall delegated to quayflow, link removed' "$OUT"
+# A link pointing elsewhere (a developer build) is not ours to remove.
+ln -sfn "$W/other-quayflow" "$HOME/.local/bin/quayflow"
+OUT=$(PATH="$NOGH:$SYS" sh "$INSTALLER" --uninstall --yes 2>&1); CODE=$?
+check "$([ $CODE = 0 ] && [ -L "$HOME/.local/bin/quayflow" ]; echo $?)" 'uninstall leaves a link to another program' "$OUT"
+rm -f "$HOME/.local/bin/quayflow"
 OUT=$(PATH="$NOGH:$SYS" sh "$INSTALLER" --version bogus --yes 2>&1); CODE=$?
 check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'Not a release version'; echo $?)" 'invalid --version refused before any download' "$OUT"
 OUT=$(PATH="$NOGH:$SYS" sh "$INSTALLER" --frobnicate 2>&1); CODE=$?

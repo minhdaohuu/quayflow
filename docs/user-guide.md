@@ -1,6 +1,6 @@
 # Quayflow user guide
 
-Quayflow v0.3.0. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64, Linux x86_64 and, from v0.1.6, macOS (Apple silicon and Intel). Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
+Quayflow v0.4.0. This guide covers installing, setting up accounts and groups, how switching behaves in interactive sessions and headless `claude -p` jobs, lanes, and how to remove Quayflow. Quayflow runs on Windows x64, Linux x86_64 and, from v0.1.6, macOS (Apple silicon and Intel). Paths below are the Windows ones; [Linux](#linux) and [macOS](#macos) list what differs there.
 
 Linux is not fully tested. Recovery from a real usage limit, Open New Session, an install or update from a published release, and distributions other than Ubuntu 24.04 have not been run there. macOS is not fully tested either; on an Apple silicon Mac, switching, lanes and recovery from a simulated limit passed with real accounts, while recovery from a real limit, Open New Session, Intel Macs and an install from a published release have not been run. See [acceptance results](acceptance.md).
 
@@ -66,7 +66,7 @@ Start Claude as usual (`claude`) and run `/quay`. The first time, Quayflow asks 
 
 | Consent | What it allows | Can be changed with |
 |---|---|---|
-| Engine start | The Mod starts the engine (`quayflow.exe`; `quayflow` on Linux and macOS) in the background when a session finds it not running. Given at install | `quayflow consent engine-start on\|off` |
+| Engine start | The Mod starts the engine (`quayflow.exe`; `quayflow` on Linux and macOS) in the background when a session or one of its requests finds it not running (at most once a minute), never after `quayflow stop`. Given at install | `quayflow consent engine-start on\|off` |
 | Sign-in startup | The engine also starts when you sign in (a Windows startup entry, a systemd user unit on Linux, a LaunchAgent on macOS) | `quayflow consent signin-startup on\|off` |
 | Credential storage | Quayflow keeps a reusable copy of each login you register, in its vault (DPAPI on Windows, owner-only files on Linux and macOS) | `quayflow consent credential-storage on\|off` |
 | Terms | You confirm you are responsible for your provider's terms and your organization's rules | `quayflow consent terms on\|off` |

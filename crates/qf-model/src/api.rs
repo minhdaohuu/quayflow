@@ -33,6 +33,14 @@ pub struct HelloRequest {
     pub secure_storage_dir: Option<String>,
 }
 
+/// `GET /v1/ready?wait=<s>`: whether the engine has finished its first round (usage polled,
+/// first decisions made) since it started.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadyResponse {
+    pub ready: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HelloResponse {

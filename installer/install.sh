@@ -77,6 +77,9 @@ case "$OS/$(uname -m)" in
 esac
 [ -n "${HOME:-}" ] || die "HOME is not set; cannot choose an install folder."
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/quayflow"
+# The engine's own state (engine.json, engine.stopped, logs, vault): QUAYFLOW_HOME when set,
+# the same rule as the program's paths.rs. Programs and the shell module stay under DATA_ROOT.
+STATE_ROOT="${QUAYFLOW_HOME:-$DATA_ROOT}"
 BIN_DIR="$DATA_ROOT/bin"
 EXE="$BIN_DIR/quayflow"
 LINK="$HOME/.local/bin/quayflow"
@@ -115,9 +118,10 @@ if [ "$UNINSTALL" = 1 ]; then
       "$CLAUDE" plugin marketplace remove quayflow >/dev/null 2>&1 || true
     fi
   fi
-  if [ -L "$LINK" ]; then rm -f "$LINK"; info "Removed $LINK."; fi
+  # Only our own link: one pointing elsewhere (a developer build) is left alone.
+  if [ -L "$LINK" ] && [ "$(readlink "$LINK")" = "$EXE" ]; then rm -f "$LINK"; info "Removed $LINK."; fi
   info 'Your current Claude login was left as it is.'
-  [ "$DELETE_DATA" = 1 ] || info "Your vault, configuration and logs (if kept) are in $DATA_ROOT."
+  [ "$DELETE_DATA" = 1 ] || info "Your vault, configuration and logs (if kept) are in $STATE_ROOT."
   exit 0
 fi
 
@@ -244,7 +248,7 @@ cleanup() {
       state=$(start_engine)
       warn "The upgrade did not finish; the engine was restarted ($state)."
     else
-      rm -f "$DATA_ROOT/engine.stopped"
+      rm -f "$STATE_ROOT/engine.stopped"
     fi
   fi
 }
@@ -277,7 +281,7 @@ fi
 
 engine_pid() {
   # The engine named in engine.json, when that process is alive and is quayflow.
-  f="$DATA_ROOT/engine.json"
+  f="$STATE_ROOT/engine.json"
   [ -f "$f" ] || return 1
   pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$f" | head -n 1)
   [ -n "$pid" ] && running "$pid" || return 1
@@ -370,10 +374,13 @@ WAS_RUNNING=0
 if pid=$(engine_pid); then
   WAS_RUNNING=1
   if [ -x "$EXE" ]; then
-    # `stop` also writes the "stopped by user" marker; the engine is restarted below with a
-    # plain `start`, which clears it (or by the cleanup above if this fails).
+    # The "stopped by user" marker keeps sessions from starting the old engine while its file
+    # is replaced (`start --if-consented` honors it). `stop` writes it too, but a hung engine
+    # cannot, so it is written here first. The engine is restarted below with a plain
+    # `start`, which clears it (or by the cleanup above if this fails).
     info "Stopping the running engine (pid $pid) for the upgrade."
     STOPPED_FOR_UPGRADE=1
+    date +%s000 > "$STATE_ROOT/engine.stopped"
     "$EXE" stop >/dev/null 2>&1 || true
     i=0
     while running "$pid" && [ $i -lt 40 ]; do sleep 0.5; i=$((i + 1)); done
@@ -543,7 +550,7 @@ if [ "$WAS_RUNNING" = 1 ]; then
   RESTARTED=1
   case "$state" in
     started|running) info "Engine restarted ($state)." ;;
-    *) warn "The engine did not restart ($state). Run 'quayflow start' (log: $DATA_ROOT/logs)." ;;
+    *) warn "The engine did not restart ($state). Run 'quayflow start' (log: $STATE_ROOT/logs)." ;;
   esac
 fi
 

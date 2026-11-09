@@ -4,8 +4,27 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-10
+
+A new configuration's Default group starts in Automatic mode; the engine is started again by the requests of running sessions, waited for by the first request, and recovers limits that arrive right after it starts, reading unknown usage on the spot.
+
 ### Changed
 - A new installation's `Default` group starts in Automatic mode: Quayflow switches its accounts before a usage limit and recovers from one, including in headless jobs (`claude -p`), with no extra step. The welcome screen in `/quay` says so. Groups you create still start in Suggest and need a one-time approval for Automatic. An existing configuration keeps its modes. To decide each switch yourself, run `quayflow mode suggest --group Default`.
+
+### Fixed
+- An engine that stopped unexpectedly (a crash, a killed process) is started again by the next request of a running session, at most once a minute, instead of only when a new session starts. A request that failed at a usage limit waits for it (up to 35 s) and is then recovered. An engine stopped on purpose (`quayflow stop`) is never started this way.
+- A session's first request waits up to 10 s for an engine that is still starting, and for its first usage check, so an account already at its limit is switched before the request is sent (Automatic mode). No wait when the engine is running, stopped on purpose, or without consent.
+- Recovery checks the other accounts' usage on the spot when its readings are missing or out of date (right after the engine started, after sleep), instead of declining for lack of a reading or switching to an account at its limit while another one's usage was simply unknown. The check starts no new account after 10 s, including any wait for a usage check already running; an account whose last check failed is not asked again until it is due; an out-of-date reading still never counts as room.
+- A failed request now waits for a slow first handshake within Claude Code's 10 s budget for the request hook. Before, a wait longer than the remaining budget dropped the recovery silently.
+- The installers mark the engine as stopped before asking it to stop for an upgrade, so a session cannot start the old engine while its files are replaced, even when the engine does not answer.
+- `quayflow start` clears the "stopped on purpose" mark even when it finds the engine already running. Before, an upgrade whose stop did not take effect could leave the mark behind, and sessions then never started the engine again on their own.
+- A request cancelled while Quayflow waits for the engine to start is no longer recovered (no switch is made for it).
+- A failed request in a session that has seen no usage figures yet (a new `claude -p`) is recovered when the live account is at its limit: when the engine has no recent reading of the live account, it reads it once to confirm the limit. Before, the limit could not be confirmed and Claude's own result stood. A reading below the limit is still not a usage limit.
+- A failed request that shares a switch already made for another failure (for example a subagent's request) confirms the limit on the account switched from, reading it when its usage is unknown, so it is retried on the new account like the first one.
+- Many parallel jobs hitting a usage limit at once no longer keep other sessions from reaching the engine: it now has 32 request workers instead of 12.
+- After `quayflow start` refused to start the engine (no consent, or stopped on purpose), a session no longer tries again once a minute when a status check finishes after that answer.
+- `install.sh --uninstall` removes `~/.local/bin/quayflow` only when it points to the installed program; a link to another build is left alone.
+- The installers use `QUAYFLOW_HOME`, when it is set, for the engine's state (`engine.json`, the "stopped on purpose" mark, logs), as the program does.
 
 ## [0.3.0] - 2026-11-09
 
@@ -188,7 +207,8 @@ First release: a private pilot for Windows 10/11 x64 (Quayflow targets every pla
 - Release assets are not attested while the repository is private; install with `-SkipAttestation`.
 - An idle account's access token expires, so it is not observed until it is used again (see `docs/known-limits.md`).
 
-[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/minhdaohuu/quayflow/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/minhdaohuu/quayflow/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/minhdaohuu/quayflow/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/minhdaohuu/quayflow/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/minhdaohuu/quayflow/compare/v0.1.5...v0.1.6

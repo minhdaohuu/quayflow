@@ -6,7 +6,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { QuayCacheEntry, QuayDisclosure, QuayFlash, QuayForm, QuayLink, QuayReport, QuaySignin, QuayView, SigninStatus, StateView } from '../types'
 
-export const MOD_VERSION = '0.3.0'
+export const MOD_VERSION = '0.4.0'
 export const PROTOCOL = 1
 export const PANE_ID = 'quay'
 
@@ -25,9 +25,17 @@ export const Q = {
   link: { on: false, reason: 'connecting' } as QuayLink,
   /** Settles once the first handshake (and engine start, if any) has an outcome. */
   ready: Promise.resolve() as Promise<void>,
-  /** `quayflow start --if-consented` runs at most once per session (FR-19). */
+  /** The session's first start attempt has been made (its first handshake retries quickly). */
   startAttempted: false,
   lastLinkTry: 0,
+  /** When this module last ran `quayflow start`: a request starts a stopped engine at most once a minute. */
+  lastStartTry: 0,
+  /** `quayflow start` runs under way from this module: a request joins one instead of waiting it out. */
+  starting: 0,
+  /** The last start this module ran was refused (no consent, stopped by the person): no request starts again until a handshake succeeds. */
+  startRefused: '' as '' | 'no_consent' | 'stopped_by_user',
+  /** The session whose first request has passed the gate (waits for an engine that is starting). */
+  gatedSession: '',
   /** Ticket of the newest `establish` attempt; each attempt takes the next one. */
   linkTicket: 0,
   /** The newest ticket handed out when the link last turned on. */

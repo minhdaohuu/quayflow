@@ -51,7 +51,7 @@ public static class Program {
         if (log != "") File.AppendAllText(log, prefix + string.Join(" ", args) + Environment.NewLine);
         if (self == "gh") return Gh(args);
         if (self == "claude") return Claude(args);
-        string root = Path.Combine(Env("LOCALAPPDATA"), "Quayflow");
+        string root = Env("QUAYFLOW_HOME") != "" ? Env("QUAYFLOW_HOME") : Path.Combine(Env("LOCALAPPDATA"), "Quayflow");
         string marker = Path.Combine(root, "engine.stopped");
         string cmd = args.Length > 0 ? args[0] : "";
         if (cmd == "version") {
@@ -60,8 +60,13 @@ public static class Program {
         } else if (cmd == "engine-sim") {
             Thread.Sleep(120000);
         } else if (cmd == "stop") {
+            // A hung engine answers nothing: it writes no marker and keeps running. Whether the
+            // installer wrote the marker before asking is logged.
+            if (Env("QF_FAKE_STOP_HANG") == "1") {
+                if (log != "" && File.Exists(marker)) File.AppendAllText(log, prefix + "stop-saw-marker" + Environment.NewLine);
+                return 1;
+            }
             File.WriteAllText(marker, "1");
-            if (Env("QF_FAKE_STOP_HANG") == "1") return 0;   // asked to stop, keeps running
             try {
                 Match m = Regex.Match(File.ReadAllText(Path.Combine(root, "engine.json")), "\"pid\"\\s*:\\s*(\\d+)");
                 Process.GetProcessById(int.Parse(m.Groups[1].Value)).Kill();
@@ -200,10 +205,10 @@ public static class Program {
         }
         function LogLines { if (Test-Path $log) { @(Get-Content $log) } else { @() } }
         $sims = @()
-        function Start-Sim {
+        function Start-Sim([string]$Root = (Join-Path $lad 'Quayflow')) {
             # A running "engine": a quayflow* process named in engine.json.
             $p = Start-Process -FilePath $simExe -ArgumentList 'engine-sim' -PassThru -WindowStyle Hidden
-            [IO.File]::WriteAllText((Join-Path $lad 'Quayflow\engine.json'), ('{"pid": ' + $p.Id + '}'))
+            [IO.File]::WriteAllText((Join-Path $Root 'engine.json'), ('{"pid": ' + $p.Id + '}'))
             $script:sims += $p
             return $p
         }
@@ -348,11 +353,31 @@ public static class Program {
 
             # ---- An engine that ignores `stop` is ended, and the new one started.
             $sim = Start-Sim
+            $hangMarker = Join-Path $lad 'Quayflow\engine.stopped'
+            Remove-Item $hangMarker, $log -ErrorAction SilentlyContinue
+            Assert (-not (Test-Path $hangMarker)) 'hung engine case starts without a marker'
             $env:QF_FAKE_STOP_HANG = '1'
             $r = Run @()
             Remove-Item Env:QF_FAKE_STOP_HANG
             Assert ($r.Out -match 'did not stop within 20 s; ending it' -and $sim.HasExited -and $r.Out -match 'Engine restarted \(started\)') 'hung engine ended, new engine started' $r.Out
+            Assert ((LogLines) -contains 'stop-saw-marker') 'marker written before a stop the engine cannot answer' ((LogLines) -join ' | ')
+            Assert (-not (Test-Path (Join-Path $lad 'Quayflow\engine.stopped'))) 'marker cleared after the restart'
             Remove-Item (Join-Path $lad 'Quayflow\engine.json') -ErrorAction SilentlyContinue
+
+            # ---- QUAYFLOW_HOME moves the engine's state: the installer finds the engine and
+            # writes and clears the marker there, the same folder the program uses.
+            $qfHome = Join-Path $lad 'qfhome'
+            $null = New-Item -ItemType Directory -Force $qfHome
+            $sim = Start-Sim $qfHome
+            Remove-Item $log -ErrorAction SilentlyContinue
+            $env:QUAYFLOW_HOME = $qfHome
+            $env:QF_FAKE_STOP_HANG = '1'
+            $r = Run @()
+            Remove-Item Env:QF_FAKE_STOP_HANG, Env:QUAYFLOW_HOME
+            Assert ($r.Code -eq 0 -and $r.Out -match 'Engine restarted \(started\)') 'QUAYFLOW_HOME: upgrade succeeds and restarts the engine' $r.Out
+            Assert ((LogLines) -contains 'stop-saw-marker') 'QUAYFLOW_HOME: marker written in that folder before the stop' ((LogLines) -join ' | ')
+            Assert (-not (Test-Path (Join-Path $qfHome 'engine.stopped')) -and -not (Test-Path (Join-Path $lad 'Quayflow\engine.stopped'))) 'QUAYFLOW_HOME: no marker left behind' $r.Out
+            Remove-Item (Join-Path $qfHome 'engine.json') -ErrorAction SilentlyContinue
 
             $null = Run @()
             Remove-Item $log -ErrorAction SilentlyContinue
@@ -365,7 +390,7 @@ public static class Program {
         } finally {
             foreach ($p in $script:sims) { if (-not $p.HasExited) { try { $p.Kill() } catch { $null = $_ } } }
             $env:LOCALAPPDATA = $savedLad
-            Remove-Item Env:QF_FAKE_LOG, Env:QF_FAKE_START_STATE, Env:QF_FAKE_VERSION_FAIL, Env:QF_FAKE_STOP_HANG, Env:QF_FAKE_GH_AUTH, Env:QF_FAKE_GH_ATTEST, Env:QF_FAKE_CLAUDE_STATE, Env:QF_FAKE_CLAUDE_CLONE, Env:QF_FAKE_CLAUDE_ADD_FAIL -ErrorAction SilentlyContinue
+            Remove-Item Env:QF_FAKE_LOG, Env:QF_FAKE_START_STATE, Env:QF_FAKE_VERSION_FAIL, Env:QF_FAKE_STOP_HANG, Env:QUAYFLOW_HOME, Env:QF_FAKE_GH_AUTH, Env:QF_FAKE_GH_ATTEST, Env:QF_FAKE_CLAUDE_STATE, Env:QF_FAKE_CLAUDE_CLONE, Env:QF_FAKE_CLAUDE_ADD_FAIL -ErrorAction SilentlyContinue
         }
     }
 } catch {
