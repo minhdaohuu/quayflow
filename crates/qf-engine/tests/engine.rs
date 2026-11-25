@@ -1863,7 +1863,43 @@ fn weekly_balance_below_the_threshold_suggests_then_switches() {
         .expect("journal reason");
     assert!(!rec.contains("personal has"), "label in the journal: {rec}");
 
-    // The cooldown and the hysteresis keep it there: org does not pull it back.
+    // The hysteresis keeps it there, cooldown aside: org is not clearly ahead of personal.
+    e.lock().envs.get_mut(&EnvId::default_env()).unwrap().last_proactive = None;
     e.tick();
     assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+    assert!(e.state_view(None, None).envs[0]
+        .decision
+        .ends_with("weekly use is balanced"));
+}
+
+#[test]
+fn the_proactive_cooldown_survives_a_restart() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_mode(&e, "automatic");
+    e.start_switch(
+        &EnvId::default_env(),
+        &id("uuid-personal"),
+        SwitchHow::Automatic,
+        "test",
+        false,
+        true,
+    )
+    .unwrap();
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+    let e = restart(&w, e);
+    // org is now clearly ahead on weekly use; the switch just made still holds the cooldown.
+    set_week(&e, "uuid-personal", 30.0, 60.0, 120);
+    set_week(&e, "uuid-org", 0.0, 30.0, 48);
+    e.tick();
+    assert_eq!(
+        live(&w.env).as_deref(),
+        Some("uuid-personal"),
+        "switched again right after a restart"
+    );
+    let decision = e.state_view(None, None).envs[0].decision.clone();
+    assert!(
+        decision.contains("weekly balance would move to org, cooldown"),
+        "{decision}"
+    );
 }

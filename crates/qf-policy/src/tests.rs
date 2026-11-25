@@ -570,3 +570,82 @@ fn close_scores_are_a_tie_that_rank_decides() {
     let ids: Vec<&str> = r.iter().map(|x| x.id.as_str()).collect();
     assert_eq!(ids, ["y", "x", "w", "z"]);
 }
+
+#[test]
+fn a_tie_ranked_account_never_hides_one_clearly_ahead() {
+    let mut w = World::new();
+    w.groups[0].ranks.insert(AccountId("c".into()), Rank::Preferred);
+    // live a: 18%/day. b: 30%/day, clearly ahead. c: 26%/day, ranked Preferred, in b's tie band
+    // but not clearly ahead of a.
+    w.obs = vec![
+        obs(
+            "a",
+            0,
+            &[("5h", 10.0, None), ("7d", 100.0 - 18.0 * 4.0, Some(NOW + 4 * DAY))],
+        ),
+        obs(
+            "b",
+            5,
+            &[("5h", 0.0, None), ("7d", 100.0 - 30.0 * 2.0, Some(NOW + 2 * DAY))],
+        ),
+        obs(
+            "c",
+            5,
+            &[("5h", 0.0, None), ("7d", 100.0 - 26.0 * 2.0, Some(NOW + 2 * DAY))],
+        ),
+    ];
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("b"));
+}
+
+#[test]
+fn a_score_tie_goes_to_the_account_with_more_five_hour_room() {
+    let mut w = World::new();
+    // At the threshold: b and c are within 5%/day; c has 74 points less five-hour usage.
+    w.obs = vec![
+        obs("a", 0, &[("5h", 90.0, None), ("7d", 50.0, Some(NOW + 3 * DAY))]),
+        obs(
+            "b",
+            5,
+            &[("5h", 74.0, None), ("7d", 100.0 - 30.0 * 2.0, Some(NOW + 2 * DAY))],
+        ),
+        obs(
+            "c",
+            5,
+            &[("5h", 0.0, None), ("7d", 100.0 - 27.0 * 2.0, Some(NOW + 2 * DAY))],
+        ),
+    ];
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("c"));
+    // A clearly higher score still wins over five-hour room.
+    w.obs[2] = obs(
+        "c",
+        5,
+        &[("5h", 0.0, None), ("7d", 100.0 - 10.0 * 2.0, Some(NOW + 2 * DAY))],
+    );
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("b"));
+}
+
+#[test]
+fn recovery_picks_by_weekly_score_and_falls_back_to_any_room() {
+    let mut w = World::new();
+    w.obs = vec![
+        obs(
+            "a",
+            0,
+            &[("5h", 100.0, Some(NOW + HOUR)), ("7d", 50.0, Some(NOW + 3 * DAY))],
+        ),
+        obs("b", 5, &[("5h", 0.0, None), ("7d", 20.0, Some(NOW + 6 * DAY))]),
+        obs("c", 5, &[("5h", 10.0, None), ("7d", 40.0, Some(NOW + DAY))]),
+    ];
+    // The same account a proactive switch would pick, so balancing does not move again.
+    match recovery_target(&w.ctx()) {
+        RecoveryTarget::Capacity(c) => assert_eq!(c.id.as_str(), "c"),
+        t => panic!("{t:?}"),
+    }
+    // No account with room to gain: any room below the hard limit, the most first.
+    w.obs[1] = obs("b", 5, &[("5h", 90.0, None)]);
+    w.obs[2] = obs("c", 5, &[("5h", 95.0, None), ("7d", 40.0, Some(NOW + DAY))]);
+    match recovery_target(&w.ctx()) {
+        RecoveryTarget::Capacity(c) => assert_eq!(c.id.as_str(), "b"),
+        t => panic!("{t:?}"),
+    }
+}

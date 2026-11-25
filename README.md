@@ -139,7 +139,7 @@ Details: [acceptance results](docs/acceptance.md).
    Quayflow · work-01 · Automatic · 5h 62% · 7d 40%
    ```
 
-   Near the threshold (85%) Quayflow switches to the account with the most room. If a request hits the limit first, it switches and retries that request once. Either way your next answer arrives in the same session, and the transcript says what happened:
+   Near the threshold (85%), or earlier when another account's weekly allowance would otherwise expire unused, Quayflow switches to the account whose weekly allowance would be lost soonest. If a request hits the limit first, it switches and retries that request once. Either way your next answer arrives in the same session, and the transcript says what happened:
 
    ```text
    ● quayflow: Quayflow: Switched to work-02 (usage-limit recovery). Each session uses it from its next request; …

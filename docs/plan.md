@@ -19,9 +19,9 @@ Balancing is part of account switching, not a separate feature. There is no on/o
 
 1. **Weekly score.** `score = (100 - pct7d) / max(hours_to_7d_reset, 5)`: the weekly room that would be lost soonest scores highest. The 5-hour floor stops an account close to its reset from pulling a switch that pays off for only minutes. Only the general 7d window is scored; per-model weekly windows still act through the binding-window gate.
 2. **5h is a gate, not a score.** An account is a target only if its binding window (fullest of 5h, 7d and per-model weekly) is at or below threshold minus margin, as today.
-3. **Pick.** Every proactive switch, in every group, picks the eligible account with the highest weekly score; rank (Preferred/Normal/...) breaks near-ties. Recovery after a real limit keeps its own rule (capacity first, then soonest available).
+3. **Pick.** Every proactive switch, in every group, picks the eligible account with the highest weekly score; scores within 5%/day are a tie, which goes to the account with more five-hour room, then rank (review fix). Recovery after a real limit picks the same way among accounts with room to gain, otherwise the most room below the limit, then soonest available (review fix).
 4. **Balancing trigger.** Below the threshold, switch when the best eligible candidate's score is at least 1.5 times the live account's and at least 5%/day higher. The same gap is needed to switch back, which prevents switching back and forth.
-5. **Timing and cooldown.** Same as any proactive switch: no idle wait, the existing 5-minute proactive cooldown (`Tuning::cooldown_s`).
+5. **Timing and cooldown.** Same as any proactive switch: no idle wait, the existing 5-minute proactive cooldown (`Tuning::cooldown_s`), restored from the journal after an engine restart (review fix).
 6. **Home wins.** With a Preferred account in the governing groups (`effective_home`), return home and the threshold trigger work as today and the balancing trigger does not apply. The threshold switch's pick still uses the score.
 7. **Unscored accounts.** A fresh reading with no 7d window or no 7d reset time gets no score. Such an account stays eligible but ranks after every scored account (among themselves by today's rule: lowest binding, then rank). It never triggers a balancing switch, and an unscored live account never balances away (the threshold still applies). Stale or missing readings are never targets, as today.
 8. **Lanes: out of scope.** An account live in another environment is treated as today.
@@ -53,6 +53,7 @@ The Accounts section of `quayflow status` (`print::status` in `crates/quayflow/s
 
 - Print every window per account with its reset countdown, for example `5h 45% ↻ 2 h 10 min · 7d 62% ↻ 3 d 4 h · Opus 7d 70% ↻ 3 d 4 h`. A stale reading stays `usage unknown (last read … ago)`; no figure is printed as current.
 - Show the weekly score and mark the recommended account (★), as the Mod's fleet chart does.
+- Show the weekly score in the "Why this account?" review too (`explain_all`, `inspect.rs`), so the reason one eligible account is picked over another is visible.
 - Name the environment for the live mark.
 - Check the API v1 state view already carries every window and reset time; add them if not.
 - `--json` stays as it is or only gains fields.

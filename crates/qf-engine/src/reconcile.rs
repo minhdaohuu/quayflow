@@ -107,3 +107,27 @@ pub fn reconcile(engine: &Engine) {
         }
     }
 }
+
+/// The proactive cooldown survives a restart: each environment's last switch is the latest
+/// `transition.written` record in the journal (a canary switch does not count, as in
+/// `after_write`). Without it, a restarted engine could switch again at once.
+pub fn restore_cooldown(engine: &Engine) {
+    let records = engine.journal.read_all();
+    let mut inner = engine.lock();
+    for r in &records {
+        if r.get("event").and_then(|v| v.as_str()) != Some("transition.written")
+            || r.get("how").and_then(|v| v.as_str()) == Some("canary")
+        {
+            continue;
+        }
+        let (Some(env), Some(ts)) = (
+            r.get("env").and_then(|v| v.as_str()),
+            r.get("ts").and_then(|v| v.as_i64()),
+        ) else {
+            continue;
+        };
+        if let Some(st) = inner.envs.get_mut(&EnvId(env.into())) {
+            st.last_proactive = Some(st.last_proactive.map_or(ts, |t| t.max(ts)));
+        }
+    }
+}

@@ -225,6 +225,16 @@ fn check(seed: u64) -> Result<(), String> {
         RecoveryTarget::Capacity(c) => {
             allowed(&ctx, &c.id).map_err(|e| format!("recovery: {e}"))?;
             fresh_room(&ctx, &c.id).map_err(|e| format!("recovery: {e}"))?;
+            // An account with room to gain, when one exists, as a proactive switch would pick.
+            let max = effective_threshold(&ctx.governing) - effective_margin(&ctx.governing);
+            let gain = |id: &AccountId| ctx.fresh_binding(id).is_ok_and(|(_, w)| w.pct <= max);
+            let any_gain = ctx.governing[0]
+                .accounts
+                .iter()
+                .any(|id| allowed(&ctx, id).is_ok() && gain(id));
+            if any_gain && !gain(&c.id) {
+                return Err("recovery chose an account without room to gain over one with it".into());
+            }
         }
         RecoveryTarget::Soonest { id, available_at } => {
             allowed(&ctx, &id).map_err(|e| format!("soonest: {e}"))?;

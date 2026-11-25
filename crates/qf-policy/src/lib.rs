@@ -242,19 +242,20 @@ pub fn rank_candidates(mut c: Vec<Candidate>) -> Vec<Candidate> {
     close
 }
 
-/// Rank candidates for a proactive switch: scored ones first, highest score first; scores
-/// within [`BALANCE_GAP_PER_DAY`] of the best are a tie that rank decides. Unscored ones follow,
-/// in [`rank_candidates`] order.
+/// Rank candidates for a proactive switch: scored ones first, highest score first. Scores
+/// within [`BALANCE_GAP_PER_DAY`] of the best are a tie, ordered by [`rank_candidates`] (the
+/// most five-hour room first, rank deciding within 10 points), so a tie never goes to an
+/// account about to reach the threshold. Unscored ones follow, in [`rank_candidates`] order.
 pub fn rank_by_score(c: Vec<Candidate>) -> Vec<Candidate> {
     let (mut scored, unscored): (Vec<Candidate>, Vec<Candidate>) = c.into_iter().partition(|x| x.score.is_some());
     let score = |x: &Candidate| x.score.unwrap_or(0.0);
     let by_score = |a: &Candidate, b: &Candidate| score(b).partial_cmp(&score(a)).unwrap_or(std::cmp::Ordering::Equal);
     scored.sort_by(by_score);
     if let Some(best) = scored.first().map(score) {
-        let (mut close, rest): (Vec<Candidate>, Vec<Candidate>) = scored
+        let (close, rest): (Vec<Candidate>, Vec<Candidate>) = scored
             .into_iter()
             .partition(|x| (best - score(x)) * 24.0 < BALANCE_GAP_PER_DAY);
-        close.sort_by(|a, b| a.rank.cmp(&b.rank).then(by_score(a, b)));
+        let mut close = rank_candidates(close);
         close.extend(rest);
         scored = close;
     }
@@ -481,10 +482,12 @@ fn balance(
     let Some(live_score) = weekly_score(live_obs, ctx.now) else {
         return Proactive::None(below);
     };
-    let Some(c) = rank_by_score(candidates(ctx, max_pct)).into_iter().next() else {
-        return Proactive::None(below);
-    };
-    let Some(score) = c.score.filter(|s| clearly_higher(*s, live_score)) else {
+    // The first in ranking order that is clearly ahead: a tie-ranked account that is not
+    // clearly ahead never hides one that is.
+    let Some((c, score)) = rank_by_score(candidates(ctx, max_pct))
+        .into_iter()
+        .find_map(|c| c.score.filter(|s| clearly_higher(*s, live_score)).map(|s| (c, s)))
+    else {
         return Proactive::None(format!("{below}; weekly use is balanced"));
     };
     let to_label = ctx.account(&c.id).map(|a| a.label.as_str()).unwrap_or("?");
@@ -663,8 +666,16 @@ pub fn live_usage_unknown(ctx: &Ctx, session_pcts: &[(String, f64)], simulated: 
 
 pub fn recovery_target(ctx: &Ctx) -> RecoveryTarget {
     let hard = ctx.tuning.hard_limit_pct;
-    let picks = candidates(ctx, hard - 0.0001);
-    if let Some(c) = picks.into_iter().next() {
+    // Accounts with room to gain are picked as a proactive switch picks (weekly score), so a
+    // balancing switch does not move again right after a recovery. Otherwise any room below
+    // the hard limit, the most first.
+    let max_room = effective_threshold(&ctx.governing) - effective_margin(&ctx.governing);
+    let picks = rank_by_score(candidates(ctx, max_room));
+    if let Some(c) = picks
+        .into_iter()
+        .next()
+        .or_else(|| candidates(ctx, hard - 0.0001).into_iter().next())
+    {
         return RecoveryTarget::Capacity(c);
     }
     // All exhausted: soonest available among permitted accounts whose observation shows an
