@@ -6,11 +6,17 @@ use qf_model::{AccountId, EnvId};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+/// Resolve unfinished transitions, then restore the proactive cooldown; the journal is read once.
 pub fn reconcile(engine: &Engine) {
     let records = engine.journal.read_all();
+    resolve_open(engine, &records);
+    restore_cooldown(engine, &records);
+}
+
+fn resolve_open(engine: &Engine, records: &[Value]) {
     // Latest state per transition id.
     let mut open: BTreeMap<String, Value> = BTreeMap::new();
-    for r in &records {
+    for r in records {
         let Some(id) = r.get("id").and_then(|v| v.as_str()) else {
             continue;
         };
@@ -41,16 +47,18 @@ pub fn reconcile(engine: &Engine) {
         let env_id = rec.get("env").and_then(|v| v.as_str()).unwrap_or("default").to_string();
         let to = rec.get("to").and_then(|v| v.as_str()).map(|s| AccountId(s.into()));
         let from = rec.get("from").and_then(|v| v.as_str()).map(|s| AccountId(s.into()));
-        let key = if inner.envs.contains_key(&EnvId(env_id.clone())) {
-            EnvId(env_id.clone())
-        } else {
-            engine.default_env.id.clone()
+        let key = EnvId(env_id.clone());
+        let Some(env) = inner.envs.get(&key).map(|s| s.env.clone()) else {
+            // A deleted lane, or an id an older journal scrubbed: never check another
+            // environment's login in its place.
+            engine.record(
+                &inner,
+                "transition.reconciled",
+                json!({"id": id, "env": env_id, "outcome": "its environment no longer exists; nothing checked"}),
+                true,
+            );
+            continue;
         };
-        let env = inner
-            .envs
-            .get(&key)
-            .map(|s| s.env.clone())
-            .unwrap_or_else(|| engine.default_env.clone());
         // Both files: the account record names the identity; the credentials may still be the
         // destination's when the account record was not written.
         let now = qf_adapter::read_login(&env).ok().flatten();
@@ -70,9 +78,11 @@ pub fn reconcile(engine: &Engine) {
             Mixed(AccountId),
             Neither,
         }
+        let mut written = false;
         let (found, outcome) = if !applying {
             (Found::Settled, "not started before the engine stopped; login unchanged")
         } else if live.is_some() && live == to {
+            written = true;
             (
                 Found::Settled,
                 "the write completed before the engine stopped; clients adopt at their next request",
@@ -93,9 +103,21 @@ pub fn reconcile(engine: &Engine) {
         engine.record(
             &inner,
             "transition.reconciled",
-            json!({"id": id, "env": env_id, "live": live, "outcome": outcome}),
+            json!({"id": id, "env": env_id, "live": live, "outcome": outcome, "written": written}),
             true,
         );
+        if written {
+            // The switch happened: it holds the cooldown from its own time (the record just
+            // written is not among the records `restore_cooldown` reads in this start).
+            let at = rec
+                .get("ts")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(i64::MAX)
+                .min(qf_model::time::now_ms());
+            if let Some(st) = inner.envs.get_mut(&key) {
+                st.last_proactive = Some(st.last_proactive.map_or(at, |t| t.max(at)));
+            }
+        }
         if let Found::Mixed(owner) = &found {
             engine.hold_mixed(&mut inner, &key, owner, live.as_ref());
         } else if let (Found::Neither, Some(st)) = (&found, inner.envs.get_mut(&key)) {
@@ -110,14 +132,18 @@ pub fn reconcile(engine: &Engine) {
 
 /// The proactive cooldown survives a restart: each environment's last switch is the latest
 /// `transition.written` record in the journal (a canary switch does not count, as in
-/// `after_write`). Without it, a restarted engine could switch again at once.
-pub fn restore_cooldown(engine: &Engine) {
-    let records = engine.journal.read_all();
+/// `after_write`), or a `transition.reconciled` one that found the write completed. Without
+/// it, a restarted engine could switch again at once. A time ahead of the clock counts as now.
+fn restore_cooldown(engine: &Engine, records: &[Value]) {
+    let now = qf_model::time::now_ms();
     let mut inner = engine.lock();
-    for r in &records {
-        if r.get("event").and_then(|v| v.as_str()) != Some("transition.written")
-            || r.get("how").and_then(|v| v.as_str()) == Some("canary")
-        {
+    for r in records {
+        let switched = match r.get("event").and_then(|v| v.as_str()) {
+            Some("transition.written") => r.get("how").and_then(|v| v.as_str()) != Some("canary"),
+            Some("transition.reconciled") => r.get("written") == Some(&json!(true)),
+            _ => false,
+        };
+        if !switched {
             continue;
         }
         let (Some(env), Some(ts)) = (
@@ -127,6 +153,7 @@ pub fn restore_cooldown(engine: &Engine) {
             continue;
         };
         if let Some(st) = inner.envs.get_mut(&EnvId(env.into())) {
+            let ts = ts.min(now);
             st.last_proactive = Some(st.last_proactive.map_or(ts, |t| t.max(ts)));
         }
     }

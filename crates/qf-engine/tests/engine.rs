@@ -1848,19 +1848,26 @@ fn weekly_balance_below_the_threshold_suggests_then_switches() {
     set_mode(&e, "automatic");
     set_week(&e, "uuid-personal", 0.0, 30.0, 48);
     e.tick();
-    for _ in 0..50 {
-        if live(&w.env).as_deref() == Some("uuid-personal") {
+    // Wait for the whole switch (the write and its bookkeeping), not only the login file.
+    let done = |e: &Shared| {
+        let inner = e.lock();
+        let st = &inner.envs[&EnvId::default_env()];
+        !st.blocking_transition() && st.last_proactive.is_some()
+    };
+    for _ in 0..100 {
+        if done(&e) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    assert!(done(&e), "the switch did not finish");
     assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
-    // The journal records the reason by account id only.
+    // The switch's own journal record carries the reason, by account id only.
     let t = std::fs::read_to_string(w.dd.journal()).unwrap();
     let rec = t
         .lines()
-        .find(|l| l.contains("weekly balance"))
-        .expect("journal reason");
+        .find(|l| l.contains("\"event\":\"transition.requested\"") && l.contains("weekly balance"))
+        .expect("transition.requested with the weekly balance reason");
     assert!(!rec.contains("personal has"), "label in the journal: {rec}");
 
     // The hysteresis keeps it there, cooldown aside: org is not clearly ahead of personal.
@@ -1902,4 +1909,62 @@ fn the_proactive_cooldown_survives_a_restart() {
         decision.contains("weekly balance would move to org, cooldown"),
         "{decision}"
     );
+}
+
+/// A crashed switch whose write had completed holds the cooldown after the restart too; a
+/// record for an environment that no longer exists checks nothing in its place; a switch time
+/// ahead of the clock counts as now.
+#[test]
+fn restart_cooldown_edges() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let org = id("uuid-org");
+    let personal = id("uuid-personal");
+    drop(e);
+    let j = qf_engine::journal::Journal::new(w.dd.journal());
+    for (tid, env) in [("done1", "default"), ("gone1", "gone")] {
+        j.append(
+            "transition.requested",
+            json!({"id": tid, "env": env, "from": org, "to": personal, "how": "automatic"}),
+            &[],
+            true,
+        )
+        .unwrap();
+        j.append("transition.applying", json!({"id": tid, "env": env}), &[], true)
+            .unwrap();
+    }
+    // The write of done1 completed before the crash: the login files are personal's.
+    login_files(&w.env, "uuid-personal", "P1", "max");
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    {
+        let inner = e.lock();
+        let st = &inner.envs[&EnvId::default_env()];
+        assert!(
+            st.last_proactive.is_some(),
+            "no cooldown after a completed crashed write"
+        );
+        assert!(st.hold.is_none(), "the gone environment's record put a hold on default");
+    }
+    let rec: Vec<_> = j
+        .read_all()
+        .into_iter()
+        .filter(|r| r["event"] == "transition.reconciled")
+        .collect();
+    assert!(rec.iter().any(|r| r["id"] == "done1" && r["written"] == true));
+    assert!(rec
+        .iter()
+        .any(|r| r["id"] == "gone1" && r["outcome"].as_str().unwrap().contains("no longer exists")));
+    drop(e);
+
+    // A record from a clock that was days ahead.
+    let ahead = time::now_ms() + 3 * 86_400_000;
+    let mut text = std::fs::read_to_string(w.dd.journal()).unwrap();
+    text.push_str(
+        &json!({"ts": ahead, "event": "transition.written", "env": "default", "how": "automatic"}).to_string(),
+    );
+    text.push('\n');
+    std::fs::write(w.dd.journal(), text).unwrap();
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    let t = e.lock().envs[&EnvId::default_env()].last_proactive.unwrap();
+    assert!(t <= time::now_ms(), "a switch time ahead of the clock was kept");
 }

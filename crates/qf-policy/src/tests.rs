@@ -495,10 +495,13 @@ fn balance_needs_a_clear_difference_both_ways() {
         Proactive::None(why) => assert!(why.ends_with("weekly use is balanced"), "{why}"),
         p => panic!("{p:?}"),
     }
-    // 1.5 times better but less than 5%/day apart (3%/day against 2%/day): a tie.
-    w.obs[0] = obs("a", 0, &[("5h", 30.0, None), ("7d", 86.0, Some(NOW + 7 * DAY))]);
-    w.obs[1] = obs("b", 5, &[("5h", 0.0, None), ("7d", 79.0, Some(NOW + 7 * DAY))]);
-    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    // 1.875 times better but only 3.5%/day apart (7.5%/day against 4%/day): a tie.
+    w.obs[0] = obs("a", 0, &[("5h", 30.0, None), ("7d", 84.0, Some(NOW + 4 * DAY))]);
+    w.obs[1] = obs("b", 5, &[("5h", 0.0, None), ("7d", 70.0, Some(NOW + 4 * DAY))]);
+    match proactive(&w.ctx()) {
+        Proactive::None(why) => assert!(why.ends_with("weekly use is balanced"), "{why}"),
+        p => panic!("{p:?}"),
+    }
     // After a balancing switch the old account does not pull back.
     let mut w = balanced_world();
     w.live = AccountId("b".into());
@@ -647,5 +650,50 @@ fn recovery_picks_by_weekly_score_and_falls_back_to_any_room() {
     match recovery_target(&w.ctx()) {
         RecoveryTarget::Capacity(c) => assert_eq!(c.id.as_str(), "b"),
         t => panic!("{t:?}"),
+    }
+}
+
+#[test]
+fn no_target_at_its_limit_when_threshold_minus_margin_reaches_it() {
+    let mut w = World::new();
+    w.groups[0].threshold = 100.0;
+    w.groups[0].margin = 0.0;
+    w.groups[0].accounts.truncate(2);
+    w.obs = vec![
+        obs("a", 0, &[("5h", 50.0, None), ("7d", 50.0, Some(NOW + 5 * DAY))]),
+        obs("b", 5, &[("5h", 100.0, None), ("7d", 0.0, Some(NOW + DAY))]),
+    ];
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    w.obs[0] = obs(
+        "a",
+        0,
+        &[("5h", 100.0, Some(NOW + HOUR)), ("7d", 50.0, Some(NOW + 5 * DAY))],
+    );
+    assert!(!matches!(recovery_target(&w.ctx()), RecoveryTarget::Capacity(_)));
+}
+
+#[test]
+fn a_last_switch_in_the_future_holds_one_cooldown_at_most() {
+    let mut w = balanced_world();
+    w.last = Some(NOW + 3 * DAY);
+    match proactive(&w.ctx()) {
+        Proactive::None(why) => assert!(why.contains("cooldown 300 s"), "{why}"),
+        p => panic!("{p:?}"),
+    }
+}
+
+#[test]
+fn unknown_readings_are_never_called_balanced() {
+    let mut w = balanced_world();
+    w.obs[1].ts = NOW - 61 * MIN;
+    match proactive(&w.ctx()) {
+        Proactive::None(why) => assert!(!why.contains("balanced"), "{why}"),
+        p => panic!("{p:?}"),
+    }
+    let mut w = balanced_world();
+    w.obs[1].windows[1].resets_at = None;
+    match proactive(&w.ctx()) {
+        Proactive::None(why) => assert!(!why.contains("balanced"), "{why}"),
+        p => panic!("{p:?}"),
     }
 }

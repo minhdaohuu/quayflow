@@ -80,7 +80,7 @@ fn generate(seed: u64) -> World {
         let mut grp = Group::new(&format!("G{g}"));
         grp.accounts = ids.iter().filter(|_| r.chance(75)).cloned().collect();
         grp.mode = r.pick(&[Mode::Manual, Mode::Suggest, Mode::Automatic]);
-        grp.threshold = r.pick(&[50.0, 80.0, 85.0, 95.0]);
+        grp.threshold = r.pick(&[50.0, 80.0, 85.0, 95.0, 100.0]);
         grp.margin = r.pick(&[0.0, 5.0, 10.0]);
         if r.chance(20) && !grp.accounts.is_empty() {
             grp.preferred = Some(r.pick(&grp.accounts));
@@ -149,7 +149,10 @@ fn generate(seed: u64) -> World {
         governing: groups.len(),
         groups,
         obs,
-        tuning: Tuning::default(),
+        tuning: Tuning {
+            hard_limit_pct: r.pick(&[99.0, 99.0, 90.0]),
+            ..Tuning::default()
+        },
         live,
         model: r.pick(&[None, Some("claude-opus-5-5"), Some("claude-sonnet-5-5")]),
         managed: ManagedLogin::default(),
@@ -219,6 +222,9 @@ fn check(seed: u64) -> Result<(), String> {
     }
     if let Some(why) = balancing_broken(&ctx) {
         return Err(format!("weekly balance: {why}"));
+    }
+    if let Some(why) = threshold_pick_broken(&ctx) {
+        return Err(why);
     }
 
     match recovery_target(&ctx) {
@@ -343,12 +349,38 @@ fn balancing_broken(ctx: &Ctx) -> Option<String> {
         _ => return Some(format!("target is not at or below {max:.0}% with a fresh reading")),
     }
     let score = |id: &AccountId| ctx.observation(id).and_then(|o| weekly_score(o, ctx.now));
-    match (score(ctx.live?), score(&to)) {
-        (Some(l), Some(t)) if clearly_higher(t, l) => None,
-        (l, t) => Some(format!(
-            "scores live {l:?}, target {t:?} are unknown or not clearly apart"
-        )),
+    let live_score = match (score(ctx.live?), score(&to)) {
+        (Some(l), Some(t)) if clearly_higher(t, l) => l,
+        (l, t) => {
+            return Some(format!(
+                "scores live {l:?}, target {t:?} are unknown or not clearly apart"
+            ))
+        }
+    };
+    // The first account clearly ahead in ranking order: a tie never hides it.
+    let first = rank_by_score(candidates(ctx, max))
+        .into_iter()
+        .find(|c| c.score.is_some_and(|s| clearly_higher(s, live_score)))
+        .map(|c| c.id);
+    (first.as_ref() != Some(&to)).then(|| format!("target {to:?} is not the first clearly ahead ({first:?})"))
+}
+
+/// A switch at the threshold never picks an unscored account while a scored one qualifies.
+fn threshold_pick_broken(ctx: &Ctx) -> Option<String> {
+    let Proactive::Switch {
+        to, return_home: false, ..
+    } = proactive(ctx)
+    else {
+        return None;
+    };
+    let (_, w) = ctx.fresh_binding(ctx.live?).ok()?;
+    if w.pct < effective_threshold(&ctx.governing) {
+        return None;
     }
+    let max = effective_threshold(&ctx.governing) - effective_margin(&ctx.governing);
+    let scored = ctx.observation(&to).and_then(|o| weekly_score(o, ctx.now)).is_some();
+    let any_scored = candidates(ctx, max).iter().any(|c| c.score.is_some());
+    (any_scored && !scored).then(|| "threshold switch picked an unscored account over a scored one".into())
 }
 
 #[test]

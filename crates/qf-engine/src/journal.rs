@@ -104,6 +104,10 @@ pub fn scrub_value(v: &mut Value, labels: &[(String, String)]) {
             });
             for (k, x) in o.iter_mut() {
                 match x {
+                    // An environment id ("default" or a lane name: 1-32 of a-z, 0-9, -) is kept
+                    // as is: a lane named like a label, or 32 characters long, must still name
+                    // its environment (reconciliation and the cooldown read it back).
+                    Value::String(s) if k == "env" && (s == "default" || qf_adapter::lanes::valid_name(s)) => {}
                     Value::String(s) if STRUCTURED_KEYS.contains(&k.as_str()) => *s = scrub_secrets(s),
                     _ => scrub_value(x, labels),
                 }
@@ -263,6 +267,22 @@ impl Logger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_environment_id_is_kept_even_when_named_like_a_label() {
+        let labels = vec![("org".to_string(), "aaa".to_string())];
+        let long = "a".repeat(32);
+        for env in ["org", "default", long.as_str()] {
+            let mut v = serde_json::json!({"env": env, "reason": "org at 90%"});
+            scrub_value(&mut v, &labels);
+            assert_eq!(v["env"], env);
+            assert_eq!(v["reason"], "#aaa at 90%");
+        }
+        // Not an environment id: scrubbed as any other value.
+        let mut v = serde_json::json!({"env": "org stuff"});
+        scrub_value(&mut v, &labels);
+        assert_eq!(v["env"], "#aaa stuff");
+    }
 
     #[test]
     fn labels_are_replaced_as_whole_words_only_and_never_in_structured_fields() {

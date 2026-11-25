@@ -5,4 +5,5 @@
 - **Assume a second caller arrives between your check and your act.** Recovery, switches and the observe loop run concurrently: re-check after taking the lock, and treat a "noop" or "conflict" refusal as possibly someone else's success.
 - **The invariants apply in every branch**, fallbacks included: stale is never zero, one switch and at most one retry, the strictest mode. `qf-policy` checks them in generated situations (`invariants.rs`); a new decision belongs there.
 - **Lock order:** `observe_lock` (one usage poll at a time: the tick and a recovery's on-demand poll), then `cred_lock`, then the engine lock. No blocking I/O, network or binary scans while the engine lock is held.
-- Logs and the journal name accounts by id; labels are scrubbed, longer labels first.
+- Logs and the journal name accounts by id; labels are scrubbed, longer labels first. A journal field the engine reads back after a restart (`env`, ids) must survive scrubbing: test it with a label equal to its value (see `an_environment_id_is_kept_even_when_named_like_a_label`).
+- State restored from the journal at start reads the records once, before this start's own records are written; set anything those records imply directly (see `reconcile`).

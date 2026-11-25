@@ -192,8 +192,9 @@ pub struct Candidate {
     pub score: Option<f64>,
 }
 
-/// Shortest time to reset counted by the weekly score: an account about to reset does not
-/// pull a switch that pays off for only a few minutes.
+/// Shortest time to reset counted by the weekly score: an account about to reset scores at most
+/// its room spread over this many hours, not without bound. It can still be the best target:
+/// its room is lost at the reset, and after it the account has a full week.
 pub const SCORE_MIN_HOURS: f64 = 5.0;
 /// A balancing switch needs a candidate whose score is this many times the live account's...
 pub const BALANCE_RATIO: f64 = 1.5;
@@ -316,7 +317,11 @@ pub fn explain_all(ctx: &Ctx) -> Vec<(AccountId, Result<String, Exclusion>)> {
         .collect()
 }
 
+/// Permitted, fresh accounts of the governing group (not the live one) with binding at most
+/// `max_pct`, and always below the hard limit: a configuration whose threshold minus margin
+/// reaches the hard limit never makes an account at its limit a target.
 fn candidates(ctx: &Ctx, max_pct: f64) -> Vec<Candidate> {
+    let max_pct = max_pct.min(ctx.tuning.hard_limit_pct - 0.0001);
     let mut out = vec![];
     for g in ctx.governing.first().map(|g| g.accounts.as_slice()).unwrap_or(&[]) {
         if ctx.live == Some(g) || ctx.permitted(g).is_err() {
@@ -378,9 +383,11 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
     }
     let threshold = effective_threshold(&ctx.governing);
     let margin = effective_margin(&ctx.governing);
+    // A last switch "in the future" (the clock went back) holds at most one cooldown.
+    let cooldown_ms = ctx.tuning.cooldown_s as i64 * 1000;
     let cooldown_left = ctx
         .last_proactive_switch
-        .map(|t| ctx.tuning.cooldown_s as i64 * 1000 - (ctx.now - t))
+        .map(|t| (cooldown_ms - (ctx.now - t)).min(cooldown_ms))
         .filter(|left| *left > 0);
     let live_label = ctx.account(live).map(|a| a.label.as_str()).unwrap_or("?");
 
@@ -402,7 +409,7 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
     if let Some(home) = effective_home(&ctx.governing) {
         if home != live && ctx.permitted(home).is_ok() {
             if let Ok((ho, hw)) = ctx.fresh_binding(home) {
-                if hw.pct <= threshold - margin {
+                if hw.pct <= threshold - margin && hw.pct < ctx.tuning.hard_limit_pct {
                     if let Some(left) = cooldown_left {
                         return Proactive::None(format!("return home waits for cooldown ({} s)", left / 1000));
                     }
@@ -482,9 +489,14 @@ fn balance(
     let Some(live_score) = weekly_score(live_obs, ctx.now) else {
         return Proactive::None(below);
     };
+    let picks = rank_by_score(candidates(ctx, max_pct));
+    if picks.iter().all(|c| c.score.is_none()) {
+        // Nothing to compare with: never "balanced" from readings that are missing or stale.
+        return Proactive::None(below);
+    }
     // The first in ranking order that is clearly ahead: a tie-ranked account that is not
     // clearly ahead never hides one that is.
-    let Some((c, score)) = rank_by_score(candidates(ctx, max_pct))
+    let Some((c, score)) = picks
         .into_iter()
         .find_map(|c| c.score.filter(|s| clearly_higher(*s, live_score)).map(|s| (c, s)))
     else {

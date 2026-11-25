@@ -8,7 +8,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - Quayflow now balances weekly usage across a group's accounts. A proactive switch goes to the account whose unused 7-day allowance would be lost soonest (room left divided by the time to its 7-day reset), and below the threshold Quayflow also moves when another account is clearly ahead (1.5 times and 5 points per day more). Before, one account carried all the work until it reached the threshold, and the others' weekly allowance expired unused. The group's mode decides as before (Automatic switches, Suggest suggests, Manual does nothing), so a group in Automatic now also switches for weekly balance. Groups with a Preferred account keep returning home and do not move for weekly balance. An account without a 7-day reset time is never a reason to move. Recovery from a usage limit picks the same way among accounts with room to gain, so Quayflow does not switch again right after it.
 
 ### Fixed
-- The 5-minute cooldown after a switch now survives an engine restart. Before, a restarted engine could switch again at once.
+- The 5-minute cooldown after a switch now survives an engine restart, including a switch interrupted by a crash after its write. Before, a restarted engine could switch again at once. A clock that went back no longer holds switching for longer than one cooldown.
+- After a crash during a switch in a lane named like an account label, the restarted engine checks that lane. Before, the journal stored the lane's name as the account id, and the engine checked the default environment instead and could pause its automation by mistake.
+- With a threshold of 100% and margin 0, return home no longer switches to a Preferred account that is at its usage limit.
 
 ## [0.4.0] - 2026-11-10
 

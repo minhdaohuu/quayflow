@@ -359,7 +359,6 @@ impl Engine {
             dd,
         });
         crate::reconcile::reconcile(&engine);
-        crate::reconcile::restore_cooldown(&engine);
         {
             let mut inner = engine.lock();
             let ids: Vec<EnvId> = inner.envs.keys().cloned().collect();
