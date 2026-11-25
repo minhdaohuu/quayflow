@@ -7,7 +7,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { AccountView, GroupView, Mode, StateView, Window } from '../types'
-import { clearFormKeys, flash, setDisclosure } from './context'
+import { clearFormKeys, errorText, flash, setDisclosure } from './context'
 import { actGroupDelete, actMembers, actPreferred, actRank, actSetDefault, actSetMode, actTuning } from './actions'
 import { label, myEnv, myGroup } from './format'
 import { hasCode } from './engine'
@@ -26,8 +26,11 @@ export const PRESETS: { key: string; name: string; threshold: number; margin: nu
   { key: 'late', name: 'Late', threshold: 95, margin: 5, words: 'switch at 95%; targets need 90% or less' },
 ]
 
-const RANKS = ['preferred', 'normal', 'backup'] as const
-type Rank = (typeof RANKS)[number]
+// The engine's rank "preferred" is the home (one per group; `/v1/groups/rank` with it moves the
+// home there, and another rank for the home clears it). So the rank buttons are Normal and
+// Backup, and "Make home" is the Preferred one.
+const RANKS = ['normal', 'backup'] as const
+type Rank = 'preferred' | 'normal' | 'backup'
 
 /** The draft of one group: only what differs from the engine's state. */
 export type Draft = {
@@ -54,7 +57,28 @@ function draftKeys(c: Ctx, g: GroupView): string[] {
 }
 
 function rankOf(g: GroupView, id: string): Rank {
-  return ((g.ranks as Record<string, string> | undefined)?.[id] as Rank | undefined) ?? 'normal'
+  if (g.preferred === id) return 'preferred'
+  const r = (g.ranks as Record<string, string> | undefined)?.[id]
+  return r === 'backup' ? 'backup' : 'normal'
+}
+
+/** A draft key's value when it changes nothing: such a key is removed, never kept. */
+function current(g: GroupView, k: string): string {
+  if (k === 'mode') return g.mode
+  if (k === 'thr') return String(g.threshold)
+  if (k === 'mar') return String(g.margin)
+  if (k === 'home') return g.preferred ?? 'none'
+  if (k.startsWith('rank:')) return rankOf(g, k.slice(5))
+  return ''
+}
+
+/**
+ * Sets one draft value; a value equal to the engine's removes the key, so going back to the
+ * current setting leaves no change behind (and nothing to come back later as one).
+ */
+function setDraft($: EngineInterface, g: GroupView, k: string, v: string): void {
+  if (v === current(g, k)) void clearFormKeys($, [key(g.name, k)])
+  else setForm($, key(g.name, k), v)
 }
 
 const cap = (m: string): string => m[0]!.toUpperCase() + m.slice(1)
@@ -88,23 +112,30 @@ export function draftOf(c: Ctx, s: StateView, g: GroupView): Draft {
     d.margin = m
     d.changes.push(`margin ${g.margin} → ${Number.isNaN(m) ? '?' : m}`)
   }
+  const removing = (id: string): boolean => g.accounts.includes(id) && f[key(g.name, `rm:${id}`)] === '1'
+  for (const id of g.accounts) {
+    if (removing(id)) {
+      d.remove.push(id)
+      d.changes.push(`remove ${name(id)}`)
+    }
+  }
   const home = f[key(g.name, 'home')]
   if (home !== undefined) {
+    // Making home an account that is being removed is no change (the current home stays);
+    // clearing the home of an account being removed is none either (removal clears it).
     const next = home === 'none' ? null : home
-    if (next !== (g.preferred ?? null)) {
+    if (!(next && removing(next)) && next !== (g.preferred ?? null) && !(next === null && g.preferred && removing(g.preferred))) {
       d.home = next
       d.changes.push(next ? `home ${name(next)}` : 'no home')
     }
   }
+  const newHome = d.home === undefined ? (g.preferred ?? null) : d.home
   for (const id of g.accounts) {
     const r = f[key(g.name, `rank:${id}`)] as Rank | undefined
-    if (r && r !== rankOf(g, id)) {
+    // No rank for an account being removed, or for the home (its rank is "home").
+    if (r && r !== 'preferred' && r !== rankOf(g, id) && !removing(id) && id !== newHome) {
       d.ranks[id] = r
       d.changes.push(`${name(id)} ${r}`)
-    }
-    if (f[key(g.name, `rm:${id}`)] === '1') {
-      d.remove.push(id)
-      d.changes.push(`remove ${name(id)}`)
     }
   }
   for (const a of s.accounts) {
@@ -121,13 +152,39 @@ function effective(g: GroupView, d: Draft) {
   const ok = (n: number | undefined, fallback: number): number => (n === undefined || Number.isNaN(n) ? fallback : n)
   const members = [...g.accounts.filter(id => !d.remove.includes(id)), ...d.add]
   const home = d.home === undefined ? (g.preferred ?? null) : d.home
+  const h = home && members.includes(home) ? home : null
   return {
     mode: d.mode ?? g.mode,
     threshold: ok(d.threshold, g.threshold),
     margin: ok(d.margin, g.margin),
-    home: home && members.includes(home) ? home : null,
+    home: h,
     members,
+    rank: (id: string): Rank => (id === h ? 'preferred' : (d.ranks[id] ?? (rankOf(g, id) === 'preferred' ? 'normal' : rankOf(g, id)))),
   }
+}
+
+const RANK_ORDER: Record<Rank, number> = { preferred: 0, normal: 1, backup: 2 }
+
+type Pick = { id: string; label: string; pct: number; score?: number; rank: Rank }
+
+/** `qf_policy::rank_candidates`: lowest usage first; within 10 points of the best, rank decides. */
+function byUsage(c: Pick[]): Pick[] {
+  const sorted = [...c].sort((a, b) => a.pct - b.pct)
+  const best = sorted[0]?.pct
+  if (best === undefined) return sorted
+  const close = sorted.filter(x => x.pct - best <= 10).sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank] || a.pct - b.pct)
+  return [...close, ...sorted.filter(x => x.pct - best > 10)]
+}
+
+/**
+ * `qf_policy::rank_by_score`: scored first, highest weekly score first; scores within 5%/day of
+ * the best are a tie ordered by `byUsage`; unscored ones follow in `byUsage` order.
+ */
+export function rankPicks(c: Pick[]): Pick[] {
+  const scored = c.filter(x => x.score != null).sort((a, b) => b.score! - a.score!)
+  const best = scored[0]?.score
+  const head = best === undefined ? [] : [...byUsage(scored.filter(x => best - x.score! < 5)), ...scored.filter(x => best - x.score! >= 5)]
+  return [...head, ...byUsage(c.filter(x => x.score == null))]
 }
 
 function fresh5And7(a: AccountView | undefined): { five?: Window; seven?: Window; binding?: number } {
@@ -151,13 +208,15 @@ export function whatIf(s: StateView, g: GroupView, d: Draft): { text: string; to
   const liveId = env?.live.account ?? undefined
   const acct = (id: string) => s.accounts.find(a => a.id === id)
   const gate = e.threshold - e.margin
-  const targets = e.members
-    .filter(id => id !== liveId)
-    .map(id => ({ id, a: acct(id), u: fresh5And7(acct(id)) }))
-    // As the engine: only a rejected sign-in or an unreadable vault copy rules an account out.
-    .filter(x => x.a && x.a.health !== 'refresh_rejected' && x.a.health !== 'vault_error' && x.u.binding !== undefined && x.u.binding <= gate && x.u.binding < s.tuning.hardLimitPct)
-    .sort((x, y) => (y.a!.usage?.weeklyPerDay ?? -1) - (x.a!.usage?.weeklyPerDay ?? -1) || x.u.binding! - y.u.binding!)
-  const names = targets.map(x => `${x.a!.label} (${Math.round(x.u.binding!)}%)`)
+  const targets = rankPicks(
+    e.members
+      .filter(id => id !== liveId)
+      .map(id => ({ id, a: acct(id), u: fresh5And7(acct(id)) }))
+      // As the engine: only a rejected sign-in or an unreadable vault copy rules an account out.
+      .filter(x => x.a && x.a.health !== 'refresh_rejected' && x.a.health !== 'vault_error' && x.u.binding !== undefined && x.u.binding <= gate && x.u.binding < s.tuning.hardLimitPct)
+      .map(x => ({ id: x.id, label: x.a!.label, pct: x.u.binding!, score: x.a!.usage?.weeklyPerDay ?? undefined, rank: e.rank(x.id) })),
+  )
+  const names = targets.map(x => `${x.label} (${Math.round(x.pct)}%)`)
   const targetsText = names.length ? `targets now: ${names.join(', ')}` : `no account is at ${gate}% or less now`
   if (myGroup(s) !== g.name || !liveId) return { text: `Targets need ${gate}% or less; ${targetsText}.` }
   const live = acct(liveId)
@@ -168,12 +227,14 @@ export function whatIf(s: StateView, g: GroupView, d: Draft): { text: string; to
     e.mode === 'automatic' ? `would switch now to ${to}` : e.mode === 'suggest' ? `would suggest ${to}` : `Manual: nothing moves by itself (best: ${to})`
   if (e.home && e.home !== liveId) {
     const h = targets.find(x => x.id === e.home)
-    const home = h ? `home ${h.a!.label} (${Math.round(h.u.binding!)}%)` : ''
+    const home = h ? `home ${h.label} (${Math.round(h.pct)}%)` : ''
     if (h) return { text: `${at}: ${e.mode === 'manual' ? act(home) : e.mode === 'automatic' ? `would return to ${home}` : `would suggest returning to ${home}`}.`, tone: 'warn' }
   }
-  if (lu.binding < e.threshold) return { text: `${at}, below ${e.threshold}%: stays (weekly balancing may still move it); ${targetsText}.` }
+  // Weekly balancing never runs with a home account (`qf_policy` `balance`).
+  const balancing = e.home ? '' : ' (weekly balancing may still move it)'
+  if (lu.binding < e.threshold) return { text: `${at}, below ${e.threshold}%: stays${balancing}; ${targetsText}.` }
   if (!targets.length) return { text: `${at} ≥ ${e.threshold}%, but ${targetsText}: stays.`, tone: 'warn' }
-  return { text: `${at} ≥ ${e.threshold}%: ${act(`${targets[0]!.a!.label} (${Math.round(targets[0]!.u.binding!)}%)`)}.`, tone: 'warn' }
+  return { text: `${at} ≥ ${e.threshold}%: ${act(`${targets[0]!.label} (${Math.round(targets[0]!.pct)}%)`)}.`, tone: 'warn' }
 }
 
 /** A row of choices, the chosen one filled: a segmented control drawn with Buttons. */
@@ -201,7 +262,7 @@ export function GroupDetail($: EngineInterface, c: Ctx, name: string): JSX.Eleme
   if (!g) return Line(c, `No group "${name}".`)
   const d = draftOf(c, s, g)
   const e = effective(g, d)
-  const set = (k: string, v: string) => setForm($, key(g.name, k), v)
+  const set = (k: string, v: string) => setDraft($, g, k, v)
   const preset = PRESETS.find(p => p.threshold === e.threshold && p.margin === e.margin)
   const nonMembers = s.accounts.filter(a => !g.accounts.includes(a.id))
   const unsaved = d.changes.length
@@ -214,7 +275,7 @@ export function GroupDetail($: EngineInterface, c: Ctx, name: string): JSX.Eleme
     const u = fresh5And7(a)
     const removing = d.remove.includes(id)
     const isHome = e.home === id
-    const rank = d.ranks[id] ?? rankOf(g, id)
+    const rank = e.rank(id)
     const liveHere = s.envs.some(x => x.live?.account === id)
     return (
       <Box key={`gm:${id}`} flexDirection="column" marginTop={1}>
@@ -326,7 +387,15 @@ export function GroupDetail($: EngineInterface, c: Ctx, name: string): JSX.Eleme
         c,
         !g.isDefault && Btn(c, 'gd-default', 'Make default', () => void run($, 'setting the default', () => actSetDefault($, g.name), r => (r.ok ? `"${g.name}" is the default group now.` : (r.message ?? 'Refused.')))),
         g.preferred && !s.envs.some(x => x.live?.account === g.preferred) && Btn(c, 'gd-home', 'Switch home', () => go($, { tab: 'switch', sub: 'review', arg: g.preferred! })),
-        !g.isDefault && Btn(c, 'gd-delete', 'Delete group', () => void run($, 'deleting the group', () => actGroupDelete($, g.name), r => (r.ok ? `Group "${g.name}" deleted.` : (r.message ?? 'Refused.'))).then(r => r?.ok && go($, { tab: 'groups' }))),
+        !g.isDefault &&
+          Btn(c, 'gd-delete', 'Delete group', () =>
+            void run($, 'deleting the group', () => actGroupDelete($, g.name), r => (r.ok ? `Group "${g.name}" deleted.` : (r.message ?? 'Refused.'))).then(async r => {
+              if (!r?.ok) return
+              // A group created later with the same name starts without this draft.
+              await clearFormKeys($, draftKeys(c, g))
+              go($, { tab: 'groups' })
+            }),
+          ),
         Btn(c, 'gd-back', 'Back', () => go($, { tab: 'groups' })),
       )}
     </Box>
@@ -345,6 +414,15 @@ export async function saveDraft($: EngineInterface, c: Ctx, group: string): Prom
   const d = draftOf(c, s, g)
   if (d.problems.length) return void flash($, 'warn', `${d.problems[0]} Nothing was saved.`)
   const done: string[] = []
+  // A refusal part-way: say what was saved before it, and that the rest stays in the draft.
+  const stopped = (why: string) =>
+    flash($, 'warn', `${why}${done.length ? ` Saved: ${done.join(', ')}.` : ' Nothing was saved.'} The rest stays unsaved.`)
+  // One step: the engine's own words when it refuses (an error or ok: false), never lost.
+  let refusal = ''
+  const keep = async (err: unknown) => {
+    refusal = errorText(err)
+    return true
+  }
   // An array, never a spread next to `$`: the engine reads `$` calls as written.
   const clear = (...ks: string[]) => clearFormKeys($, ks.map(k => key(group, k)))
 
@@ -358,43 +436,49 @@ export async function saveDraft($: EngineInterface, c: Ctx, group: string): Prom
       go($, { tab: 'groups', sub: 'disclosure' })
       return
     }
-    if (!r.ok) return void flash($, 'warn', r.message ?? 'Membership refused; nothing else was saved.')
+    if (!r.ok) return void flash($, 'warn', `${r.message ?? 'Membership refused.'} Nothing was saved.`)
     await clear(...d.add.map(id => `add:${id}`), ...d.remove.map(id => `rm:${id}`))
     done.push('members')
   }
   if (d.threshold !== undefined || d.margin !== undefined) {
-    const r = await run($, 'saving the switch point', () => actTuning($, group, d.threshold, d.margin))
-    if (!r?.ok) return void (r && flash($, 'warn', r.message ?? 'Threshold and margin refused.'))
+    const r = await run($, 'saving the switch point', () => actTuning($, group, d.threshold, d.margin), undefined, keep)
+    if (!r?.ok) return void stopped(r?.message ?? (refusal || 'Threshold and margin refused.'))
     await clear('thr', 'mar')
     done.push('switch point')
   }
   if (d.home !== undefined) {
-    const r = await run($, 'saving the home account', () => actPreferred($, group, d.home ?? null))
-    if (!r?.ok) return void (r && flash($, 'warn', r.message ?? 'Home refused.'))
+    const r = await run($, 'saving the home account', () => actPreferred($, group, d.home ?? null), undefined, keep)
+    if (!r?.ok) return void stopped(r?.message ?? (refusal || 'Home refused.'))
     await clear('home')
     done.push(d.home ? `home ${label(s, d.home)}` : 'no home')
   }
   for (const [id, rank] of Object.entries(d.ranks)) {
-    const r = await run($, 'saving a rank', () => actRank($, group, id, rank))
-    if (!r?.ok) return void (r && flash($, 'warn', r.message ?? 'Rank refused.'))
+    const r = await run($, 'saving a rank', () => actRank($, group, id, rank), undefined, keep)
+    if (!r?.ok) return void stopped(r?.message ?? (refusal || 'Rank refused.'))
     await clear(`rank:${id}`)
     done.push(`${label(s, id)} ${rank}`)
   }
   if (d.mode) {
     if (d.mode === 'automatic' && !g.automaticApprovedAt) {
       await clear('mode')
+      // go() clears the flash line: navigate first, then say what was saved.
+      go($, { tab: 'groups', sub: 'automatic', arg: group })
       if (done.length) await flash($, 'info', `Saved: ${done.join(', ')}. Automatic needs its approval.`)
-      return go($, { tab: 'groups', sub: 'automatic', arg: group })
+      return
     }
     let approval = false
     const r = await run($, 'saving the mode', () => actSetMode($, group, d.mode!, false), undefined, async err => {
-      if (!hasCode(err, 'needs_approval')) return false
+      if (!hasCode(err, 'needs_approval')) return keep(err)
       approval = true
       return true
     })
     await clear('mode')
-    if (approval) return go($, { tab: 'groups', sub: 'automatic', arg: group })
-    if (!r?.ok) return void (r && flash($, 'warn', r.message ?? 'Mode refused.'))
+    if (approval) {
+      go($, { tab: 'groups', sub: 'automatic', arg: group })
+      if (done.length) await flash($, 'info', `Saved: ${done.join(', ')}. Automatic needs its approval.`)
+      return
+    }
+    if (!r?.ok) return void stopped(r?.message ?? (refusal || 'Mode refused.'))
     done.push(`${cap(d.mode)} mode`)
   }
   await clearFormKeys($, draftKeys(c, g))

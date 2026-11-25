@@ -5,7 +5,7 @@
 import type { Elements, EngineInterface, RenderSurface } from 'claude-code'
 
 import type { AccountView, EnvView, IdentityView, QuayView, StateView, Window } from '../types'
-import { MOD_VERSION, Q, flash, readPaneState, setCacheEntry, setDisclosure } from './context'
+import { MOD_VERSION, Q, clearFormKeys, flash, readPaneState, setCacheEntry, setDisclosure } from './context'
 import {
   actAssign,
   actEngine,
@@ -28,7 +28,7 @@ import {
 import { account, age, clock, healthText, isTerminal, label, myEnv, myGroup, orgName, pathCovers, pct, persistentWarnings, transitionWords, when, windowLine, windowName } from './format'
 import { Conflict, OffView, Onboarding, SwitchProgress, SwitchReview, Trust, afterConfirm, afterRegister } from './flows'
 import { HomeBlock, Operations, Review } from './review'
-import { GroupDetail } from './groupedit'
+import { GroupDetail, draftOf } from './groupedit'
 import { GROUP, fleet } from './chart'
 import { Alert, Badge, Btn, Card, Field, Gauge, Paint, canPaint, Hint, KV, Line, Pick, Row, Section, Table, Toggle, clearForm, gaugeTone, go, hintsOn, run, setForm, toneColor, useRead } from './ui'
 import type { Ctx } from './ui'
@@ -643,7 +643,7 @@ function Groups($: EngineInterface, c: Ctx): JSX.Element {
           {Badge(c, g.mode.toUpperCase(), g.mode === 'automatic' ? (g.automaticApprovedAt ? 'accent' : 'warn') : 'muted')}
           {g.isDefault ? Badge(c, 'DEFAULT', 'muted') : null}
           {g.mixed ? Badge(c, 'MIXED', 'warn') : null}
-          {Object.keys(c.form).some(k => k.startsWith(`gd:${g.name}:`)) ? <Text color="warning">● unsaved</Text> : null}
+          {draftOf(c, s, g).changes.length ? <Text color="warning">● unsaved</Text> : null}
           <Text dimColor>{`${g.mode === 'automatic' && !g.automaticApprovedAt ? 'not approved \u00b7 ' : ''}switch at ${g.threshold}% \u00b7 ${g.accounts.map(id => `${g.preferred === id ? '\u2302 ' : ''}${label(s, id)}`).join(', ') || 'no accounts'}`}</Text>
         </Box>
       ))}
@@ -756,9 +756,13 @@ async function approveDisclosure($: EngineInterface, c: Ctx): Promise<void> {
     return
   }
   const r = await run($, doing, () => actMembers($, d.group, d.add ?? [], [], true), r =>
-    r.ok ? `Group "${d.group}" saved; the disclosure acceptance is recorded with it.` : (r.message ?? 'Refused.'),
+    r.ok ? `Accounts added to "${d.group}"; the disclosure acceptance is recorded with it. Any other edits in the group editor still need Save.` : (r.message ?? 'Refused.'),
   )
-  if (r?.ok) await dropDisclosure($, { tab: 'groups', sub: 'group', arg: d.group })
+  if (r?.ok) {
+    // The added accounts are members now: their draft keys say nothing any more.
+    await clearFormKeys($, (d.add ?? []).map(id => `gd:${d.group}:add:${id}`))
+    await dropDisclosure($, { tab: 'groups', sub: 'group', arg: d.group })
+  }
 }
 
 async function dropDisclosure($: EngineInterface, view: QuayView): Promise<void> {

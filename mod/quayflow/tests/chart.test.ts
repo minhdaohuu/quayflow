@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { ACCENT, RED, base64, fleet, gauge, heat, track } from '../hooks/chart'
+import { rankPicks } from '../hooks/groupedit'
 
 describe('chart cells', () => {
   test('base64 matches the standard encoding', () => {
@@ -57,5 +58,18 @@ describe('account rows: why not a switch target', () => {
     expect(notTarget('usage unknown: last read 2 h ago, too old to count as room')).toEqual({ text: 'usage unknown' })
     expect(notTarget('usage observation 2 h old (stale is never zero)')).toEqual({ text: 'usage unknown' }) // an engine before 0.3
     expect(notTarget('refused by this environment\'s managed login enforcement (x)')?.warn).toBe(true)
+  })
+})
+
+describe('group editor what-if ranking (as qf_policy::rank_by_score)', () => {
+  const p = (id: string, pct: number, score: number | undefined, rank: 'preferred' | 'normal' | 'backup' = 'normal') => ({ id, label: id, pct, score, rank })
+  test('scores within 5%/day are a tie that goes to more five-hour room', () => {
+    expect(rankPicks([p('a', 70, 30), p('b', 10, 27)]).map(x => x.id)).toEqual(['b', 'a'])
+  })
+  test('a clearly higher score wins over five-hour room; unscored come last', () => {
+    expect(rankPicks([p('a', 70, 30), p('b', 10, 20), p('u', 0, undefined)]).map(x => x.id)).toEqual(['a', 'b', 'u'])
+  })
+  test('within 10 points of usage, rank decides', () => {
+    expect(rankPicks([p('a', 10, 30, 'backup'), p('b', 15, 29)]).map(x => x.id)).toEqual(['b', 'a'])
   })
 })

@@ -273,6 +273,60 @@ describe('group editor: a draft with a what-if, saved in one step', () => {
   })
 })
 
+describe('group editor: review fixes', () => {
+  test('a home among the removed accounts is no change; the rest still saves', async ($, on) => {
+    const w = world(on)
+    await start($, w, true)
+    await quay($, '')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'tab:groups' })
+    await ui.press({ key: 'grp:Default' })
+    // Preferred is the home in the engine: the rank buttons are Normal and Backup only.
+    expect(await ui.find({ key: 'gm-rank:b2b2b2b2b2b2:preferred' })).toBeUndefined()
+    await ui.press({ key: 'gm-home:b2b2b2b2b2b2' })
+    await ui.press({ key: 'gm-rm:b2b2b2b2b2b2' })
+    await ui.press({ key: 'gd-mode:manual' })
+    expect(await ui.find({ type: 'Text', text: /^remove personal · mode Suggest → Manual$|mode Suggest → Manual · remove personal|remove personal/ })).toBeDefined()
+    await ui.press({ key: 'gd-save' })
+    expect(w.routes().filter(r => r.startsWith('/v1/groups/'))).toEqual(['/v1/groups/members', '/v1/groups/mode'])
+    await ui.unmount()
+  })
+
+  test('going back to the current setting leaves no change behind', async ($, on) => {
+    const w = world(on)
+    await start($, w, true)
+    await quay($, '')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'tab:groups' })
+    await ui.press({ key: 'grp:Default' })
+    await ui.press({ key: 'gd-mode:automatic' })
+    await ui.press({ key: 'gd-mode:suggest' })
+    await ui.press({ key: 'gd-preset:late' })
+    await ui.press({ key: 'gd-preset:balanced' })
+    expect(await ui.find({ type: 'Text', text: /^saved$/ })).toBeDefined()
+    await ui.press({ key: 'gd-back' })
+    expect(await ui.find({ type: 'Text', text: /● unsaved/ })).toBeUndefined()
+    expect(w.routes().filter(r => r.startsWith('/v1/groups/'))).toEqual([])
+    await ui.unmount()
+  })
+
+  test('a refusal part-way says what was saved', async ($, on) => {
+    const w = world(on, { routes: { '/v1/groups/preferred': refuse('invalid', 'the Preferred account must be a member of the group') } })
+    await start($, w, true)
+    await quay($, '')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'tab:groups' })
+    await ui.press({ key: 'grp:Default' })
+    await ui.press({ key: 'gd-preset:late' })
+    await ui.press({ key: 'gm-home:b2b2b2b2b2b2' })
+    await ui.press({ key: 'gd-save' })
+    expect(w.bodies('/v1/groups/tuning')).toEqual([{ group: 'Default', threshold: 95, margin: 5 }])
+    // The engine's reason, then what was saved before it.
+    expect(await ui.find({ type: 'Text', text: /must be a member of the group.*Saved: switch point\. The rest stays unsaved\./ })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
 describe('first use', () => {
   const FRESH: StateView = { ...STATE, onboarded: false, consents: {} }
 

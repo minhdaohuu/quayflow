@@ -6,3 +6,4 @@
 - **Form state belongs to one flow.** Clear the `add:*` / `reg:*` fields a flow sets when it starts again; a choice made for one sign-in never carries over to the next.
 - Every `await` on the host that can reject has a `.catch`; a hook that throws can print on stderr in headless runs.
 - Tests: `claude plugin test mod/quayflow`; the harness and conventions are in the root CLAUDE.md, "Mod notes".
+- **Never spread an argument next to `$`** (`clearForm($, ...keys)`): the engine refuses to load the whole module, and every test fails. Pass an array (`clearFormKeys($, keys)`).
