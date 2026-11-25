@@ -204,6 +204,10 @@ fn usage_line(u: &Value, now: i64) -> String {
             format!("{name} {pct:.0}%{reset}")
         })
         .collect();
+    if parts.is_empty() {
+        // A fresh reading with no window (an API-key login, a session that reported none).
+        return format!("usage unknown (no windows reported, {} old)", age(age_s));
+    }
     if let Some(w) = u["weeklyPerDay"].as_f64() {
         parts.push(format!("weekly {w:.0}%/day"));
     }
@@ -332,5 +336,7 @@ mod tests {
         // No weekly score without one from the engine.
         let u = json!({"fresh": true, "ageS": 5, "windows": [{"key": "5h", "pct": 10.0}]});
         assert_eq!(usage_line(&u, NOW), "5h 10% · 5 s old");
+        let u = json!({"fresh": true, "ageS": 5, "windows": []});
+        assert_eq!(usage_line(&u, NOW), "usage unknown (no windows reported, 5 s old)");
     }
 }

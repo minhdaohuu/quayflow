@@ -5,3 +5,4 @@
 - Piped into sh (`curl ... | sh`), standard input is the script: questions read `/dev/tty`, and child processes never read stdin.
 - Removing things: compare a link's target before removing or replacing it; never build a path for `rm` from a variable that can be empty.
 - Tests guard `mktemp` (`W=$(mktemp -d ...) && [ -n "$W" ] || exit 1`) before any trap uses the folder.
+- **Is there a terminal?** Test with `(exec </dev/tty) 2>/dev/null` in a subshell. Never `{ : </dev/tty; }` (dash exits at once when a redirection on a special builtin fails) or `[ -r /dev/tty ]` (true without a controlling terminal). `test-install.sh` runs those paths without one (`notty`).

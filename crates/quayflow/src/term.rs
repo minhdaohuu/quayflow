@@ -22,10 +22,16 @@ pub fn fit(s: &str) -> Cow<'_, str> {
 }
 
 fn ascii(s: &str) -> Cow<'_, str> {
-    if s.is_ascii() || !s.contains(['·', '—', '→', '▶']) {
+    if s.is_ascii() || !s.contains(['·', '—', '→', '▶', '★', '↻']) {
         return Cow::Borrowed(s);
     }
-    Cow::Owned(s.replace(['·', '—'], "-").replace('→', "->").replace('▶', ">"))
+    Cow::Owned(
+        s.replace(['·', '—'], "-")
+            .replace('→', "->")
+            .replace('▶', ">")
+            .replace('★', "*")
+            .replace('↻', "~"),
+    )
 }
 
 #[cfg(test)]
@@ -38,5 +44,8 @@ mod tests {
         assert_eq!(ascii("▶ work — 8% → ok"), "> work - 8% -> ok");
         assert_eq!(ascii("Nguyễn · công ty"), "Nguyễn - công ty");
         assert_eq!(ascii("plain"), "plain");
+        // The status marks: the suggested account and a reset countdown.
+        assert_eq!(ascii("★ work"), "* work");
+        assert_eq!(ascii("5h 62% ↻ 2 h · 7d 40%"), "5h 62% ~ 2 h - 7d 40%");
     }
 }

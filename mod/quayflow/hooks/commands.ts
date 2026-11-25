@@ -180,7 +180,7 @@ export async function runCommand($: EngineInterface, argsText: string): Promise<
       case 'accept': {
         const env = myEnv(s)
         if (!env?.suggestion) return 'Quayflow: there is no suggestion to accept right now.'
-        const r = await actAccept($)
+        const r = await actAccept($, env.suggestion.id)
         return switchOutcome(Q.state, r, false)
       }
       case 'use':

@@ -94,7 +94,8 @@ fn generate(seed: u64) -> World {
             continue;
         }
         // Ages from fresh to far past every freshness limit.
-        let ts = NOW - r.pick(&[0, 1, 4, 6, 30, 59, 61, 180]) * MIN;
+        // Ages from fresh to far past every freshness limit, and a few dated ahead of the clock.
+        let ts = NOW - r.pick(&[0, 1, 4, 6, 30, 59, 61, 180, -180]) * MIN;
         let mut windows = vec![];
         for k in keys {
             if !r.chance(70) {
@@ -226,6 +227,30 @@ fn check(seed: u64) -> Result<(), String> {
     if let Some(why) = threshold_pick_broken(&ctx) {
         return Err(why);
     }
+    // The switch point is never above the hard limit, and a threshold switch never moves to an
+    // account at the live account's own level (it would move back at the next cooldown).
+    if let Some(live) = ctx.live {
+        if let Ok((_, lw)) = ctx.fresh_binding(live) {
+            let trigger = effective_threshold(&ctx.governing).min(ctx.tuning.hard_limit_pct);
+            match proactive(&ctx) {
+                Proactive::None(why) if why.contains(", below ") && lw.pct >= trigger => {
+                    return Err(format!("live at {:.0}% >= {trigger:.0}% called below: {why}", lw.pct));
+                }
+                Proactive::Switch {
+                    to, return_home: false, ..
+                } if lw.pct >= trigger => {
+                    let tw = ctx.fresh_binding(&to).map(|(_, w)| w.pct).unwrap_or(f64::INFINITY);
+                    if tw >= lw.pct {
+                        return Err(format!(
+                            "threshold switch to {tw:.0}%, not below the live {:.0}%",
+                            lw.pct
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 
     match recovery_target(&ctx) {
         RecoveryTarget::Capacity(c) => {
@@ -277,7 +302,7 @@ fn check(seed: u64) -> Result<(), String> {
     }
     let unknown = |id: &AccountId| {
         ctx.observation(id)
-            .is_none_or(|o| o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(id))
+            .is_none_or(|o| o.dated_ahead(ctx.now) || o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(id))
     };
     for id in &polled {
         allowed(&ctx, id).map_err(|e| format!("poll_before_recovery: {e}"))?;
@@ -329,7 +354,7 @@ fn is_balancing(ctx: &Ctx) -> Option<AccountId> {
         return None;
     };
     let (_, w) = ctx.fresh_binding(ctx.live?).ok()?;
-    (w.pct < effective_threshold(&ctx.governing)).then_some(to)
+    (w.pct < effective_threshold(&ctx.governing).min(ctx.tuning.hard_limit_pct)).then_some(to)
 }
 
 fn balancing_broken(ctx: &Ctx) -> Option<String> {
@@ -374,7 +399,7 @@ fn threshold_pick_broken(ctx: &Ctx) -> Option<String> {
         return None;
     };
     let (_, w) = ctx.fresh_binding(ctx.live?).ok()?;
-    if w.pct < effective_threshold(&ctx.governing) {
+    if w.pct < effective_threshold(&ctx.governing).min(ctx.tuning.hard_limit_pct) {
         return None;
     }
     let max = effective_threshold(&ctx.governing) - effective_margin(&ctx.governing);

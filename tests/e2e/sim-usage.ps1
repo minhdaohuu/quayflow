@@ -28,7 +28,12 @@ $ErrorActionPreference = 'Continue'
 $Exe = (Resolve-Path $Exe).Path
 $root = Join-Path ([IO.Path]::GetTempPath()) ("qf-sim-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $cfgDir = Join-Path $root 'home\.claude'
-$saved = @{ USERPROFILE = $env:USERPROFILE; OFFLINE = $env:QUAYFLOW_OFFLINE }
+$saved = @{ USERPROFILE = $env:USERPROFILE; OFFLINE = $env:QUAYFLOW_OFFLINE; HOME = $env:HOME; KEYCHAIN = $env:QUAYFLOW_KEYCHAIN }
+if (-not $IsWindows) {
+    # Linux and macOS read HOME, not USERPROFILE; and never the login Keychain.
+    $env:HOME = Join-Path $root 'home'
+    $env:QUAYFLOW_KEYCHAIN = 'off'
+}
 $env:USERPROFILE = Join-Path $root 'home'
 $env:CLAUDE_CONFIG_DIR = $cfgDir
 $env:QUAYFLOW_HOME = Join-Path $root 'qf'
@@ -129,7 +134,7 @@ try {
     Qf unpin | Out-Null
 
     # 1. Observation
-    $ok = WaitFor { $a = Acct 'a'; ($a | ConvertTo-Json -Depth 8) -match '40' }
+    $ok = WaitFor { $a = Acct 'a'; ($a | ConvertTo-Json -Depth 8 -Compress) -match '"pct":40(\.0+)?[,}]' }
     Check 'usage observed from the fake API (a 40% 5h)' $ok ((Acct 'a') | ConvertTo-Json -Depth 8 -Compress)
     Check 'per-model window observed (Opus 30%)' (((Acct 'a') | ConvertTo-Json -Depth 8) -match 'Opus') ''
 
@@ -158,7 +163,7 @@ try {
     Sim @{ $TA = @{ five_hour = 0; status = 500 } }
     Start-Sleep 10  # a's last good reading (90%) ages past idleFreshS
     $a = (Acct 'a') | ConvertTo-Json -Depth 8 -Compress
-    Check 'failing usage endpoint: a is not shown as 0%' ($a -notmatch '"pct":0[,}]' -and $a -notmatch '\b0% 5h') $a
+    Check 'failing usage endpoint: a is not shown as 0%' ($a -notmatch '"pct":0(\.0+)?[,}]' -and $a -notmatch '\b0% 5h') $a
     Sim @{ $TC = @{ five_hour = 95 } }
     $ok = WaitFor { $e = Env0; $e.suggestion -and $e.suggestion.to }
     $e = Env0
@@ -174,10 +179,15 @@ try {
 
     # 6. Backoff on a rate-limited usage endpoint
     Sim @{ $TB = @{ status = 429; retry_after = 20 } }
-    Start-Sleep 2; SimResetLog; Start-Sleep 10
-    $n = (SimLog).$TB.'/api/oauth/usage'
-    Check 'usage endpoint 429 with Retry-After 20: no polling for 10 s' ([int]$n -le 1) "requests=$n"
+    SimResetLog
+    # b must actually be asked and refused first; otherwise "no polling" proves nothing.
+    $hit = WaitFor { [int](SimLog).$TB.'/api/oauth/usage' -ge 1 } 15
+    Check 'usage endpoint answers b with 429' $hit ((SimLog) | ConvertTo-Json -Depth 4 -Compress)
+    SimResetLog; Start-Sleep 10
+    $n = [int](SimLog).$TB.'/api/oauth/usage'
+    Check 'usage endpoint 429 with Retry-After 20: no polling for 10 s' ($n -le 1) "requests=$n"
     Sim @{ $TB = @{ status = 200; five_hour = 92 } }
+    Check 'polling of b resumes after the Retry-After' (WaitFor { [int](SimLog).$TB.'/api/oauth/usage' -ge 1 } 40) ((SimLog) | ConvertTo-Json -Depth 4 -Compress)
 
     # 7. Hard-limit recovery (the Mod's call, made directly)
     # Usage first, then Automatic: enabling Automatic while the live account still reads 95%
@@ -264,10 +274,11 @@ try {
     # (One-letter labels such as "b" are not replaced by ids; the engine tests cover that with longer labels.)
     Check 'weekly balance: the switch records its reason in the journal' ([bool]$req) "$req"
     Start-Sleep 4  # past the cooldown
-    Check 'weekly balance: d does not pull it back (not clearly ahead)' ((LiveToken) -eq $TB) "$(LiveToken) | decision: $((Env0).decision)"
+    Check 'weekly balance: d (8%/day) does not pull it back from b (35%/day) after the cooldown' ((LiveToken) -eq $TB) "$(LiveToken) | decision: $((Env0).decision)"
     $st = Qf status
     Check 'status: every window with its reset, the weekly score and where it is live' (
-        $st -match '7d 30% ↻ 47 h' -and $st -match 'weekly 35%/day' -and $st -match 'live in default' -and $st -match '7d Opus 30%') $st
+        # Piped, the CLI writes its own symbols as ASCII: the reset mark is "~".
+        $st -match '7d 30% ~ 47 h' -and $st -match 'weekly 35%/day' -and $st -match 'live in default' -and $st -match '7d Opus 30%') $st
     Check 'status: an account at its limit says so' ($st -match 'at its limit \(100% 5h\)') $st
 
     $all = (Get-ChildItem -Recurse $env:QUAYFLOW_HOME -File | Where-Object { $_.Extension -in '.log', '.jsonl', '.json' } | Get-Content -Raw) -join ''
@@ -278,6 +289,10 @@ finally {
     Start-Sleep 1
     if ($mock -and -not $mock.HasExited) { $mock.Kill() }
     $env:USERPROFILE = $saved.USERPROFILE
+    if (-not $IsWindows) {
+        $env:HOME = $saved.HOME
+        if ($null -ne $saved.KEYCHAIN) { $env:QUAYFLOW_KEYCHAIN = $saved.KEYCHAIN } else { Remove-Item Env:QUAYFLOW_KEYCHAIN -ErrorAction SilentlyContinue }
+    }
     if ($saved.OFFLINE) { $env:QUAYFLOW_OFFLINE = $saved.OFFLINE }
     Remove-Item Env:CLAUDE_CONFIG_DIR, Env:QUAYFLOW_HOME, Env:QUAYFLOW_SIM_API -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue

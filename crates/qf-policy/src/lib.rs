@@ -32,15 +32,33 @@ pub struct Ctx<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Exclusion {
-    NotInGroup { group: String },
+    NotInGroup {
+        group: String,
+    },
     ManagedLogin,
-    GroupConflict { session: String, group: String },
+    GroupConflict {
+        session: String,
+        group: String,
+    },
     Health(Health),
-    PlanIncompatible { model: String },
+    PlanIncompatible {
+        model: String,
+    },
     NoObservation,
-    Stale { age_s: i64 },
-    AtLimit { pct: f64, window: String },
-    NoHeadroom { pct: f64, window: String, needed: f64 },
+    Stale {
+        age_s: i64,
+    },
+    /// Dated ahead of the clock: the clock went back since it was read.
+    DatedAhead,
+    AtLimit {
+        pct: f64,
+        window: String,
+    },
+    NoHeadroom {
+        pct: f64,
+        window: String,
+        needed: f64,
+    },
     IsLive,
 }
 
@@ -60,6 +78,7 @@ impl Exclusion {
             Exclusion::Health(Health::Ok) => "ok".into(),
             Exclusion::PlanIncompatible { model } => format!("plan cannot serve model {model}"),
             Exclusion::NoObservation => "usage not observed yet".into(),
+            Exclusion::DatedAhead => "usage unknown: the reading is dated in the future (the clock changed)".into(),
             Exclusion::Stale { age_s } => format!("usage unknown: last read {} ago, too old to count as room", fmt_age(*age_s)),
             Exclusion::AtLimit { pct, window } => format!("at its limit ({pct:.0}% {window})"),
             Exclusion::NoHeadroom { pct, window, needed } => {
@@ -126,6 +145,9 @@ impl<'a> Ctx<'a> {
     /// Fresh binding window of an account, or the reason there is none.
     pub fn fresh_binding(&self, id: &AccountId) -> Result<(&'a Observation, &'a Window), Exclusion> {
         let o = self.observation(id).ok_or(Exclusion::NoObservation)?;
+        if o.dated_ahead(self.now) {
+            return Err(Exclusion::DatedAhead);
+        }
         let age = o.age_ms(self.now) / 1000;
         if age > self.fresh_limit_s(id) {
             return Err(Exclusion::Stale { age_s: age });
@@ -425,9 +447,12 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
         }
     }
 
-    if live_w.pct < threshold {
+    // The switch point never lies above the hard limit (threshold 100 with hard limit 99, or a
+    // lowered hard limit): an account the configuration counts as at its limit is moved.
+    let trigger = threshold.min(ctx.tuning.hard_limit_pct);
+    if live_w.pct < trigger {
         let below = format!(
-            "{live_label} at {:.0}% {} ({} old), below {threshold:.0}%",
+            "{live_label} at {:.0}% {} ({} old), below {trigger:.0}%",
             live_w.pct,
             qf_model::window_name(&live_w.key),
             fmt_age(live_obs.age_ms(ctx.now) / 1000)
@@ -442,20 +467,23 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
             left / 1000
         ));
     }
-    let picks = rank_by_score(candidates(ctx, threshold - margin));
+    // A target strictly below the live account's usage (margin 0 would otherwise move to an
+    // account at the same level and back at every cooldown).
+    let gate = (threshold - margin).min(live_w.pct - 0.0001);
+    let picks = rank_by_score(candidates(ctx, gate));
     match picks.first() {
         None => Proactive::None(format!(
             "{live_label} at {:.0}% {}, but no approved account has {:.0}% or less with a fresh observation; continuing",
             live_w.pct,
             qf_model::window_name(&live_w.key),
-            threshold - margin
+            (threshold - margin).min(live_w.pct)
         )),
         Some(c) => {
             let to_label = ctx.account(&c.id).map(|a| a.label.as_str()).unwrap_or("?");
             Proactive::Switch {
                 to: c.id.clone(),
                 reason: format!(
-                    "{live_label} at {:.0}% {} >= {threshold:.0}%; {to_label} at {:.0}% {} ({} old)",
+                    "{live_label} at {:.0}% {} >= {trigger:.0}%; {to_label} at {:.0}% {} ({} old)",
                     live_w.pct,
                     qf_model::window_name(&live_w.key),
                     c.pct,
@@ -642,7 +670,7 @@ pub fn unknown_capacity(ctx: &Ctx) -> Vec<AccountId> {
         .filter(|id| ctx.live != Some(*id) && ctx.permitted(id).is_ok())
         .filter(|id| {
             ctx.observation(id)
-                .is_none_or(|o| o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(id))
+                .is_none_or(|o| o.dated_ahead(ctx.now) || o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(id))
         })
         .cloned()
         .collect()
@@ -668,7 +696,7 @@ pub fn live_usage_unknown(ctx: &Ctx, session_pcts: &[(String, f64)], simulated: 
     }
     let live = ctx.live?;
     ctx.observation(live)
-        .is_none_or(|o| o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(live))
+        .is_none_or(|o| o.dated_ahead(ctx.now) || o.age_ms(ctx.now) / 1000 > ctx.fresh_limit_s(live))
         .then(|| live.clone())
 }
 

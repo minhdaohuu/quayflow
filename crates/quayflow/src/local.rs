@@ -246,9 +246,16 @@ const STARTUP_UNIT: &str = "quayflow.service";
 /// runs on its own; the unit then stays active until the engine is stopped.
 #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 pub fn startup_unit(exe: &Path) -> String {
+    // systemd reads `%` as a specifier and `\` and `"` as escapes inside a quoted word: a path
+    // with them (a home folder with `%`) must be written escaped to run the right program.
+    let path = exe
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%");
     format!(
-        "[Unit]\nDescription=Quayflow engine (Claude account switching)\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=\"{}\" start\n\n[Install]\nWantedBy=default.target\n",
-        exe.display()
+        "[Unit]\nDescription=Quayflow engine (Claude account switching)\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=\"{path}\" start\n\n[Install]\nWantedBy=default.target\n"
     )
 }
 
@@ -1568,6 +1575,9 @@ mod tests {
             "{u}"
         );
         assert!(u.contains("WantedBy=default.target"));
+        // A specifier sign and the escapes of a quoted word are written escaped.
+        let u = startup_unit(Path::new("/home/a%b/q\"x\\y"));
+        assert!(u.contains(r#"ExecStart="/home/a%%b/q\"x\\y" start"#), "{u}");
     }
 
     #[test]

@@ -697,3 +697,43 @@ fn unknown_readings_are_never_called_balanced() {
         p => panic!("{p:?}"),
     }
 }
+
+#[test]
+fn the_switch_point_is_never_above_the_hard_limit() {
+    let mut w = World::new();
+    w.groups[0].threshold = 100.0;
+    w.groups[0].margin = 0.0;
+    w.obs = vec![obs("a", 0, &[("5h", 99.5, None)]), obs("b", 1, &[("5h", 0.0, None)])];
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("b"));
+    let mut w = World::new();
+    w.groups[0].threshold = 95.0;
+    w.tuning.hard_limit_pct = 90.0;
+    w.obs = vec![obs("a", 0, &[("5h", 92.0, None)]), obs("b", 1, &[("5h", 0.0, None)])];
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("b"));
+}
+
+#[test]
+fn margin_zero_never_moves_to_an_account_at_the_same_level() {
+    let mut w = World::new();
+    w.groups[0].margin = 0.0;
+    w.groups[0].accounts.truncate(2);
+    w.obs = vec![obs("a", 0, &[("5h", 85.0, None)]), obs("b", 1, &[("5h", 85.0, None)])];
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    w.obs[1] = obs("b", 1, &[("5h", 84.0, None)]);
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("b"));
+}
+
+#[test]
+fn a_reading_dated_in_the_future_is_unknown_never_room() {
+    let mut w = World::new();
+    w.obs = vec![obs("a", 0, &[("5h", 90.0, None)]), obs("b", -180, &[("5h", 0.0, None)])];
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    assert_eq!(
+        w.ctx().fresh_binding(&AccountId("b".into())).unwrap_err(),
+        Exclusion::DatedAhead
+    );
+    assert!(unknown_capacity(&w.ctx()).contains(&AccountId("b".into())));
+    // A minute ahead is clock skew, not a changed clock.
+    w.obs[1] = obs("b", -1, &[("5h", 0.0, None)]);
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("b"));
+}

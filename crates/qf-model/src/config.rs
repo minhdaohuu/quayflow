@@ -414,6 +414,9 @@ impl Config {
         if t.cooldown_s > 3600 {
             return Err("cooldownS must be 0-3600".into());
         }
+        if !(5..=1440).contains(&t.pin_minutes) {
+            return Err("pinMinutes must be 5-1440".into());
+        }
         if t.lock_wait_s == 0 || t.lock_wait_s > 60 {
             return Err("lockWaitS must be 1-60".into());
         }

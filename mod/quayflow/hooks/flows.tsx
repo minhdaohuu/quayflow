@@ -614,8 +614,10 @@ async function doSwitch($: EngineInterface, c: Ctx, to: string, idle: boolean): 
 }
 
 async function doAccept($: EngineInterface, c: Ctx): Promise<void> {
-  const to = c.s ? myEnv(c.s)?.suggestion?.to : undefined
-  const r = await run($, 'accepting the recommendation', () => actAccept($))
+  // The suggestion this screen showed: the engine refuses a newer one in its place.
+  const shown = c.s ? myEnv(c.s)?.suggestion : undefined
+  const to = shown?.to
+  const r = await run($, 'accepting the recommendation', () => actAccept($, shown?.id))
   if (!r) return
   if (!r.ok && r.blockedBy) {
     setForm($, 'conflict', JSON.stringify(r.blockedBy))

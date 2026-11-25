@@ -1282,7 +1282,8 @@ impl Engine {
         if windows.is_empty() {
             return;
         }
-        merge_observation(
+        let carry_ms = inner.config.tuning.live_fresh_s as i64 * 1000;
+        merge_session_observation(
             &mut inner.observations,
             Observation {
                 account: account.clone(),
@@ -1290,7 +1291,7 @@ impl Engine {
                 windows,
                 source: "session".into(),
             },
-            true,
+            carry_ms,
         );
     }
 
@@ -1388,6 +1389,17 @@ impl Engine {
         );
     }
 
+    /// Whether `to` is a switch target now: permitted by every governing group and eligible on
+    /// a fresh reading (`qf_policy::explain_all`). Used before accepting a suggestion, and to
+    /// keep one while the live account's usage is unknown.
+    pub fn still_a_target(ctx: &qf_policy::Ctx, to: &AccountId) -> Result<(), qf_policy::Exclusion> {
+        match qf_policy::explain_all(ctx).into_iter().find(|(id, _)| id == to) {
+            Some((_, Ok(_))) => Ok(()),
+            Some((_, Err(e))) => Err(e),
+            None => Err(qf_policy::Exclusion::NoObservation),
+        }
+    }
+
     pub fn decide(self: &Arc<Self>, env: &EnvId) {
         let mut inner = self.lock();
         let Some(st) = inner.envs.get(env) else { return };
@@ -1405,11 +1417,19 @@ impl Engine {
             return;
         };
         let decision = qf_policy::proactive(&ctx);
+        // Whether the suggestion on screen still stands on what is known: made from the account
+        // that is live now, to an account that is still a target on a fresh reading.
+        let still_stands = inner
+            .envs
+            .get(env)
+            .and_then(|st| st.suggestion.as_ref())
+            .is_some_and(|s| s.from.as_ref() == ctx.live && Engine::still_a_target(&ctx, &s.to).is_ok());
         drop(ctx);
         match decision {
             qf_policy::Proactive::Unknown(why) => {
-                // Usage unknown says nothing new: a suggestion stays until fresh data decides,
-                // at most 15 minutes after it was last decided (accepting re-checks anyway).
+                // The live account's usage is unknown, which says nothing new about the switch
+                // itself: a suggestion stays while it still stands, at most 15 minutes after it
+                // was last decided. A recovery suggestion keeps its own 15 minutes.
                 let st = inner.envs.get_mut(env).expect("env");
                 st.decision = why;
                 let now = now_ms();
@@ -1417,11 +1437,9 @@ impl Engine {
                     Some((to, id, at)) if *to == s.to && *id == s.id => (*at).max(s.ts),
                     _ => s.ts,
                 };
-                if st
-                    .suggestion
-                    .as_ref()
-                    .is_some_and(|s| now - last_decided(s) > 15 * 60_000)
-                {
+                if st.suggestion.as_ref().is_some_and(|s| {
+                    now - last_decided(s) > 15 * 60_000 || (s.how != SwitchHow::Recovery && !still_stands)
+                }) {
                     st.suggestion = None;
                 }
             }
@@ -1614,6 +1632,19 @@ fn capitalize(s: &str) -> String {
 
 /// Keep one observation per account; a session view overrides the windows it carries
 /// and keeps the engine's per-model windows.
+/// Merges a session's reading, which may carry only some windows: a window it lacks is carried
+/// over from the previous reading only while that reading is at most `carry_ms` old, because
+/// the merged reading takes the new time. Older windows are dropped, never re-dated (stale is
+/// never shown as current).
+pub fn merge_session_observation(list: &mut Vec<Observation>, o: Observation, carry_ms: i64) {
+    if let Some(existing) = list.iter_mut().find(|x| x.account == o.account) {
+        if o.ts - existing.ts > carry_ms || existing.dated_ahead(o.ts) {
+            existing.windows.clear();
+        }
+    }
+    merge_observation(list, o, true)
+}
+
 pub fn merge_observation(list: &mut Vec<Observation>, o: Observation, partial: bool) {
     match list.iter_mut().find(|x| x.account == o.account) {
         Some(existing) if partial => {
@@ -1635,7 +1666,11 @@ pub fn merge_observation(list: &mut Vec<Observation>, o: Observation, partial: b
 pub fn load_config(dd: &DataDir) -> Result<Config, String> {
     match std::fs::read_to_string(dd.config()) {
         Ok(t) => {
-            let c: Config = serde_json::from_str(&t).map_err(|e| format!("config.json is not valid: {e}"))?;
+            let mut c: Config = serde_json::from_str(&t).map_err(|e| format!("config.json is not valid: {e}"))?;
+            // Values an earlier version accepted from a hand-edited file are held to today's
+            // ranges, instead of stopping the engine from starting.
+            c.tuning.cooldown_s = c.tuning.cooldown_s.min(3600);
+            c.tuning.pin_minutes = c.tuning.pin_minutes.clamp(5, 1440);
             c.validate().map_err(|e| format!("config.json: {e}"))?;
             Ok(c)
         }

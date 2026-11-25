@@ -105,8 +105,9 @@ if [ "$UNINSTALL" = 1 ]; then
     [ "$DELETE_DATA" = 1 ] && set -- "$@" --delete-data
     [ "$YES" = 1 ] && set -- "$@" --yes
     # Piped into sh (`curl ... | sh -s -- --uninstall`), standard input is this script: the
-    # question is asked on the terminal instead.
-    if [ "$YES" = 0 ] && { : </dev/tty; } 2>/dev/null; then
+    # question is asked on the terminal instead. The terminal is tried in a subshell: dash
+    # exits at once when a redirection on a special builtin (`: </dev/tty`) fails.
+    if [ "$YES" = 0 ] && (exec </dev/tty) 2>/dev/null; then
       "$EXE" "$@" </dev/tty || die "quayflow uninstall failed (exit $?). Nothing else was changed by this script."
     else
       "$EXE" "$@" || die "quayflow uninstall failed (exit $?). Nothing else was changed by this script."
@@ -192,8 +193,9 @@ EOF
   if [ "$YES" = 1 ]; then
     info 'Consent given with --yes.'
   else
-    # Piped into sh, standard input is the script: ask on the terminal.
-    if [ -r /dev/tty ]; then
+    # Piped into sh, standard input is the script: ask on the terminal. `-r /dev/tty` is true
+    # even without a controlling terminal, so the terminal is opened in a subshell to check.
+    if (exec </dev/tty) 2>/dev/null; then
       printf 'Install Quayflow and allow the Mod to start the engine on demand? (y/N) '
       read -r answer < /dev/tty || answer=""
     else
@@ -300,7 +302,8 @@ NEEDED="$ASSET SHA256SUMS"
 if [ -n "$SOURCE" ]; then
   step "Using local files from $SOURCE"
   [ -d "$SOURCE" ] || die "Not a folder: $SOURCE"
-  SRC_FULL=$(cd "$SOURCE" && pwd)
+  # CDPATH would make `cd` print the folder too, giving a two-line path.
+  SRC_FULL=$(CDPATH='' cd -- "$SOURCE" && pwd)
   for name in $NEEDED; do
     [ -f "$SRC_FULL/$name" ] || die "Missing $name in $SRC_FULL."
     cp "$SRC_FULL/$name" "$WORK/$name"
@@ -315,6 +318,8 @@ else
         sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
       [ -n "$TAG" ] || die "Could not find the latest release of $REPO. If the repository is private, sign in with 'gh auth login' and run this again, or use --source."
     fi
+    # The latest tag goes into URLs and the attestation check: the same form as --version.
+    printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' || die "The latest release has an unexpected tag ($TAG); nothing was downloaded."
   fi
   step "Downloading Quayflow $TAG"
   for name in $NEEDED; do

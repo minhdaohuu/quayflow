@@ -174,17 +174,20 @@ impl Journal {
 
     /// Every record, or the read error; a journal that does not exist yet is empty.
     pub fn try_read_all(&self) -> std::io::Result<Vec<Value>> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(t) => Ok(t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()),
+        // Bytes, one line at a time: a line torn in the middle of a multi-byte character (a crash
+        // during an append) loses that line, never the whole journal.
+        match std::fs::read(&self.path) {
+            Ok(b) => Ok(b
+                .split(|c| *c == b'\n')
+                .filter_map(|l| serde_json::from_slice(l).ok())
+                .collect()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
             Err(e) => Err(e),
         }
     }
 
     pub fn read_all(&self) -> Vec<Value> {
-        std::fs::read_to_string(&self.path)
-            .map(|t| t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
-            .unwrap_or_default()
+        self.try_read_all().unwrap_or_default()
     }
 
     pub fn tail(&self, n: usize) -> Vec<Value> {

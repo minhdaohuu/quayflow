@@ -151,7 +151,16 @@ impl Observation {
     pub fn age_ms(&self, now: i64) -> i64 {
         (now - self.ts).max(0)
     }
+
+    /// Dated ahead of the clock by more than [`CLOCK_SKEW_MS`] (the clock went back since it was
+    /// read): its age is unknown, so it is never current. Stale is never zero.
+    pub fn dated_ahead(&self, now: i64) -> bool {
+        self.ts > now + CLOCK_SKEW_MS
+    }
 }
+
+/// How far ahead of the clock a reading may be dated and still count (clock adjustments).
+pub const CLOCK_SKEW_MS: i64 = 60_000;
 
 /// A time span as people read it: "40 min", "5 h", "3 d 4 h".
 pub fn fmt_span(ms: i64) -> String {

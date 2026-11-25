@@ -303,6 +303,26 @@ pub fn route(e: &Shared, method: &str, path: &str, query: &str, body: &Value) ->
             let Some(sug) = sug else {
                 return Err(ApiErr::refused("no pending suggestion"));
             };
+            // The suggestion the person saw: a newer one is never accepted in its place.
+            if s(body, "suggestionId").is_some_and(|id| id != sug.id) {
+                return Err(ApiErr::refused(
+                    "the suggestion changed since it was shown; review the current one (/quay accept again)",
+                ));
+            }
+            // Still a target now (fresh, below the limit, permitted). A recovery suggestion is
+            // exempt: when every account is exhausted it names the one available soonest.
+            if sug.how != SwitchHow::Recovery {
+                let inner = e.lock();
+                if let Some(ctx) = Engine::ctx(&inner, &env, None) {
+                    if let Err(x) = Engine::still_a_target(&ctx, &sug.to) {
+                        let name = inner.config.label(&sug.to);
+                        return Err(ApiErr::refused(format!(
+                            "{name} is no longer a switch target: {}; nothing was switched",
+                            x.explain()
+                        )));
+                    }
+                }
+            }
             // Accepting is approval of timing, not a manual choice: no pin.
             let how = SwitchHow::Accepted;
             Ok(match e.start_switch(&env, &sug.to, how, &sug.reason, false, false) {

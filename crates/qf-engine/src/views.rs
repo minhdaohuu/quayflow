@@ -211,7 +211,7 @@ impl Engine {
                     cfg.tuning.live_fresh_s
                 } as i64;
                 let usage = inner.observations.iter().find(|o| o.account == a.id).map(|o| {
-                    let fresh = o.age_ms(now) / 1000 <= fresh_limit;
+                    let fresh = !o.dated_ahead(now) && o.age_ms(now) / 1000 <= fresh_limit;
                     UsageView {
                         binding: o.binding().cloned(),
                         windows: o.windows.clone(),

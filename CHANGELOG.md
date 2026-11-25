@@ -14,7 +14,14 @@ All notable changes to this project are documented here. The format follows [Kee
 - After a crash during a switch in a lane named like an account label, the restarted engine checks that lane. Before, the journal stored the lane's name as the account id, and the engine checked the default environment instead and could pause its automation by mistake.
 - With a threshold of 100% and margin 0, return home no longer switches to a Preferred account that is at its usage limit.
 - In Suggest mode, a suggestion that went away for a moment and comes back for the same account within 30 minutes is no longer announced again in the transcript and as a notice. While the live account's usage is briefly unknown, a suggestion already shown stays (up to 15 minutes) instead of disappearing.
-- A `cooldownS` above 3600 in a hand-edited `config.json` is refused, as it already was in `/quay` and the API.
+- A `cooldownS` above 3600 or a `pinMinutes` outside 5-1440 in a hand-edited `config.json` is brought into range when the engine starts, as `/quay` and the API already require, instead of being used as is.
+- A suggestion kept while the live account's usage is unknown is dropped when its target stops being a target (at its limit, stale, no longer allowed). Accepting checks again that the target is still one, and `/quay` accepts only the suggestion it showed: a newer one in its place is refused with "the suggestion changed".
+- An account at or past its usage limit is moved even when the group's threshold is set above the limit (threshold 100%). With margin 0, Quayflow no longer switches to an account at the same usage as the live one and back at every cooldown.
+- A usage reading dated in the future (the computer's clock was set back) counts as unknown, never as current room.
+- A session's report with only some usage windows no longer makes older windows look current; they are dropped when their reading is past the live freshness limit.
+- One line of the journal torn inside a non-ASCII character (a crash during a write) no longer makes the whole journal unreadable. A switch found complete after a crash keeps its own time for the cooldown across later restarts.
+- `quayflow status` writes `*` and `~` for the suggested mark and the reset countdown when its output is piped, so Windows PowerShell does not garble them; a reading without any window says so.
+- `install.sh`: uninstalling without `--yes` and without a terminal (cron, CI) no longer stops silently under dash, and the consent question says to use `--yes`; `--source` with a relative folder works when `CDPATH` is set; a latest-release tag of an unexpected form is refused before anything is downloaded. The Linux startup entry escapes `%`, `\` and `"` in the program path.
 
 ## [0.4.0] - 2026-11-10
 

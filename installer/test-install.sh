@@ -58,6 +58,7 @@ cat > "$FAKEBIN/gh" <<'EOF'
 case "$1 $2" in
   "auth status") [ "${QF_FAKE_GH_AUTH:-}" = fail ] && exit 1; exit 0 ;;
   "attestation verify") [ "${QF_FAKE_GH_ATTEST:-}" = fail ] && { echo 'no matching attestation' >&2; exit 1; }; echo 'Verification succeeded' ;;
+  "release view") echo "${QF_FAKE_GH_TAG:-v9.9.9}" ;;
 esac
 exit 0
 EOF
@@ -268,6 +269,21 @@ check "$([ $CODE = 0 ] && [ -L "$HOME/.local/bin/quayflow" ]; echo $?)" 'uninsta
 rm -f "$HOME/.local/bin/quayflow"
 OUT=$(PATH="$NOGH:$SYS" sh "$INSTALLER" --version bogus --yes 2>&1); CODE=$?
 check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'Not a release version'; echo $?)" 'invalid --version refused before any download' "$OUT"
+# Without a controlling terminal (cron, CI, ssh host cmd): uninstall without --yes runs, under
+# dash too, instead of dying silently; the consent question says to use --yes.
+notty() { python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" </dev/null; }
+ln -sfn "$EXE" "$HOME/.local/bin/quayflow"; rm -f "$QF_FAKE_LOG"
+OUT=$(PATH="$NOGH:$SYS" notty "$QF_SH" "$INSTALLER" --uninstall 2>&1); CODE=$?
+check "$([ $CODE = 0 ] && LOGL | grep -qx 'uninstall'; echo $?)" "uninstall without a terminal runs ($QF_SH)" "code $CODE: $OUT"
+OUT=$(PATH="$NOGH:$SYS" notty "$QF_SH" "$INSTALLER" --source "$ASSETS" --no-plugin --skip-attestation 2>&1); CODE=$?
+check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'run again with --yes'; echo $?)" "no terminal: consent asks for --yes ($QF_SH)" "code $CODE: $OUT"
+rm -f "$HOME/.local/bin/quayflow"
+# A relative --source under CDPATH is one folder, not two lines.
+OUT=$(cd "$W" && CDPATH="$W" PATH="$NOGH:$SYS" "$QF_SH" "$INSTALLER" --source assets --yes --no-plugin --skip-attestation 2>&1); CODE=$?
+check "$([ $CODE = 0 ]; echo $?)" 'relative --source with CDPATH set' "$OUT"
+# A latest tag of an unexpected form is refused before any download.
+OUT=$(QF_FAKE_GH_TAG='v1.0.0/../x' PATH="$FAKEBIN:$SYS" "$QF_SH" "$INSTALLER" --yes --no-plugin 2>&1); CODE=$?
+check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'unexpected tag'; echo $?)" 'an unexpected latest tag is refused' "$OUT"
 OUT=$(PATH="$NOGH:$SYS" sh "$INSTALLER" --frobnicate 2>&1); CODE=$?
 check "$([ $CODE != 0 ] && printf '%s' "$OUT" | grep -q 'Unknown option'; echo $?)" 'unknown option refused' "$OUT"
 

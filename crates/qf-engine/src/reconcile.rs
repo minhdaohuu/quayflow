@@ -113,20 +113,25 @@ fn resolve_open(engine: &Engine, records: &[Value]) {
                 "the live login matches neither side; automation stays paused until a switch completes or you resume it",
             )
         };
+        // The switch's own time and kind go with the record, so a later restart restores the
+        // cooldown from when it switched, not from when this start found out.
+        let switched_at = rec
+            .get("ts")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(i64::MAX)
+            .min(qf_model::time::now_ms());
+        let how = rec.get("how").cloned().unwrap_or(Value::Null);
         engine.record(
             &inner,
             "transition.reconciled",
-            json!({"id": id, "env": env_id, "live": live, "outcome": outcome, "written": written}),
+            json!({"id": id, "env": env_id, "live": live, "outcome": outcome, "written": written,
+                   "switchedAt": switched_at, "how": how}),
             true,
         );
-        if written {
+        if written && how != json!("canary") {
             // The switch happened: it holds the cooldown from its own time (the record just
             // written is not among the records `restore_cooldown` reads in this start).
-            let at = rec
-                .get("ts")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(i64::MAX)
-                .min(qf_model::time::now_ms());
+            let at = switched_at;
             if let Some(st) = inner.envs.get_mut(&key) {
                 st.last_proactive = Some(st.last_proactive.map_or(at, |t| t.max(at)));
             }
@@ -153,16 +158,18 @@ fn restore_cooldown(engine: &Engine, records: &[Value]) {
     for r in records {
         let switched = match r.get("event").and_then(|v| v.as_str()) {
             Some("transition.written") => r.get("how").and_then(|v| v.as_str()) != Some("canary"),
-            Some("transition.reconciled") => r.get("written") == Some(&json!(true)),
+            Some("transition.reconciled") => {
+                r.get("written") == Some(&json!(true)) && r.get("how").and_then(|v| v.as_str()) != Some("canary")
+            }
             _ => false,
         };
         if !switched {
             continue;
         }
-        let (Some(env), Some(ts)) = (
-            r.get("env").and_then(|v| v.as_str()),
-            r.get("ts").and_then(|v| v.as_i64()),
-        ) else {
+        // A recovered switch counts from when it switched (`switchedAt`), not from the restart
+        // that found it; an older record without it uses its own time.
+        let at = r.get("switchedAt").or_else(|| r.get("ts")).and_then(|v| v.as_i64());
+        let (Some(env), Some(ts)) = (r.get("env").and_then(|v| v.as_str()), at) else {
             continue;
         };
         if let Some(st) = inner.envs.get_mut(&EnvId(env.into())) {

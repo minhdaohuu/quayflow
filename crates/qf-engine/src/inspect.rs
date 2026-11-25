@@ -85,7 +85,9 @@ impl Engine {
                         _ => "live here; usage not observed yet".into(),
                     },
                 ),
-                Some(Err(e @ (Exclusion::NoObservation | Exclusion::Stale { .. }))) => ("unknown", e.explain()),
+                Some(Err(e @ (Exclusion::NoObservation | Exclusion::Stale { .. } | Exclusion::DatedAhead))) => {
+                    ("unknown", e.explain())
+                }
                 Some(Err(e)) => ("excluded", e.explain()),
                 None => ("unknown", "not evaluated".into()),
             };

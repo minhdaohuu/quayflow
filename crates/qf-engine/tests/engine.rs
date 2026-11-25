@@ -2091,3 +2091,160 @@ fn the_state_view_gives_the_weekly_score_of_fresh_readings_only() {
     assert!(!p.usage.as_ref().unwrap().fresh);
     assert_eq!(p.usage.unwrap().weekly_per_day, None);
 }
+
+#[test]
+fn a_suggestion_kept_through_unknown_usage_still_needs_a_valid_target() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_mode(&e, "suggest");
+    set_week(&e, "uuid-org", 90.0, 60.0, 120);
+    set_week(&e, "uuid-personal", 0.0, 30.0, 48);
+    e.tick();
+    assert!(e.state_view(None, None).envs[0].suggestion.is_some(), "a suggestion");
+    // The live reading goes stale, and personal is now at its limit: the suggestion goes.
+    set_week(&e, "uuid-personal", 100.0, 100.0, 48);
+    {
+        let mut inner = e.lock();
+        let o = inner
+            .observations
+            .iter_mut()
+            .find(|o| o.account == id("uuid-org"))
+            .unwrap();
+        o.ts = time::now_ms() - 10 * 60_000;
+    }
+    e.tick();
+    assert!(
+        e.state_view(None, None).envs[0].suggestion.is_none(),
+        "kept a suggestion to an exhausted account"
+    );
+
+    // Accept refuses a suggestion other than the one shown, and a target no longer valid.
+    set_week(&e, "uuid-org", 90.0, 60.0, 120);
+    set_week(&e, "uuid-personal", 0.0, 30.0, 48);
+    e.tick();
+    let now = e.state_view(None, None).envs[0]
+        .suggestion
+        .clone()
+        .expect("a suggestion again");
+    let err = qf_engine::http::route(&e, "POST", "/v1/accept", "", &json!({"suggestionId": "not-it"})).unwrap_err();
+    assert!(err.message.contains("suggestion changed"), "{}", err.message);
+    set_week(&e, "uuid-personal", 100.0, 100.0, 48);
+    let err = qf_engine::http::route(&e, "POST", "/v1/accept", "", &json!({"suggestionId": now.id})).unwrap_err();
+    assert!(err.message.contains("no longer a switch target"), "{}", err.message);
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-org"), "nothing was switched");
+}
+
+#[test]
+fn a_line_torn_inside_a_character_costs_that_line_only() {
+    let w = world();
+    let j = qf_engine::journal::Journal::new(w.dd.journal());
+    j.append(
+        "transition.written",
+        json!({"id": "t1", "env": "default", "how": "automatic"}),
+        &[],
+        true,
+    )
+    .unwrap();
+    let mut bytes = std::fs::read(w.dd.journal()).unwrap();
+    bytes.extend_from_slice(b"{\"event\":\"transition.ended\",\"detail\":\"caf\xc3");
+    std::fs::write(w.dd.journal(), &bytes).unwrap();
+    j.append(
+        "transition.written",
+        json!({"id": "t2", "env": "default", "how": "automatic"}),
+        &[],
+        true,
+    )
+    .unwrap();
+    let all = j.try_read_all().expect("readable despite the torn character");
+    let ids: Vec<&str> = all.iter().filter_map(|r| r["id"].as_str()).collect();
+    assert_eq!(ids, ["t1", "t2"]);
+}
+
+#[test]
+fn a_recovered_switch_keeps_its_own_time_across_restarts() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let (org, personal) = (id("uuid-org"), id("uuid-personal"));
+    drop(e);
+    let j = qf_engine::journal::Journal::new(w.dd.journal());
+    j.append(
+        "transition.requested",
+        json!({"id": "d1", "env": "default", "from": org, "to": personal, "how": "automatic"}),
+        &[],
+        true,
+    )
+    .unwrap();
+    j.append("transition.applying", json!({"id": "d1", "env": "default"}), &[], true)
+        .unwrap();
+    // The switch happened two hours ago (its records say so), then the engine died.
+    let mut text = std::fs::read_to_string(w.dd.journal()).unwrap();
+    let two_h_ago = time::now_ms() - 2 * 3_600_000;
+    text = text
+        .lines()
+        .map(|l| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            if v["id"] == "d1" {
+                v["ts"] = json!(two_h_ago);
+            }
+            v.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(w.dd.journal(), text).unwrap();
+    login_files(&w.env, "uuid-personal", "P1", "max");
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    assert_eq!(e.lock().envs[&EnvId::default_env()].last_proactive, Some(two_h_ago));
+    drop(e);
+    // A second restart: still the switch's time, not the first restart's.
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    assert_eq!(e.lock().envs[&EnvId::default_env()].last_proactive, Some(two_h_ago));
+}
+
+#[test]
+fn a_partial_session_reading_never_re_dates_an_old_window() {
+    let now = time::now_ms();
+    let acct = id("uuid-org");
+    let win = |k: &str, p: f64| Window {
+        key: k.into(),
+        pct: p,
+        resets_at: None,
+    };
+    let mut list = vec![Observation {
+        account: acct.clone(),
+        ts: now - 2 * 3_600_000,
+        windows: vec![win("5h", 10.0), win("7d:Opus", 70.0)],
+        source: "engine".into(),
+    }];
+    let session = |p: f64, ts: i64| Observation {
+        account: acct.clone(),
+        ts,
+        windows: vec![win("5h", p)],
+        source: "session".into(),
+    };
+    qf_engine::core::merge_session_observation(&mut list, session(20.0, now), 300_000);
+    assert_eq!(
+        list[0].windows.iter().map(|w| w.key.as_str()).collect::<Vec<_>>(),
+        ["5h"]
+    );
+    // A recent reading's other windows are carried over.
+    list[0].windows.push(win("7d", 40.0));
+    list[0].ts = now - 60_000;
+    qf_engine::core::merge_session_observation(&mut list, session(25.0, now), 300_000);
+    assert!(list[0].windows.iter().any(|w| w.key == "7d"));
+}
+
+#[test]
+fn an_out_of_range_tuning_in_config_json_is_clamped_not_fatal() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    drop(e);
+    let p = w.dd.config();
+    let mut cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    cfg["tuning"]["cooldownS"] = json!(7200);
+    cfg["tuning"]["pinMinutes"] = json!(0);
+    std::fs::write(&p, cfg.to_string()).unwrap();
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).expect("the engine starts");
+    let t = e.lock().config.tuning.clone();
+    assert_eq!((t.cooldown_s, t.pin_minutes), (3600, 5));
+}

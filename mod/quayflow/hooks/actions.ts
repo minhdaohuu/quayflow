@@ -64,8 +64,9 @@ export function actSwitchTo($: EngineInterface, to: string, idleWait = false, en
   return after($, post<SwitchResponse>($, '/v1/switch', { to, env: env ?? envId(), sessionId: Q.sessionId, idleWait, requestId: requestId() }, 30_000))
 }
 
-export function actAccept($: EngineInterface) {
-  return after($, post<SwitchResponse>($, '/v1/accept', { sessionId: Q.sessionId, env: envId(), requestId: requestId() }, 30_000))
+/** Accepts the suggestion `suggestionId` (the one shown): the engine refuses a newer one in its place. */
+export function actAccept($: EngineInterface, suggestionId?: string) {
+  return after($, post<SwitchResponse>($, '/v1/accept', { sessionId: Q.sessionId, env: envId(), requestId: requestId(), suggestionId }, 30_000))
 }
 
 export function actCancelTransition($: EngineInterface, id: string) {

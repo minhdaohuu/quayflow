@@ -4,3 +4,4 @@
 - A new decision or branch: add its rule to `check()` there, not only example tests. A failure prints its seed; `QF_INVARIANT_SEED=<n> cargo test -p qf-policy invariants` replays it.
 - A fallback never reuses a reading that the main path would refuse.
 - Every target gate is below `hard_limit_pct`, whatever the group's threshold and margin allow (config accepts threshold 100, margin 0). The generator covers threshold 100 and a lowered hard limit; keep configuration corners in it, not only defaults.
+- Readings dated ahead of the clock are unknown (`Observation::dated_ahead`), and the generator makes some. A threshold switch never targets an account at the live account's level, and the trigger is never above the hard limit: both are rules in `check()`.
