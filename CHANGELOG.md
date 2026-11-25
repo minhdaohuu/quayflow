@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- Quayflow now balances weekly usage across a group's accounts. A proactive switch goes to the account whose unused 7-day allowance would be lost soonest (room left divided by the time to its 7-day reset), and below the threshold Quayflow also moves when another account is clearly ahead (1.5 times and 5 points per day more). Before, one account carried all the work until it reached the threshold, and the others' weekly allowance expired unused. The group's mode decides as before (Automatic switches, Suggest suggests, Manual does nothing), so a group in Automatic now also switches for weekly balance. Groups with a Preferred account keep returning home and do not move for weekly balance. An account without a 7-day reset time is never a reason to move.
+
 ## [0.4.0] - 2026-11-10
 
 A new configuration's Default group starts in Automatic mode; the engine is started again by the requests of running sessions, waited for by the first request, and recovers limits that arrive right after it starts, reading unknown usage on the spot.

@@ -38,6 +38,7 @@ struct World {
     live: Option<AccountId>,
     model: Option<&'static str>,
     managed: ManagedLogin,
+    last_proactive: Option<i64>,
 }
 
 fn generate(seed: u64) -> World {
@@ -81,6 +82,9 @@ fn generate(seed: u64) -> World {
         grp.mode = r.pick(&[Mode::Manual, Mode::Suggest, Mode::Automatic]);
         grp.threshold = r.pick(&[50.0, 80.0, 85.0, 95.0]);
         grp.margin = r.pick(&[0.0, 5.0, 10.0]);
+        if r.chance(20) && !grp.accounts.is_empty() {
+            grp.preferred = Some(r.pick(&grp.accounts));
+        }
         groups.push(grp);
     }
     let keys = ["5h", "7d", "7d:Opus"];
@@ -97,10 +101,13 @@ fn generate(seed: u64) -> World {
                 continue;
             }
             let pct = r.pick(&[0.0, 20.0, 60.0, 74.0, 76.0, 84.0, 86.0, 98.0, 99.0, 100.0]);
-            let resets_at = match r.below(3) {
+            let resets_at = match r.below(8) {
                 0 => None,
                 1 => Some(NOW - r.below(120) as i64 * MIN),
-                _ => Some(NOW + (1 + r.below(600)) as i64 * MIN),
+                2 | 3 => Some(NOW + (1 + r.below(600)) as i64 * MIN),
+                // Weekly resets up to 7 days away, so weekly scores differ widely.
+                _ if k.starts_with("7d") => Some(NOW + (1 + r.below(7 * 24 * 60)) as i64 * MIN),
+                _ => Some(NOW + (1 + r.below(300)) as i64 * MIN),
             };
             windows.push(Window {
                 key: k.into(),
@@ -116,6 +123,27 @@ fn generate(seed: u64) -> World {
         });
     }
     let live = if r.chance(90) { Some(r.pick(&ids)) } else { None };
+    // Weekly cases: every reading has a 7d window with a reset days away, and the live reading
+    // is fresh, so the weekly balancing trigger is reached often.
+    if r.chance(40) {
+        for o in &mut obs {
+            o.windows.retain(|w| w.key != "7d" && (w.key == "5h" || r.chance(50)));
+            for w in o.windows.iter_mut().filter(|w| w.key == "5h") {
+                w.pct = r.pick(&[0.0, 20.0, 60.0, 90.0]);
+            }
+            o.windows.push(Window {
+                key: "7d".into(),
+                pct: r.pick(&[0.0, 10.0, 30.0, 50.0, 70.0, 84.0, 90.0]),
+                resets_at: match r.below(10) {
+                    0 => None,
+                    _ => Some(NOW + (1 + r.below(7 * 24 * 60)) as i64 * MIN),
+                },
+            });
+            if live.as_ref() == Some(&o.account) {
+                o.ts = NOW;
+            }
+        }
+    }
     World {
         accounts,
         governing: groups.len(),
@@ -125,6 +153,10 @@ fn generate(seed: u64) -> World {
         live,
         model: r.pick(&[None, Some("claude-opus-5-5"), Some("claude-sonnet-5-5")]),
         managed: ManagedLogin::default(),
+        last_proactive: match r.below(3) {
+            0 => Some(NOW - r.below(10) as i64 * MIN),
+            _ => None,
+        },
     }
 }
 
@@ -141,7 +173,7 @@ impl World {
             managed: &self.managed,
             tuning: &self.tuning,
             pin: None,
-            last_proactive_switch: None,
+            last_proactive_switch: self.last_proactive,
             model: self.model,
             busy_transition: false,
         }
@@ -184,6 +216,9 @@ fn check(seed: u64) -> Result<(), String> {
         if ctx.live.is_none_or(|l| ctx.fresh_binding(l).is_err()) {
             return Err("proactive switch decided on unknown live usage".into());
         }
+    }
+    if let Some(why) = balancing_broken(&ctx) {
+        return Err(format!("weekly balance: {why}"));
     }
 
     match recovery_target(&ctx) {
@@ -267,6 +302,45 @@ fn check(seed: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// A switch below the threshold that is not a return home is a weekly balancing switch:
+/// cooldown over, no Preferred account in a governing group, a target at or below threshold
+/// minus margin, and both scores known with the target's clearly higher.
+fn is_balancing(ctx: &Ctx) -> Option<AccountId> {
+    let Proactive::Switch {
+        to, return_home: false, ..
+    } = proactive(ctx)
+    else {
+        return None;
+    };
+    let (_, w) = ctx.fresh_binding(ctx.live?).ok()?;
+    (w.pct < effective_threshold(&ctx.governing)).then_some(to)
+}
+
+fn balancing_broken(ctx: &Ctx) -> Option<String> {
+    let to = is_balancing(ctx)?;
+    let cooling = ctx
+        .last_proactive_switch
+        .is_some_and(|t| ctx.now - t < ctx.tuning.cooldown_s as i64 * 1000);
+    if cooling {
+        return Some("switched inside the cooldown".into());
+    }
+    if ctx.governing.iter().any(|g| g.preferred.is_some()) {
+        return Some("switched although a governing group has a Preferred account".into());
+    }
+    let max = effective_threshold(&ctx.governing) - effective_margin(&ctx.governing);
+    match ctx.fresh_binding(&to) {
+        Ok((_, w)) if w.pct <= max => {}
+        _ => return Some(format!("target is not at or below {max:.0}% with a fresh reading")),
+    }
+    let score = |id: &AccountId| ctx.observation(id).and_then(|o| weekly_score(o, ctx.now));
+    match (score(ctx.live?), score(&to)) {
+        (Some(l), Some(t)) if clearly_higher(t, l) => None,
+        (l, t) => Some(format!(
+            "scores live {l:?}, target {t:?} are unknown or not clearly apart"
+        )),
+    }
+}
+
 #[test]
 fn decisions_keep_the_invariants_in_generated_situations() {
     let seeds: Vec<u64> = match std::env::var("QF_INVARIANT_SEED") {
@@ -283,7 +357,7 @@ fn decisions_keep_the_invariants_in_generated_situations() {
 #[test]
 fn the_generator_reaches_every_decision() {
     // Guard against a generator that never produces the interesting cases.
-    let (mut switch, mut capacity, mut soonest, mut polled) = (0, 0, 0, 0);
+    let (mut switch, mut capacity, mut soonest, mut polled, mut balance) = (0, 0, 0, 0, 0);
     for seed in 1..=20_000 {
         let w = generate(seed);
         let ctx = w.ctx();
@@ -293,6 +367,9 @@ fn the_generator_reaches_every_decision() {
         if matches!(proactive(&ctx), Proactive::Switch { .. }) {
             switch += 1;
         }
+        if is_balancing(&ctx).is_some() {
+            balance += 1;
+        }
         match recovery_target(&ctx) {
             RecoveryTarget::Capacity(_) => capacity += 1,
             RecoveryTarget::Soonest { .. } => soonest += 1,
@@ -300,7 +377,7 @@ fn the_generator_reaches_every_decision() {
         }
     }
     assert!(
-        switch > 100 && capacity > 100 && soonest > 100 && polled > 100,
-        "{switch} {capacity} {soonest} {polled}"
+        switch > 100 && capacity > 100 && soonest > 100 && polled > 100 && balance > 100,
+        "{switch} {capacity} {soonest} {polled} {balance}"
     );
 }

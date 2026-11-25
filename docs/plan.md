@@ -4,6 +4,8 @@ Work agreed but not started, in order. Each item moves to `CHANGELOG.md` when it
 
 ## 1. Weekly balancing
 
+Status: done in `[Unreleased]` (CHANGELOG, Changed). Not done: the `sim-usage.ps1` scenario with `seven_day_reset_s`.
+
 ### Problem
 
 A proactive switch has one trigger: the live account's binding window (the fuller of 5h, 7d and the per-model weekly window) reaches the group threshold (85%) (`proactive()` in `crates/qf-policy/src/lib.rs`). Below that, nothing moves. Typical use stays under 85% of 5h, so one account carries all the work. Its 7d window climbs toward 100% while the other accounts stay unused. Two things make this worse:

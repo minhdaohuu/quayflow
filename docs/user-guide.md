@@ -148,6 +148,15 @@ The `Default` group of a new installation starts in Automatic: starting the engi
 
 Defaults per group (Groups tab, or `quayflow group tuning`): proactive threshold 85% of the account's binding usage window; a candidate must be at least 10 points below the threshold. For every group (`/quay` > Settings > Tuning): 5 minutes between proactive switches. The binding window is the fullest of the five-hour, seven-day and per-model weekly windows. Quayflow uses only fresh usage readings: at most 5 minutes old for the live account and 60 minutes for idle ones. A missing or stale reading is never treated as zero and never triggers an automatic switch.
 
+**Weekly balancing.** Each account's 7-day window resets at its own time, and weekly allowance an account has not used by then is lost. So Quayflow does not leave one account to carry all the work while the others stay unused:
+
+- **Which account.** A proactive switch goes to the eligible account whose unused weekly allowance would be lost soonest: its 7-day room left divided by the time until its 7-day reset (counted as at least 5 hours). For example, 70% left with a reset in 2 days (35% per day) comes before 80% left with a reset in 6 days (13% per day). Ranks decide between accounts within 5 points per day of each other.
+- **When, below the threshold.** Quayflow also moves before the live account reaches the threshold, when another eligible account is clearly ahead: at least 1.5 times and 5 points per day more. The same difference is needed to move back, so it does not switch back and forth. The 5-minute cooldown applies, as for every proactive switch. The reason reads, for example, `weekly balance: work-02 has 70% of its week left, resets in 2 d 0 h (35%/day); work-01 has 40% of its week left, resets in 5 d 0 h (8%/day)`.
+- **The five-hour window still gates.** An account is a target only when its binding window is at least the margin below the threshold.
+- **The mode decides.** Automatic switches, Suggest suggests, Manual does nothing. There is no separate setting.
+- **Home wins.** In a group with a Preferred account, Quayflow does not move below the threshold for weekly balance; [Return home](#return-home) works as before.
+- **Unknown is never room.** An account whose reading has no 7-day window or reset time ranks after the others and never triggers a move; only the general 7-day window is counted, per-model weekly windows still limit through the binding window.
+
 **Idle accounts and expired tokens.** Claude refreshes the live account's login; Quayflow never refreshes the live login. When an idle account's access token expires, Quayflow refreshes that account's saved copy (with Claude's own token service and the login's own scopes) and reads its usage with the new token, so the account stays a candidate for suggestions, automatic switching and recovery. The refresh runs under the same credential lock every switch holds, and only when no environment's login uses the same refresh token; the new login is stored before it is used. If the sign-in service refuses an idle account's saved login, the account is marked for a new sign-in (**Sign in again** in its detail, or `quayflow reauth <account>`).
 
 **Stale readings are never shown as current.** A usage figure is shown only while it is fresh. Otherwise `quayflow status` prints `usage unknown (last read 25 min ago)`, and `/quay` says *reading…* or *usage unknown*, or why the account cannot be read.
@@ -203,7 +212,7 @@ Informational notices (for example that your organization enforces its login) ar
 
 ## Return home
 
-When Quayflow has moved away from a group's Preferred account and that account's window has reset, Automatic mode switches back and Suggest mode suggests it. "Reset" means a fresh reading below the threshold minus the margin. Pin, cooldown, plan compatibility and group conflicts still apply. Without a Preferred account, Quayflow stays on the current account until something triggers a switch. To go back now, open the group in `/quay` and choose **Switch home**: it opens the switch review for the Preferred account.
+When Quayflow has moved away from a group's Preferred account and that account's window has reset, Automatic mode switches back and Suggest mode suggests it. "Reset" means a fresh reading below the threshold minus the margin. Pin, cooldown, plan compatibility and group conflicts still apply. Without a Preferred account, Quayflow stays on the current account until the threshold or [weekly balancing](#modes) triggers a switch. To go back now, open the group in `/quay` and choose **Switch home**: it opens the switch review for the Preferred account.
 
 ## When a request hits a usage limit
 

@@ -1781,3 +1781,89 @@ fn simultaneous_failures_share_one_switch_and_both_retry() {
         assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
     }
 }
+
+/// A reading with a 5h window and a 7d window that resets in `week_resets_in_h` hours.
+fn set_week(e: &Shared, uuid: &str, five: f64, seven: f64, week_resets_in_h: i64) {
+    let mut inner = e.lock();
+    let now = time::now_ms();
+    qf_engine::core::merge_observation(
+        &mut inner.observations,
+        Observation {
+            account: id(uuid),
+            ts: now,
+            windows: vec![
+                Window {
+                    key: "5h".into(),
+                    pct: five,
+                    resets_at: Some(now + 3_600_000),
+                },
+                Window {
+                    key: "7d".into(),
+                    pct: seven,
+                    resets_at: Some(now + week_resets_in_h * 3_600_000),
+                },
+            ],
+            source: "engine".into(),
+        },
+        false,
+    );
+}
+
+#[test]
+fn weekly_balance_below_the_threshold_suggests_then_switches() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    // org (live): 30% 5h, 40% of its week left for 5 days. personal: 70% left for 2 days.
+    set_mode(&e, "suggest");
+    set_week(&e, "uuid-org", 30.0, 60.0, 120);
+    set_week(&e, "uuid-personal", 0.0, 30.0, 48);
+    e.tick();
+    let st = e.state_view(None, None);
+    let sug = st.envs[0].suggestion.clone().expect("a weekly balance suggestion");
+    assert_eq!(sug.to, id("uuid-personal"));
+    assert!(
+        sug.reason
+            .starts_with("weekly balance: personal has 70% of its week left"),
+        "{}",
+        sug.reason
+    );
+    assert_eq!(
+        live(&w.env).as_deref(),
+        Some("uuid-org"),
+        "Suggest never switches by itself"
+    );
+
+    // Weekly use close together: no suggestion, and the decision says why.
+    set_week(&e, "uuid-personal", 0.0, 55.0, 120);
+    e.tick();
+    let st = e.state_view(None, None);
+    assert!(st.envs[0].suggestion.is_none());
+    assert!(
+        st.envs[0].decision.ends_with("weekly use is balanced"),
+        "{}",
+        st.envs[0].decision
+    );
+
+    // Automatic switches on it, through the same path as any proactive switch.
+    set_mode(&e, "automatic");
+    set_week(&e, "uuid-personal", 0.0, 30.0, 48);
+    e.tick();
+    for _ in 0..50 {
+        if live(&w.env).as_deref() == Some("uuid-personal") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+    // The journal records the reason by account id only.
+    let t = std::fs::read_to_string(w.dd.journal()).unwrap();
+    let rec = t
+        .lines()
+        .find(|l| l.contains("weekly balance"))
+        .expect("journal reason");
+    assert!(!rec.contains("personal has"), "label in the journal: {rec}");
+
+    // The cooldown and the hysteresis keep it there: org does not pull it back.
+    e.tick();
+    assert_eq!(live(&w.env).as_deref(), Some("uuid-personal"));
+}

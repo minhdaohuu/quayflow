@@ -198,6 +198,7 @@ fn ranks_break_close_choices_only() {
         window: "5h".into(),
         rank,
         age_s: 0,
+        score: None,
     };
     let r = rank_candidates(vec![
         c("x", 10.0, Rank::Normal),
@@ -424,4 +425,148 @@ fn recovery_soonest_never_counts_a_stale_reading_as_room() {
     // With only the stale account left, nothing is known: no switch.
     w.obs.remove(2);
     assert!(matches!(recovery_target(&w.ctx()), RecoveryTarget::None(_)));
+}
+
+const HOUR: i64 = 60 * MIN;
+const DAY: i64 = 24 * HOUR;
+
+#[test]
+fn weekly_score_is_room_per_hour_with_a_floor() {
+    let o = obs("a", 0, &[("7d", 40.0, Some(NOW + 2 * DAY))]);
+    assert!((weekly_score(&o, NOW).unwrap() - 60.0 / 48.0).abs() < 1e-9);
+    // Resets in 10 minutes: counted as 5 hours.
+    let o = obs("a", 0, &[("7d", 50.0, Some(NOW + 10 * MIN))]);
+    assert!((weekly_score(&o, NOW).unwrap() - 10.0).abs() < 1e-9);
+    // Nothing guessed: no 7d window, no reset, a reset in the past, per-model only.
+    assert_eq!(weekly_score(&obs("a", 0, &[("5h", 10.0, Some(NOW + HOUR))]), NOW), None);
+    assert_eq!(weekly_score(&obs("a", 0, &[("7d", 10.0, None)]), NOW), None);
+    assert_eq!(weekly_score(&obs("a", 0, &[("7d", 10.0, Some(NOW - MIN))]), NOW), None);
+    assert_eq!(
+        weekly_score(&obs("a", 0, &[("7d:Opus", 10.0, Some(NOW + DAY))]), NOW),
+        None
+    );
+}
+
+/// a is live with 40% of its week left for 5 days; b has 70% left for 2 days.
+fn balanced_world() -> World {
+    let mut w = World::new();
+    w.groups[0].accounts.truncate(2);
+    w.obs = vec![
+        obs(
+            "a",
+            0,
+            &[("5h", 30.0, Some(NOW + HOUR)), ("7d", 60.0, Some(NOW + 5 * DAY))],
+        ),
+        obs("b", 5, &[("5h", 0.0, None), ("7d", 30.0, Some(NOW + 2 * DAY))]),
+    ];
+    w
+}
+
+#[test]
+fn balance_moves_to_the_week_lost_soonest_below_the_threshold() {
+    let w = balanced_world();
+    match proactive(&w.ctx()) {
+        Proactive::Switch {
+            to,
+            reason,
+            return_home,
+        } => {
+            assert_eq!(to.as_str(), "b");
+            assert!(!return_home);
+            assert!(
+                reason.starts_with("weekly balance: b has 70% of its week left, resets in 2 d 0 h (35%/day)"),
+                "{reason}"
+            );
+            assert!(
+                reason.contains("a has 40% of its week left, resets in 5 d 0 h (8%/day)"),
+                "{reason}"
+            );
+        }
+        p => panic!("{p:?}"),
+    }
+}
+
+#[test]
+fn balance_needs_a_clear_difference_both_ways() {
+    let mut w = balanced_world();
+    // 1.2 times better: a tie.
+    w.obs[1] = obs("b", 5, &[("5h", 0.0, None), ("7d", 52.0, Some(NOW + 5 * DAY))]);
+    match proactive(&w.ctx()) {
+        Proactive::None(why) => assert!(why.ends_with("weekly use is balanced"), "{why}"),
+        p => panic!("{p:?}"),
+    }
+    // 1.5 times better but less than 5%/day apart (3%/day against 2%/day): a tie.
+    w.obs[0] = obs("a", 0, &[("5h", 30.0, None), ("7d", 86.0, Some(NOW + 7 * DAY))]);
+    w.obs[1] = obs("b", 5, &[("5h", 0.0, None), ("7d", 79.0, Some(NOW + 7 * DAY))]);
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    // After a balancing switch the old account does not pull back.
+    let mut w = balanced_world();
+    w.live = AccountId("b".into());
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+}
+
+#[test]
+fn balance_respects_cooldown_home_and_unknown_data() {
+    let mut w = balanced_world();
+    w.last = Some(NOW - 2 * MIN);
+    match proactive(&w.ctx()) {
+        Proactive::None(why) => assert!(why.contains("weekly balance would move to b, cooldown"), "{why}"),
+        p => panic!("{p:?}"),
+    }
+    // Home wins: a Preferred account in the group turns the balancing trigger off.
+    let mut w = balanced_world();
+    w.groups[0].preferred = Some(AccountId("a".into()));
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    // A live account without a score never balances away.
+    let mut w = balanced_world();
+    w.obs[0].windows[1].resets_at = None;
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    // An unscored candidate never triggers it.
+    let mut w = balanced_world();
+    w.obs[1].windows[1].resets_at = None;
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    // A stale candidate is never room.
+    let mut w = balanced_world();
+    w.obs[1].ts = NOW - 61 * MIN;
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+    // A candidate above threshold minus margin is not a target, whatever its week.
+    let mut w = balanced_world();
+    w.obs[1].windows[0].pct = 80.0;
+    assert_eq!(switch_to(&proactive(&w.ctx())), None);
+}
+
+#[test]
+fn threshold_switch_picks_by_weekly_score_unscored_last() {
+    let mut w = World::new();
+    w.obs = vec![
+        obs("a", 0, &[("5h", 90.0, None), ("7d", 50.0, Some(NOW + 3 * DAY))]),
+        obs("b", 5, &[("5h", 0.0, None), ("7d", 20.0, Some(NOW + 6 * DAY))]),
+        obs("c", 5, &[("5h", 10.0, None), ("7d", 40.0, Some(NOW + DAY))]),
+    ];
+    // b has more room, but c's week is lost sooner (60%/day against 13%/day).
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("c"));
+    // An unscored account ranks after every scored one, even with less usage.
+    w.obs[2] = obs("c", 5, &[("5h", 0.0, None)]);
+    assert_eq!(switch_to(&proactive(&w.ctx())), Some("b"));
+}
+
+#[test]
+fn close_scores_are_a_tie_that_rank_decides() {
+    let c = |id: &str, score: Option<f64>, pct: f64, rank: Rank| Candidate {
+        id: AccountId(id.into()),
+        pct,
+        window: "5h".into(),
+        rank,
+        age_s: 0,
+        score,
+    };
+    let per_day = |d: f64| Some(d / 24.0);
+    let r = rank_by_score(vec![
+        c("x", per_day(30.0), 10.0, Rank::Normal),
+        c("y", per_day(27.0), 10.0, Rank::Preferred),
+        c("z", None, 0.0, Rank::Preferred),
+        c("w", per_day(10.0), 10.0, Rank::Preferred),
+    ]);
+    let ids: Vec<&str> = r.iter().map(|x| x.id.as_str()).collect();
+    assert_eq!(ids, ["y", "x", "w", "z"]);
 }

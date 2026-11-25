@@ -188,6 +188,44 @@ pub struct Candidate {
     pub window: String,
     pub rank: Rank,
     pub age_s: i64,
+    /// Weekly score in percent per hour ([`weekly_score`]); `None` when it cannot be computed.
+    pub score: Option<f64>,
+}
+
+/// Shortest time to reset counted by the weekly score: an account about to reset does not
+/// pull a switch that pays off for only a few minutes.
+pub const SCORE_MIN_HOURS: f64 = 5.0;
+/// A balancing switch needs a candidate whose score is this many times the live account's...
+pub const BALANCE_RATIO: f64 = 1.5;
+/// ...and at least this much higher, in percent per day. Scores closer than this are a tie.
+pub const BALANCE_GAP_PER_DAY: f64 = 5.0;
+
+/// Weekly score of a reading, in percent per hour: the 7d room left divided by the hours
+/// until the 7d window resets (at least [`SCORE_MIN_HOURS`]). The account whose unused weekly
+/// allowance would be lost soonest scores highest. `None` without a 7d window or a future
+/// reset time: nothing is guessed.
+pub fn weekly_score(o: &Observation, now: i64) -> Option<f64> {
+    let w = o.windows.iter().find(|w| w.key == "7d" && w.pct.is_finite())?;
+    let reset = w.resets_at.filter(|r| *r > now)?;
+    let hours = ((reset - now) as f64 / 3_600_000.0).max(SCORE_MIN_HOURS);
+    Some((100.0 - w.pct).max(0.0) / hours)
+}
+
+/// Whether score `a` is clearly higher than `b` (the balancing trigger's hysteresis).
+pub fn clearly_higher(a: f64, b: f64) -> bool {
+    a >= b * BALANCE_RATIO && (a - b) * 24.0 >= BALANCE_GAP_PER_DAY
+}
+
+/// A time span as people read it: "40 min", "5 h", "3 d 4 h".
+pub fn fmt_span(ms: i64) -> String {
+    let min = ms.max(0) / 60_000;
+    if min < 90 {
+        format!("{min} min")
+    } else if min < 48 * 60 {
+        format!("{} h", min / 60)
+    } else {
+        format!("{} d {} h", min / 1440, (min % 1440) / 60)
+    }
 }
 
 /// Rank candidates: lowest binding first; within 10 points of the best, rank decides.
@@ -202,6 +240,26 @@ pub fn rank_candidates(mut c: Vec<Candidate>) -> Vec<Candidate> {
     });
     close.extend(rest);
     close
+}
+
+/// Rank candidates for a proactive switch: scored ones first, highest score first; scores
+/// within [`BALANCE_GAP_PER_DAY`] of the best are a tie that rank decides. Unscored ones follow,
+/// in [`rank_candidates`] order.
+pub fn rank_by_score(c: Vec<Candidate>) -> Vec<Candidate> {
+    let (mut scored, unscored): (Vec<Candidate>, Vec<Candidate>) = c.into_iter().partition(|x| x.score.is_some());
+    let score = |x: &Candidate| x.score.unwrap_or(0.0);
+    let by_score = |a: &Candidate, b: &Candidate| score(b).partial_cmp(&score(a)).unwrap_or(std::cmp::Ordering::Equal);
+    scored.sort_by(by_score);
+    if let Some(best) = scored.first().map(score) {
+        let (mut close, rest): (Vec<Candidate>, Vec<Candidate>) = scored
+            .into_iter()
+            .partition(|x| (best - score(x)) * 24.0 < BALANCE_GAP_PER_DAY);
+        close.sort_by(|a, b| a.rank.cmp(&b.rank).then(by_score(a, b)));
+        close.extend(rest);
+        scored = close;
+    }
+    scored.extend(rank_candidates(unscored));
+    scored
 }
 
 fn rank_in(groups: &[&Group], id: &AccountId) -> Rank {
@@ -271,6 +329,7 @@ fn candidates(ctx: &Ctx, max_pct: f64) -> Vec<Candidate> {
                     window: w.key.clone(),
                     rank: rank_in(&ctx.governing, g),
                     age_s: o.age_ms(ctx.now) / 1000,
+                    score: weekly_score(o, ctx.now),
                 });
             }
         }
@@ -363,12 +422,13 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
     }
 
     if live_w.pct < threshold {
-        return Proactive::None(format!(
+        let below = format!(
             "{live_label} at {:.0}% {} ({} old), below {threshold:.0}%",
             live_w.pct,
             qf_model::window_name(&live_w.key),
             fmt_age(live_obs.age_ms(ctx.now) / 1000)
-        ));
+        );
+        return balance(ctx, live_obs, live_label, threshold - margin, cooldown_left, below);
     }
     if let Some(left) = cooldown_left {
         return Proactive::None(format!(
@@ -378,7 +438,7 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
             left / 1000
         ));
     }
-    let picks = candidates(ctx, threshold - margin);
+    let picks = rank_by_score(candidates(ctx, threshold - margin));
     match picks.first() {
         None => Proactive::None(format!(
             "{live_label} at {:.0}% {}, but no approved account has {:.0}% or less with a fresh observation; continuing",
@@ -401,6 +461,62 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
                 return_home: false,
             }
         }
+    }
+}
+
+/// The weekly balancing trigger, below the threshold: switch when an eligible account's weekly
+/// score is clearly higher than the live account's. Not with a Preferred account in a governing
+/// group (return home decides there), and never on a live account without a score.
+fn balance(
+    ctx: &Ctx,
+    live_obs: &Observation,
+    live_label: &str,
+    max_pct: f64,
+    cooldown_left: Option<i64>,
+    below: String,
+) -> Proactive {
+    if ctx.governing.iter().any(|g| g.preferred.is_some()) {
+        return Proactive::None(below);
+    }
+    let Some(live_score) = weekly_score(live_obs, ctx.now) else {
+        return Proactive::None(below);
+    };
+    let Some(c) = rank_by_score(candidates(ctx, max_pct)).into_iter().next() else {
+        return Proactive::None(below);
+    };
+    let Some(score) = c.score.filter(|s| clearly_higher(*s, live_score)) else {
+        return Proactive::None(format!("{below}; weekly use is balanced"));
+    };
+    let to_label = ctx.account(&c.id).map(|a| a.label.as_str()).unwrap_or("?");
+    if let Some(left) = cooldown_left {
+        return Proactive::None(format!(
+            "{below}; weekly balance would move to {to_label}, cooldown {} s after the last switch",
+            left / 1000
+        ));
+    }
+    let week = |o: &Observation| {
+        o.windows
+            .iter()
+            .find(|w| w.key == "7d")
+            .map(|w| {
+                format!(
+                    "{:.0}% of its week left, resets in {}",
+                    (100.0 - w.pct).max(0.0),
+                    fmt_span(w.resets_at.unwrap_or(ctx.now) - ctx.now)
+                )
+            })
+            .unwrap_or_default()
+    };
+    let to_week = ctx.observation(&c.id).map(week).unwrap_or_default();
+    Proactive::Switch {
+        to: c.id.clone(),
+        reason: format!(
+            "weekly balance: {to_label} has {to_week} ({:.0}%/day); {live_label} has {} ({:.0}%/day)",
+            score * 24.0,
+            week(live_obs),
+            live_score * 24.0
+        ),
+        return_home: false,
     }
 }
 
