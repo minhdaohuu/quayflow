@@ -59,6 +59,8 @@ fn generate(seed: u64) -> World {
             subscription: None,
             rate_limit_tier: None,
             registered_at: 0,
+            signed_in_at: None,
+            renewed_at: None,
             health: r.pick(&[
                 Health::Ok,
                 Health::Ok,

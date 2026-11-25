@@ -195,7 +195,7 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | Method and route | Body / query | Response |
 |---|---|---|
 | `POST /v1/hello` | `HelloRequest` | `HelloResponse` (protocol 1; accepted `[1]`) |
-| `GET /v1/state` | `?sessionId=&cwd=` | `StateView` (each account's `usage` carries every window with its `resetsAt` and, for a fresh reading only, `weeklyPerDay`: the weekly score in % per day) |
+| `GET /v1/state` | `?sessionId=&cwd=` | `StateView` (each account's `usage` carries every window with its `resetsAt` and, for a fresh reading only, `weeklyPerDay`: the weekly score in % per day; and `registeredAt`, `signedInAt` and `renewedAt`: when the account was added, last signed in to through Quayflow, and last issued new tokens by the sign-in service) |
 | `GET /v1/events` | `?since=<seq>&wait=<s, max 25>` | `EventsResponse` (long-poll; past a bounded number of open long-polls it answers at once) |
 | `GET /v1/ready` | `?wait=<s, max 25>` | `{ready}`: whether the first tick has finished (stale readings polled, first decisions made); waits up to `wait` seconds for it, as a bounded long-poll. A session's first request holds on it |
 | `POST /v1/onboarding` | `{"consents": {"engineStart": true, "credentialStorage": true, "terms": true, "signinStartup": false}, "complete": true}` | `OkResponse` |

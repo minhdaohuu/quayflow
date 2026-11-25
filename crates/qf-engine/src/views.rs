@@ -260,6 +260,9 @@ impl Engine {
                     rank: cfg.groups.iter().find(|g| g.contains(&a.id)).map(|g| g.rank_of(&a.id)),
                     org: a.org.clone(),
                     org_name: a.org_name.clone(),
+                    registered_at: a.registered_at,
+                    signed_in_at: a.signed_in_at,
+                    renewed_at: a.renewed_at,
                 }
             })
             .collect();

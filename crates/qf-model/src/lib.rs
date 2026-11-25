@@ -89,6 +89,13 @@ pub struct Account {
     #[serde(default)]
     pub rate_limit_tier: Option<String>,
     pub registered_at: i64,
+    /// When the user last signed in to this account through Quayflow (added or signed in again).
+    #[serde(default)]
+    pub signed_in_at: Option<i64>,
+    /// When the sign-in service last issued new tokens for this account: a refresh (the
+    /// engine's, or Claude's seen in the login files) or a sign-in. Proof the sign-in still works.
+    #[serde(default)]
+    pub renewed_at: Option<i64>,
     #[serde(default)]
     pub health: Health,
     /// Models learned to be unavailable for this account (`model_not_found` after a switch).
@@ -526,6 +533,8 @@ mod tests {
             subscription: None,
             rate_limit_tier: None,
             registered_at: 0,
+            signed_in_at: None,
+            renewed_at: None,
             health: Health::Ok,
             unavailable_models: vec![],
             org_name: None,

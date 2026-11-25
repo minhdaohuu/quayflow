@@ -118,6 +118,16 @@ pub struct AccountView {
     pub org: String,
     #[serde(default)]
     pub org_name: Option<String>,
+    /// When the account was added to Quayflow.
+    #[serde(default)]
+    pub registered_at: i64,
+    /// When the user last signed in to it through Quayflow (unknown for sign-ins before 0.5.0).
+    #[serde(default)]
+    pub signed_in_at: Option<i64>,
+    /// When the sign-in service last issued new tokens for it: the last proof the sign-in works.
+    /// A refresh token has no published expiry, so this is all that can be known ahead of a refusal.
+    #[serde(default)]
+    pub renewed_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

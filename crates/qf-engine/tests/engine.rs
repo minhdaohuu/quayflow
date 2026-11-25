@@ -2248,3 +2248,38 @@ fn an_out_of_range_tuning_in_config_json_is_clamped_not_fatal() {
     let t = e.lock().config.tuning.clone();
     assert_eq!((t.cooldown_s, t.pin_minutes), (3600, 5));
 }
+
+#[test]
+fn claude_renewing_the_live_login_is_recorded_kept_and_lifts_a_set_aside() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let org = id("uuid-org");
+    let view = |e: &Shared| {
+        e.state_view(None, None)
+            .accounts
+            .into_iter()
+            .find(|a| a.id == id("uuid-org"))
+            .unwrap()
+    };
+    // Registering a login found in Claude's files is not a sign-in and proves no renewal.
+    let v = view(&e);
+    assert_eq!((v.signed_in_at, v.renewed_at), (None, None));
+    assert!(v.registered_at > 0);
+    // The stored refresh token was refused earlier; then Claude refreshes the live login.
+    e.lock().config.account_mut(&org).unwrap().health = Health::RefreshRejected;
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    login_files(&w.env, "uuid-org", "O2", "team");
+    e.tick();
+    let v = view(&e);
+    assert!(v.renewed_at.is_some(), "Claude's refresh is a renewal");
+    assert_eq!(v.health, Health::Ok, "new tokens carry a working refresh token");
+    // The same login seen again is not a new renewal.
+    let first = v.renewed_at;
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    e.tick();
+    assert_eq!(view(&e).renewed_at, first);
+    // Kept in config.json across a restart.
+    let e = restart(&w, e);
+    assert_eq!(view(&e).renewed_at, first);
+    assert_eq!(view(&e).health, Health::Ok);
+}

@@ -297,6 +297,8 @@ mod tests {
             subscription: None,
             rate_limit_tier: None,
             registered_at: 0,
+            signed_in_at: None,
+            renewed_at: None,
             health: qf_model::Health::Ok,
             unavailable_models: vec![],
             org_name: None,

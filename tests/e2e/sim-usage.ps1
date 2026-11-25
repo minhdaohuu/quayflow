@@ -245,6 +245,9 @@ try {
     Check 'live b is never refreshed by Quayflow' (-not $l."$TB-r") ''
     $d = (Acct 'd') | ConvertTo-Json -Depth 8 -Compress
     Check 'd shows fresh usage (11% 5h)' ($d -match '"pct":11') $d
+    Check 'idle d: the refresh is recorded as a renewed sign-in' ([bool](Acct 'd').renewedAt) $d
+    $st = Qf status
+    Check 'status shows when d''s sign-in was renewed' ($st -match '(?m)^\s+sign-in renewed (just now|\d+ min ago)') $st
     Qf use d | Out-Null
     Check 'switch to d writes the refreshed login' (WaitFor { (LiveToken) -eq $TD2 -and (LiveRefresh) -eq "$TD-r2" }) "$(LiveToken)"
     # A refused refresh token marks the account for a new sign-in.
@@ -256,6 +259,8 @@ try {
     Qf use d | Out-Null
     $ok = WaitFor { ((Acct 'e') | ConvertTo-Json -Depth 8) -match 'refresh_rejected' } 20
     Check 'refused refresh token: e is marked for a new sign-in' $ok ((Acct 'e') | ConvertTo-Json -Depth 8 -Compress)
+    $st = Qf status
+    Check 'status tells what to run for e''s refused sign-in' ($st -match 'sign-in refused by the sign-in service: sign in again \(quayflow reauth e\)') $st
 
     # 10. Weekly balancing (no home account, Automatic): below the threshold, the environment
     # moves to the account whose weekly allowance would be lost soonest.

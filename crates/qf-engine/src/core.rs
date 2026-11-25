@@ -889,7 +889,16 @@ impl Engine {
         match loaded {
             Ok(stored) if stored.same_tokens(login) => Ok(false),
             Ok(stored) if stored.expires_at().unwrap_or(0) > login.expires_at().unwrap_or(0) => Ok(false),
-            Ok(_) | Err(qf_vault::VaultError::NotFound) => match self.vault.store(id.as_str(), login) {
+            // Newer tokens than the stored copy: the sign-in service issued them (Claude's
+            // own refresh, or a sign-in in Claude), so the sign-in works.
+            Ok(_) => match self.vault.store(id.as_str(), login) {
+                Ok(()) => {
+                    self.note_renewed(inner, id);
+                    Ok(true)
+                }
+                Err(e) => Err(format!("protected copy not stored: {e}")),
+            },
+            Err(qf_vault::VaultError::NotFound) => match self.vault.store(id.as_str(), login) {
                 Ok(()) => Ok(true),
                 Err(e) => Err(format!("protected copy not stored: {e}")),
             },
@@ -905,6 +914,31 @@ impl Engine {
                 );
                 Err(format!("protected copy unreadable: {e}"))
             }
+        }
+    }
+
+    /// The sign-in service has just issued new tokens for this account: record the time (kept
+    /// in config.json, so it survives a restart) and lift a set-aside that a dead refresh token
+    /// caused, since the new login carries a working one.
+    pub(crate) fn note_renewed(&self, inner: &mut Inner, id: &AccountId) {
+        let Some(a) = inner.config.account_mut(id) else {
+            return;
+        };
+        a.renewed_at = Some(now_ms());
+        let lifted = a.health == Health::RefreshRejected;
+        if matches!(a.health, Health::StaleAccess | Health::RefreshRejected) {
+            a.health = Health::Ok;
+        }
+        if lifted {
+            self.record(inner, "login.renewed_after_rejection", json!({"account": id}), true);
+        }
+        if let Err(e) = self.save_config(inner) {
+            self.log.log(
+                "warn",
+                "config.save_failed",
+                json!({"what": "renewed_at", "error": e}),
+                &[],
+            );
         }
     }
 
@@ -1202,11 +1236,7 @@ impl Engine {
                 match stored {
                     Ok(()) => {
                         self.record(&inner, "login.refreshed", json!({"account": id}), true);
-                        if let Some(a) = inner.config.account_mut(id) {
-                            if a.health == Health::StaleAccess {
-                                a.health = Health::Ok;
-                            }
-                        }
+                        self.note_renewed(&mut inner, id);
                         Some(fresh)
                     }
                     Err(e) => {
@@ -1233,6 +1263,11 @@ impl Engine {
             Err(qf_provider::RefreshError::Rejected(m)) => {
                 if let Some(a) = inner.config.account_mut(id) {
                     a.health = Health::RefreshRejected;
+                }
+                // Kept across a restart, so the account stays set aside and says why.
+                if let Err(e) = self.save_config(&inner) {
+                    self.log
+                        .log("warn", "config.save_failed", json!({"what": "health", "error": e}), &[]);
                 }
                 self.record(
                     &inner,

@@ -172,6 +172,7 @@ pub fn status(v: &Value) {
         if !detail.trim().is_empty() {
             outln!("    {}", detail.trim_start_matches(" — "));
         }
+        outln!("    {}", sign_in_line(a, now));
     }
     if !suggested.is_empty() {
         outln!("\n▶ live · ★ suggested (quayflow accept)");
@@ -213,6 +214,57 @@ fn usage_line(u: &Value, now: i64) -> String {
     }
     parts.push(format!("{} old", age(age_s)));
     parts.join(" · ")
+}
+
+/// When the sign-in was last shown to work, and how old it is:
+/// `sign-in renewed 3 h ago · signed in 12 d ago`. A refresh token has no published expiry, so
+/// there is no countdown; a refused one says what to run.
+fn sign_in_line(a: &Value, now: i64) -> String {
+    let ago = |k: &str| a[k].as_i64().filter(|t| *t > 0).map(|t| ago_text(now - t));
+    let renewed = ago("renewedAt");
+    let since = match (ago("signedInAt"), ago("registeredAt")) {
+        (Some(s), _) => format!("signed in {s}"),
+        (None, Some(r)) => format!("added {r}"),
+        (None, None) => String::new(),
+    };
+    let label = a["label"].as_str().unwrap_or("?");
+    // A label the shell would read as more than one plain word is given by account id.
+    let plain = !label.is_empty() && label.chars().all(|c| c.is_alphanumeric() || "-_.".contains(c));
+    let arg = if plain {
+        label.to_string()
+    } else {
+        a["id"].as_str().unwrap_or("?").to_string()
+    };
+    let head = match a["health"].as_str() {
+        Some("refresh_rejected") => format!(
+            "sign-in refused by the sign-in service{}: sign in again (quayflow reauth {arg})",
+            renewed
+                .as_ref()
+                .map(|r| format!(", last renewed {r}"))
+                .unwrap_or_default()
+        ),
+        Some("vault_error") => format!("protected copy unusable: sign in again (quayflow reauth {arg})"),
+        _ => match renewed {
+            Some(r) => format!("sign-in renewed {r}"),
+            None => "sign-in renewal not seen yet".to_string(),
+        },
+    };
+    if since.is_empty() {
+        head
+    } else {
+        format!("{head} · {since}")
+    }
+}
+
+/// How long ago, coarsely: "just now", "40 min ago", "5 h ago", "12 d ago".
+fn ago_text(ms: i64) -> String {
+    let min = ms.max(0) / 60_000;
+    match min {
+        0 => "just now".into(),
+        1..=89 => format!("{min} min ago"),
+        90..=2879 => format!("{} h ago", min / 60),
+        _ => format!("{} d ago", min / 1440),
+    }
 }
 
 /// An account's label from a state view, or `#id` when it is not registered.
@@ -325,6 +377,28 @@ mod tests {
         assert_eq!(
             usage_line(&u, NOW),
             "5h 62% ↻ 2 h · 7d 40% ↻ 3 d 4 h · 7d Opus 70% (reset passed) · 7d Sonnet 5% · weekly 35%/day · 2 min old"
+        );
+    }
+
+    #[test]
+    fn sign_in_line_shows_the_last_renewal_and_what_to_run_when_refused() {
+        let a = json!({"id": "a1", "label": "work", "health": "ok", "registeredAt": NOW - 40 * 24 * H,
+            "signedInAt": NOW - 12 * 24 * H, "renewedAt": NOW - 3 * H});
+        assert_eq!(sign_in_line(&a, NOW), "sign-in renewed 3 h ago · signed in 12 d ago");
+        // Signed in before the time was kept: the add time instead, and no renewal yet.
+        let a = json!({"id": "a1", "label": "work", "health": "stale_access", "registeredAt": NOW - 40 * 24 * H});
+        assert_eq!(sign_in_line(&a, NOW), "sign-in renewal not seen yet · added 40 d ago");
+        let a = json!({"id": "a1", "label": "work", "health": "refresh_rejected", "registeredAt": NOW - 40 * 24 * H,
+            "renewedAt": NOW - 9 * 24 * H});
+        assert_eq!(
+            sign_in_line(&a, NOW),
+            "sign-in refused by the sign-in service, last renewed 9 d ago: sign in again (quayflow reauth work) · added 40 d ago"
+        );
+        // A label the shell would split is given by id.
+        let a = json!({"id": "a1", "label": "my work", "health": "vault_error"});
+        assert_eq!(
+            sign_in_line(&a, NOW),
+            "protected copy unusable: sign in again (quayflow reauth a1)"
         );
     }
 

@@ -25,7 +25,7 @@ import {
   actUnassign,
   actUnpin,
 } from './actions'
-import { account, age, clock, healthText, isTerminal, label, myEnv, myGroup, orgName, pathCovers, pct, persistentWarnings, transitionWords, when, windowLine, windowName } from './format'
+import { account, age, clock, healthText, isTerminal, label, myEnv, myGroup, orgName, pathCovers, pct, persistentWarnings, signInText, transitionWords, when, windowLine, windowName } from './format'
 import { Conflict, OffView, Onboarding, SwitchProgress, SwitchReview, Trust, afterConfirm, afterRegister } from './flows'
 import { HomeBlock, Operations, Review } from './review'
 import { GroupDetail, draftOf } from './groupedit'
@@ -552,6 +552,8 @@ function AccountDetail($: EngineInterface, c: Ctx, id: string): JSX.Element {
         KV(c, 'Plan', `${a.kind}${a.subscription ? ` \u00b7 ${a.subscription}` : ''}`),
         KV(c, 'Groups', `${a.groups.join(', ') || 'none'}${home ? ' \u00b7 home' : a.rank && a.rank !== 'normal' ? ` \u00b7 ${a.rank}` : ''}`),
         KV(c, 'Live in', isLive ? `${env!.id} (here)` : a.liveIn.length ? a.liveIn.join(', ') : 'none'),
+        KV(c, 'Sign-in', signInText(a, Date.now())),
+        Hint(c, 'A sign-in has no known end date: it lasts until the sign-in service refuses it. "Renewed" is the last time the service issued new tokens for this account, which shows the sign-in still works.'),
         Hint(c, `Account #${a.id}. The full identity is shown here locally; it is never written to logs or reports.`),
       )}
       {Section(

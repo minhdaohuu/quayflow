@@ -186,6 +186,11 @@ export type AccountView = {
   /** Opaque organization hash, and its local display name. */
   org: string
   orgName?: string | null
+  /** When it was added; when the person last signed in to it through Quayflow; when the sign-in
+   * service last issued it new tokens (the last proof the sign-in works). Epoch ms. */
+  registeredAt?: number
+  signedInAt?: number | null
+  renewedAt?: number | null
 }
 
 export type GroupView = Group & { isDefault: boolean; mixed: boolean; mixedCovered: boolean }

@@ -346,10 +346,14 @@ If your organization enforces its login (`forceLoginOrgUUID` or `forceLoginMetho
   ```text
   ▶ work-01          personal     live in default
       5h 30% ↻ 59 min · 7d 60% ↻ 4 d 23 h · weekly 8%/day · 12 s old
+      sign-in renewed 2 h ago · signed in 12 d ago
   ★ work-02          personal
       5h 5% ↻ 9 min · 7d 30% ↻ 47 h · weekly 35%/day · 4 min old
       5% 5h (4 min old); weekly 35%/day
+      sign-in renewed 5 h ago · added 40 d ago
   ```
+
+  The last line of each account is about its sign-in. A sign-in has no known end date: Claude's login records when its access token expires (about 8 hours, renewed without you), but not when its refresh token stops working, so Quayflow cannot count down to a new sign-in. It shows instead when the sign-in service last issued new tokens for the account (*renewed*: the sign-in still worked then) and when you signed in (*added* for an account registered before v0.5.0 or from a login already in Claude). When the service refuses an account's sign-in, the line says `sign-in refused by the sign-in service: sign in again (quayflow reauth <account>)`. The same appears as **Sign-in** in the account's detail in `/quay`.
 - `quayflow pause` and `quayflow resume` pause and resume automation. Manual switches keep working. Resume ends only a pause you made (or a hold left by an unresolved switch). When automation is paused for another reason (an unknown login, another switcher, a signed-out or inconsistent login, an incompatible Claude version), `/quay` names that reason and its remedy instead of offering Resume.
 - `quayflow stop` stops the engine on purpose. The Mod then does not restart it until you run `quayflow start`. Stopping the engine never stops Claude: without the engine, Claude works exactly as it would without Quayflow.
 - `/quay` Activity shows recent decisions and the last switches; open one for its local trail (opaque ids and sanitized reasons). **Report**, then **Build preview**, builds the sanitized report without saving it; you review it, tick *I reviewed this report before saving it for sharing*, then **Save locally**. `/quay report` prints the preview without saving (`/quay report --save` saves), and `quayflow report --preview` does the same in a terminal; `quayflow report` saves at once. Nothing is sent automatically.

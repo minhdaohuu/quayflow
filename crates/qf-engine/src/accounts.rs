@@ -285,6 +285,8 @@ impl Engine {
             subscription: login.subscription().map(String::from),
             rate_limit_tier: login.rate_limit_tier().map(String::from),
             registered_at: now_ms(),
+            signed_in_at: None,
+            renewed_at: None,
             health: Health::Ok,
             unavailable_models: vec![],
             org_name: login.org_name(),
@@ -407,6 +409,8 @@ impl Engine {
                         subscription: p.login.subscription().map(String::from),
                         rate_limit_tier: p.login.rate_limit_tier().map(String::from),
                         registered_at: now_ms(),
+                        signed_in_at: None,
+                        renewed_at: None,
                         health: Health::Ok,
                         unavailable_models: vec![],
                         org_name: p.login.org_name(),
@@ -642,6 +646,8 @@ impl Engine {
                 .map_err(|e| ApiErr::new(500, "vault", e.to_string()))?;
             if let Some(a) = inner.config.account_mut(expected) {
                 a.health = Health::Ok;
+                a.signed_in_at = Some(now_ms());
+                a.renewed_at = Some(now_ms());
             }
             inner.schedule.poke(expected);
             msg = format!("{} signed in again", inner.config.label(expected));
@@ -651,6 +657,8 @@ impl Engine {
                 .map_err(|e| ApiErr::new(500, "vault", e.to_string()))?;
             if let Some(a) = inner.config.account_mut(&id_acc) {
                 a.health = Health::Ok;
+                a.signed_in_at = Some(now_ms());
+                a.renewed_at = Some(now_ms());
             }
             msg = format!(
                 "already registered as \"{}\"; its protected copy was updated (not added as extra capacity)",
@@ -675,6 +683,8 @@ impl Engine {
                 subscription: login.subscription().map(String::from),
                 rate_limit_tier: login.rate_limit_tier().map(String::from),
                 registered_at: now_ms(),
+                signed_in_at: Some(now_ms()),
+                renewed_at: Some(now_ms()),
                 health: Health::Ok,
                 unavailable_models: vec![],
                 org_name: login.org_name(),

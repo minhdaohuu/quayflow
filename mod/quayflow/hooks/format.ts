@@ -112,6 +112,32 @@ export function windowLine(w: Window): string {
   return `${windowName(w.key)}: ${pct(w.pct)}${reset}`
 }
 
+/** How long ago, coarsely: "just now", "40 min ago", "5 h ago", "12 d ago". */
+export function agoText(ms: number): string {
+  const min = Math.floor(Math.max(0, ms) / 60000)
+  if (min < 1) return 'just now'
+  if (min < 90) return `${min} min ago`
+  if (min < 2880) return `${Math.floor(min / 60)} h ago`
+  return `${Math.floor(min / 1440)} d ago`
+}
+
+/** When the sign-in last worked and how old it is. A refresh token has no published expiry, so
+ * there is no countdown: "renewed 3 h ago · signed in 12 d ago". */
+export function signInText(a: { health: Health; registeredAt?: number; signedInAt?: number | null; renewedAt?: number | null }, now: number): string {
+  const ago = (t?: number | null) => (t && t > 0 ? agoText(now - t) : null)
+  const renewed = ago(a.renewedAt)
+  const signed = ago(a.signedInAt)
+  const added = ago(a.registeredAt)
+  const since = signed ? `signed in ${signed}` : added ? `added ${added}` : null
+  const head =
+    a.health === 'refresh_rejected'
+      ? `refused${renewed ? `, last renewed ${renewed}` : ''}`
+      : renewed
+        ? `renewed ${renewed}`
+        : 'renewal not seen yet'
+  return since ? `${head} \u00b7 ${since}` : head
+}
+
 export function healthText(h: Health): string {
   switch (h) {
     case 'ok':

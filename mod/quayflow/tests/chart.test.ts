@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { ACCENT, RED, base64, fleet, gauge, heat, track } from '../hooks/chart'
 import { rankPicks } from '../hooks/groupedit'
+import { agoText, signInText } from '../hooks/format'
 
 describe('chart cells', () => {
   test('base64 matches the standard encoding', () => {
@@ -71,5 +72,18 @@ describe('group editor what-if ranking (as qf_policy::rank_by_score)', () => {
   })
   test('within 10 points of usage, rank decides', () => {
     expect(rankPicks([p('a', 10, 30, 'backup'), p('b', 15, 29)]).map(x => x.id)).toEqual(['b', 'a'])
+  })
+})
+
+describe('sign-in times', () => {
+  const NOW = 1_000_000_000_000
+  const H = 3_600_000
+  test('the last renewal and the sign-in age; no countdown', () => {
+    expect(signInText({ health: 'ok', registeredAt: NOW - 40 * 24 * H, signedInAt: NOW - 12 * 24 * H, renewedAt: NOW - 3 * H }, NOW)).toBe('renewed 3 h ago \u00b7 signed in 12 d ago')
+    expect(signInText({ health: 'stale_access', registeredAt: NOW - 40 * 24 * H }, NOW)).toBe('renewal not seen yet \u00b7 added 40 d ago')
+    expect(signInText({ health: 'refresh_rejected', registeredAt: NOW - 2 * H, renewedAt: NOW - 30 * 60000 }, NOW)).toBe('refused, last renewed 30 min ago \u00b7 added 2 h ago')
+    expect(signInText({ health: 'ok' }, NOW)).toBe('renewal not seen yet')
+    expect(agoText(20_000)).toBe('just now')
+    expect(agoText(-5)).toBe('just now')
   })
 })

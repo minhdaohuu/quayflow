@@ -239,6 +239,7 @@ describe('registration', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'tab:accounts' })
     await ui.press({ key: 'acct:b2b2b2b2b2b2' })
+    expect(await ui.find({ type: 'Text', text: /renewal not seen yet|renewed .* ago/ })).toBeDefined()
     await ui.press({ key: 'ad-reauth' })
     await ui.press({ key: 'add-continue' })
     expect(await ui.find({ type: 'Text', text: /You signed in to a different account/ })).toBeDefined()
