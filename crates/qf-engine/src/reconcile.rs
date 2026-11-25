@@ -8,7 +8,20 @@ use std::collections::BTreeMap;
 
 /// Resolve unfinished transitions, then restore the proactive cooldown; the journal is read once.
 pub fn reconcile(engine: &Engine) {
-    let records = engine.journal.read_all();
+    let records = match engine.journal.try_read_all() {
+        Ok(r) => r,
+        Err(e) => {
+            // Not "no switches": say so. (A switch writes the journal first, so while it
+            // cannot be read, it most likely cannot be written either and no switch starts.)
+            engine.log.log(
+                "warn",
+                "journal.unreadable",
+                json!({"error": e.kind().to_string(), "effect": "interrupted switches not checked; cooldown not restored"}),
+                &[],
+            );
+            vec![]
+        }
+    };
     resolve_open(engine, &records);
     restore_cooldown(engine, &records);
 }

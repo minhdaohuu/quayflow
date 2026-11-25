@@ -124,7 +124,7 @@ fn stale_is_never_zero() {
     // Stale live observation: no decision at all.
     w.obs = vec![obs("a", 6, &[("5h", 99.0, None)]), obs("b", 1, &[("5h", 0.0, None)])];
     match proactive(&w.ctx()) {
-        Proactive::None(why) => assert!(why.contains("not deciding"), "{why}"),
+        Proactive::Unknown(why) => assert!(why.contains("not deciding"), "{why}"),
         p => panic!("{p:?}"),
     }
 }

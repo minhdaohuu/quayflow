@@ -410,6 +410,10 @@ impl Config {
                     .into(),
             );
         }
+        // The same range the API and /quay accept; a hand-edited value is held to it too.
+        if t.cooldown_s > 3600 {
+            return Err("cooldownS must be 0-3600".into());
+        }
         if t.lock_wait_s == 0 || t.lock_wait_s > 60 {
             return Err("lockWaitS must be 1-60".into());
         }
@@ -494,6 +498,11 @@ mod tests {
         let mut c = Config::default();
         c.tuning.live_poll_s = 5;
         assert!(c.validate().is_err());
+        let mut c = Config::default();
+        c.tuning.cooldown_s = 3601;
+        assert!(c.validate().unwrap_err().contains("cooldownS"));
+        c.tuning.cooldown_s = 3600;
+        assert!(c.validate().is_ok());
     }
 
     #[test]

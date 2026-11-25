@@ -11,6 +11,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - The 5-minute cooldown after a switch now survives an engine restart, including a switch interrupted by a crash after its write. Before, a restarted engine could switch again at once. A clock that went back no longer holds switching for longer than one cooldown.
 - After a crash during a switch in a lane named like an account label, the restarted engine checks that lane. Before, the journal stored the lane's name as the account id, and the engine checked the default environment instead and could pause its automation by mistake.
 - With a threshold of 100% and margin 0, return home no longer switches to a Preferred account that is at its usage limit.
+- In Suggest mode, a suggestion that went away for a moment and comes back for the same account within 30 minutes is no longer announced again in the transcript and as a notice. While the live account's usage is briefly unknown, a suggestion already shown stays (up to 15 minutes) instead of disappearing.
+- A `cooldownS` above 3600 in a hand-edited `config.json` is refused, as it already was in `/quay` and the API.
 
 ## [0.4.0] - 2026-11-10
 

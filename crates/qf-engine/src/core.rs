@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 
 pub type Shared = Arc<Engine>;
 
+/// A suggestion for the same account within this time of the last one keeps its id: the Mod
+/// announces it once, not at every comeback after a one-tick gap.
+pub const QUIET_COMEBACK_MS: i64 = 30 * 60_000;
+
 #[derive(Debug)]
 pub struct EnvState {
     pub env: Env,
@@ -33,6 +37,11 @@ pub struct EnvState {
     /// An unpin received while this transition was still in progress: it must not pin on success.
     pub unpinned_transition: Option<String>,
     pub suggestion: Option<Suggestion>,
+    /// The last proactive suggestion shown here: its account, id and when it was last decided.
+    /// The same account suggested again within [`QUIET_COMEBACK_MS`] keeps its id, so the Mod
+    /// does not announce it again. In memory only: after a restart a comeback is announced
+    /// once more, which is harmless.
+    pub last_suggested: Option<(AccountId, String, i64)>,
     pub adoption: Vec<ClientAdoption>,
     pub sessions: Vec<SessionInfo>,
     pub decision: String,
@@ -67,6 +76,7 @@ impl EnvState {
             pin: None,
             unpinned_transition: None,
             suggestion: None,
+            last_suggested: None,
             adoption: vec![],
             sessions: vec![],
             decision: "starting".into(),
@@ -841,6 +851,7 @@ impl Engine {
         st.external_changes.retain(|t| now - t < 10 * 60_000);
         st.external_changes.push(now);
         st.suggestion = None;
+        st.last_suggested = None;
         st.pin = None;
         let repeated = st.external_changes.len() >= 2;
         if repeated {
@@ -1396,6 +1407,24 @@ impl Engine {
         let decision = qf_policy::proactive(&ctx);
         drop(ctx);
         match decision {
+            qf_policy::Proactive::Unknown(why) => {
+                // Usage unknown says nothing new: a suggestion stays until fresh data decides,
+                // at most 15 minutes after it was last decided (accepting re-checks anyway).
+                let st = inner.envs.get_mut(env).expect("env");
+                st.decision = why;
+                let now = now_ms();
+                let last_decided = |s: &Suggestion| match &st.last_suggested {
+                    Some((to, id, at)) if *to == s.to && *id == s.id => (*at).max(s.ts),
+                    _ => s.ts,
+                };
+                if st
+                    .suggestion
+                    .as_ref()
+                    .is_some_and(|s| now - last_decided(s) > 15 * 60_000)
+                {
+                    st.suggestion = None;
+                }
+            }
             qf_policy::Proactive::None(why) => {
                 let st = inner.envs.get_mut(env).expect("env");
                 st.decision = why;
@@ -1422,11 +1451,18 @@ impl Engine {
                         inner.envs.get_mut(env).expect("env").decision = format!("Manual mode: {reason}");
                     }
                     Mode::Suggest => {
+                        let now = now_ms();
                         let st = inner.envs.get(env).expect("env");
                         if st.suggestion.as_ref().map(|s| &s.to) != Some(&to) {
                             let from = st.live.clone();
+                            // The same account again soon after: the same suggestion, told once.
+                            let comeback = st
+                                .last_suggested
+                                .as_ref()
+                                .filter(|(a, _, at)| *a == to && now - at <= QUIET_COMEBACK_MS)
+                                .map(|(_, id, _)| id.clone());
                             let s = Suggestion {
-                                id: random_hex(6),
+                                id: comeback.clone().unwrap_or_else(|| random_hex(6)),
                                 ts: now_ms(),
                                 env: env.clone(),
                                 from,
@@ -1438,21 +1474,29 @@ impl Engine {
                                 },
                                 reason: reason.clone(),
                             };
-                            self.record(
-                                &inner,
-                                "suggest",
-                                json!({"env": env, "to": to, "reason": reason}),
-                                false,
-                            );
-                            let text = format!(
-                                "Suggest switching to {}: {reason}. /quay accept",
-                                inner.config.label(&to)
-                            );
-                            let st = inner.envs.get_mut(env).expect("env");
-                            st.suggestion = Some(s);
-                            self.emit(&mut inner, "suggestion", Some(env), &text);
+                            if comeback.is_some() {
+                                inner.envs.get_mut(env).expect("env").suggestion = Some(s);
+                                self.signal("state");
+                            } else {
+                                self.record(
+                                    &inner,
+                                    "suggest",
+                                    json!({"env": env, "to": to, "reason": reason}),
+                                    false,
+                                );
+                                let text = format!(
+                                    "Suggest switching to {}: {reason}. /quay accept",
+                                    inner.config.label(&to)
+                                );
+                                inner.envs.get_mut(env).expect("env").suggestion = Some(s);
+                                self.emit(&mut inner, "suggestion", Some(env), &text);
+                            }
                         }
-                        inner.envs.get_mut(env).expect("env").decision = format!("suggesting: {reason}");
+                        let st = inner.envs.get_mut(env).expect("env");
+                        if let Some(s) = &st.suggestion {
+                            st.last_suggested = Some((s.to.clone(), s.id.clone(), now));
+                        }
+                        st.decision = format!("suggesting: {reason}");
                     }
                     Mode::Automatic => {
                         inner.envs.get_mut(env).expect("env").decision = reason.clone();

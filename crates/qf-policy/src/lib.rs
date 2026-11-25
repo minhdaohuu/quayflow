@@ -272,6 +272,9 @@ fn rank_in(groups: &[&Group], id: &AccountId) -> Rank {
 pub enum Proactive {
     /// Nothing to do, with the explanation shown in /quay.
     None(String),
+    /// No decision: the live account's usage is unknown (no reading, or a stale one). Says
+    /// nothing about whether a switch is needed, so a suggestion already made may stay.
+    Unknown(String),
     Switch {
         to: AccountId,
         reason: String,
@@ -393,7 +396,7 @@ pub fn proactive(ctx: &Ctx) -> Proactive {
 
     let (live_obs, live_w) = match ctx.fresh_binding(live) {
         Ok(v) => v,
-        Err(e) => return Proactive::None(format!("{live_label}: {}; not deciding on unknown data", e.explain())),
+        Err(e) => return Proactive::Unknown(format!("{live_label}: {}; not deciding on unknown data", e.explain())),
     };
 
     if pin_holds(ctx) {

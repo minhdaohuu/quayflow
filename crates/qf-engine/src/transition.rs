@@ -166,6 +166,8 @@ impl Engine {
             if st.suggestion.as_ref().is_some_and(|s| &s.to == to) {
                 st.suggestion = None;
             }
+            // A switch is a new situation: a later suggestion is news again.
+            st.last_suggested = None;
             let text = format!("Switching to {} ({}): {reason}", account.label, how_text(how));
             self.emit(&mut inner, "transition", Some(env), &text);
         }

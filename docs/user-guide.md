@@ -142,6 +142,8 @@ Each group has a mode. When several groups govern an environment, the most restr
 | Suggest (groups you create start here) | Shows a suggested account in the status line; `/quay accept` switches | Records a suggestion; no prompt, no pause, no switch |
 | **Automatic** (the `Default` group starts here) | Switches by itself under the group's rules | Switches, returns home and recovers from usage limits |
 
+**A suggestion is told once.** In Suggest mode a suggestion is written in the transcript with a short notice once. If it goes away for a moment and the same account is suggested again within 30 minutes, it comes back quietly in the status line. While the live account's usage is unknown (for example during a slower reading pace), a suggestion already shown stays for up to 15 minutes; `/quay accept` checks fresh usage again before it switches.
+
 **Unattended headless jobs need Automatic mode on their group.** In Suggest mode a headless job never switches, and a usage limit ends or pauses it exactly as Claude would without Quayflow.
 
 The `Default` group of a new installation starts in Automatic: starting the engine on the welcome screen, which says so, is the approval. An existing configuration keeps its modes. A group you create starts in Suggest, and turning on Automatic for it needs explicit approval once: `quayflow mode automatic --group <G> --approve` (or the Groups tab in `/quay`). To decide each switch yourself, run `quayflow mode suggest --group Default`.

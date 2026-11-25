@@ -1968,3 +1968,92 @@ fn restart_cooldown_edges() {
     let t = e.lock().envs[&EnvId::default_env()].last_proactive.unwrap();
     assert!(t <= time::now_ms(), "a switch time ahead of the clock was kept");
 }
+
+#[test]
+fn a_suggestion_that_comes_back_is_told_once_and_survives_unknown_data() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    let env = EnvId::default_env();
+    let suggest_records = || {
+        std::fs::read_to_string(w.dd.journal())
+            .unwrap()
+            .lines()
+            .filter(|l| l.contains("\"event\":\"suggest\""))
+            .count()
+    };
+    let suggestion_id = |e: &Shared| {
+        e.state_view(None, None).envs[0]
+            .suggestion
+            .as_ref()
+            .map(|s| s.id.clone())
+    };
+    set_mode(&e, "suggest");
+    set_week(&e, "uuid-org", 30.0, 60.0, 120);
+    set_week(&e, "uuid-personal", 0.0, 30.0, 48);
+    e.tick();
+    let first = suggestion_id(&e).expect("a suggestion");
+    assert_eq!(suggest_records(), 1);
+
+    // Gone for a tick (weekly use close), then back: the same id, told once.
+    set_week(&e, "uuid-personal", 0.0, 55.0, 120);
+    e.tick();
+    assert_eq!(suggestion_id(&e), None);
+    set_week(&e, "uuid-personal", 0.0, 30.0, 48);
+    e.tick();
+    assert_eq!(suggestion_id(&e).as_deref(), Some(first.as_str()));
+    assert_eq!(suggest_records(), 1, "a comeback is not recorded or announced again");
+
+    // The live reading goes stale: the suggestion stays while usage is only unknown...
+    let age = |e: &Shared, uuid: &str, ago_ms: i64| {
+        let mut inner = e.lock();
+        let o = inner.observations.iter_mut().find(|o| o.account == id(uuid)).unwrap();
+        o.ts = time::now_ms() - ago_ms;
+    };
+    age(&e, "uuid-org", 10 * 60_000);
+    e.tick();
+    let st = e.state_view(None, None);
+    assert!(
+        st.envs[0].decision.contains("not deciding on unknown data"),
+        "{}",
+        st.envs[0].decision
+    );
+    assert_eq!(suggestion_id(&e).as_deref(), Some(first.as_str()));
+    // ...for at most 15 minutes after it was last decided.
+    {
+        let mut inner = e.lock();
+        let st = inner.envs.get_mut(&env).unwrap();
+        st.last_suggested.as_mut().unwrap().2 -= 16 * 60_000;
+        st.suggestion.as_mut().unwrap().ts -= 16 * 60_000;
+    }
+    e.tick();
+    assert_eq!(suggestion_id(&e), None);
+
+    // Fresh data again, more than 30 minutes after it was last shown: told again, a new id.
+    e.lock().envs.get_mut(&env).unwrap().last_suggested.as_mut().unwrap().2 -= 15 * 60_000;
+    set_week(&e, "uuid-org", 30.0, 60.0, 120);
+    e.tick();
+    let again = suggestion_id(&e).expect("a suggestion");
+    assert_ne!(again, first);
+    assert_eq!(suggest_records(), 2);
+}
+
+#[test]
+fn an_unreadable_journal_is_logged_not_read_as_no_switches() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    drop(e);
+    // A folder where the journal file should be: reading it fails with an error that is not
+    // "not found".
+    let _ = std::fs::remove_file(w.dd.journal());
+    std::fs::create_dir_all(w.dd.journal()).unwrap();
+    let j = qf_engine::journal::Journal::new(w.dd.journal());
+    assert!(j.try_read_all().is_err());
+    let e = Engine::new(w.dd.clone(), w.env.clone(), true).unwrap();
+    let logs: String = std::fs::read_dir(w.dd.logs())
+        .unwrap()
+        .flatten()
+        .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
+        .collect();
+    assert!(logs.contains("journal.unreadable"), "no warning logged");
+    drop(e);
+}
