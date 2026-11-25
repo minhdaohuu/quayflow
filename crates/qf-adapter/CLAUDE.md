@@ -8,3 +8,4 @@ This crate writes Claude Code's live login. A bug here destroys or leaks a user'
 - **Test the outside world's real output.** `security -w` prints hex when a byte is not printable ASCII; fixtures include non-ASCII. New Keychain behavior gets a case in `login.rs` `keychain_faults` (fake `security`, `tests-support/fake-security.py`; add a fault there when needed).
 - **Never the user's Keychain item.** Only the real `~/.claude` maps to the bare `Claude Code-credentials`; tests use throwaway hashed items or the fake. Run tests with `QUAYFLOW_KEYCHAIN=off` unless the work is on the Keychain.
 - Secrets go on stdin, never argv; errors never echo a token or the hex payload.
+- Tests that write a program and run it run it through its interpreter (`python3 <script>`): on Linux, executing a file just written fails with ETXTBSY when another test thread starts a process at the same moment.

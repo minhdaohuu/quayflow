@@ -147,17 +147,22 @@ pub(crate) fn faked() -> bool {
     }
 }
 
-fn program() -> std::path::PathBuf {
+fn program() -> Command {
+    // The fake is run by its interpreter, not executed itself: a test writes it just before,
+    // and on Linux another test thread starting a process can still hold it open for writing
+    // for a moment, so executing it fails with "Text file busy" (ETXTBSY).
     #[cfg(test)]
     if let Some(p) = FAKE.with(|f| f.borrow().clone()) {
-        return p;
+        let mut c = Command::new("python3");
+        c.arg(p);
+        return c;
     }
-    std::path::PathBuf::from(SECURITY)
+    Command::new(SECURITY)
 }
 
 /// Run `security` with an optional stdin, giving up after `CALL_TIMEOUT`.
 fn run(args: &[&str], stdin: Option<&str>) -> Result<(i32, String, String), String> {
-    let mut child = Command::new(program())
+    let mut child = program()
         .args(args)
         .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
