@@ -247,7 +247,7 @@ try {
     Check 'd shows fresh usage (11% 5h)' ($d -match '"pct":11') $d
     Check 'idle d: the refresh is recorded as a renewed sign-in' ([bool](Acct 'd').renewedAt) $d
     $st = Qf status
-    Check 'status shows when d''s sign-in was renewed' ($st -match '(?m)^\s+sign-in renewed (just now|\d+ min ago)') $st
+    Check 'status shows when d''s sign-in was renewed' ($st -match '(?m)^. d\s+personal[^\n]*\n(\s{4}[^\n]*\n)*?\s{4}sign-in renewed (just now|\d+ min ago)') $st
     Qf use d | Out-Null
     Check 'switch to d writes the refreshed login' (WaitFor { (LiveToken) -eq $TD2 -and (LiveRefresh) -eq "$TD-r2" }) "$(LiveToken)"
     # A refused refresh token marks the account for a new sign-in.
@@ -286,8 +286,34 @@ try {
         $st -match '7d 30% ~ 47 h' -and $st -match 'weekly 35%/day' -and $st -match 'live in default' -and $st -match '7d Opus 30%') $st
     Check 'status: an account at its limit says so' ($st -match 'at its limit \(100% 5h\)') $st
 
+    # 11. A refused sign-in is saved at once: right after f's refresh is refused (nothing else
+    # saves the configuration in between), a restarted engine still has f set aside. (Last: a
+    # restarted engine waits a minute before reading usage again, longer than this script's 8 s
+    # freshness limit.)
+    $TF = 'sk-ant-oat-SIMF'
+    Sim @{ $TF = @{ uuid = 'uuid-f'; five_hour = 10; seven_day = 5 } }
+    $back = LiveToken
+    $backLabel = ((State).accounts | Where-Object { $_.liveIn -contains 'default' }).label
+    Set-Login 'uuid-f' $TF -ExpiresAt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 240000)
+    Start-Sleep 2
+    Qf register --label f --group Default | Out-Null
+    Qf use $backLabel | Out-Null
+    Check 'switched back from f' (WaitFor { (LiveToken) -eq $back }) "$(LiveToken)"
+    Check 'refused refresh token: f is set aside' (WaitFor { (Acct 'f').health -eq 'refresh_rejected' } 20) ((Acct 'f') | ConvertTo-Json -Depth 8 -Compress)
+    $oldPid = (State).engine.pid
+    Qf stop | Out-Null
+    # quayflow stop returns before the engine has exited: wait for it, or start finds it running.
+    Check 'engine stopped' (WaitFor { (Qf status) -match 'engine is not running' }) "$(Qf status)"
+    Qf start | Out-Null
+    Check 'engine restarted (a new process)' (WaitFor { $j = Qf status --json; $j -match '^\s*\{' -and ($j | ConvertFrom-Json).engine.pid -ne $oldPid }) "$(Qf status)"
+    Check 'a refused sign-in survives a restart: f is still set aside' ((Acct 'f').health -eq 'refresh_rejected') ((Acct 'f') | ConvertTo-Json -Depth 8 -Compress)
+
     $all = (Get-ChildItem -Recurse $env:QUAYFLOW_HOME -File | Where-Object { $_.Extension -in '.log', '.jsonl', '.json' } | Get-Content -Raw) -join ''
     Check 'no token in logs, journal or state' (-not ($all -match 'sk-ant-oat-SIM')) ''
+}
+catch {
+    # A command that stops the script is a failure, never a short run that reports none.
+    Check 'the script ran to the end' $false "$($_.Exception.Message) $($_.InvocationInfo.PositionMessage)"
 }
 finally {
     try { & $Exe stop 2>&1 | Out-Null } catch { Write-Verbose 'engine already stopped' }

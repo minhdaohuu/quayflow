@@ -172,6 +172,10 @@ try {
     $logs = Get-ChildItem -Recurse $env:QUAYFLOW_HOME -File | Where-Object { $_.Extension -in '.log', '.jsonl', '.json' } | Get-Content -Raw
     Check 'no token anywhere in logs/journal/state' (-not (($logs -join '') -match 'sk-ant')) ''
 }
+catch {
+    # A command that stops the script is a failure, never a short run that reports none.
+    Check 'the script ran to the end' $false "$($_.Exception.Message) $($_.InvocationInfo.PositionMessage)"
+}
 finally {
     try { & $Exe stop 2>&1 | Out-Null } catch {}
     Start-Sleep 1

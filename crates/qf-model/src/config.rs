@@ -289,12 +289,14 @@ impl Config {
     pub fn account_mut(&mut self, id: &AccountId) -> Option<&mut Account> {
         self.accounts.iter_mut().find(|a| &a.id == id)
     }
-    /// Find an account by id, id prefix, or label (case-insensitive).
+    /// Find an account by id, label (case-insensitive) or id prefix, in that order: an exact id
+    /// wins over another account's label that looks like it.
     pub fn find_account(&self, key: &str) -> Option<&Account> {
         let k = key.trim();
         self.accounts
             .iter()
-            .find(|a| a.id.0 == k || a.label.eq_ignore_ascii_case(k))
+            .find(|a| a.id.0 == k)
+            .or_else(|| self.accounts.iter().find(|a| a.label.eq_ignore_ascii_case(k)))
             .or_else(|| {
                 let matches: Vec<&Account> = self
                     .accounts
@@ -552,5 +554,20 @@ mod tests {
         assert!(g.mixed_covered());
         g.accounts.push(AccountId("c".into()));
         assert!(!g.mixed_covered());
+    }
+    #[test]
+    fn an_exact_id_wins_over_a_label_that_looks_like_another_id() {
+        let mut c = Config::default();
+        let mk = |id: &str, label: &str| {
+            let mut a = acct(id, AccountKind::Personal, "o");
+            a.label = label.into();
+            a
+        };
+        let a = mk("aaaaaaaaaaaa", "bbbbbbbbbbbb");
+        let b = mk("bbbbbbbbbbbb", "my work");
+        c.accounts = vec![a, b];
+        assert_eq!(c.find_account("bbbbbbbbbbbb").unwrap().label, "my work");
+        assert_eq!(c.find_account("MY WORK").unwrap().id.0, "bbbbbbbbbbbb");
+        assert_eq!(c.find_account("aaaa").unwrap().id.0, "aaaaaaaaaaaa");
     }
 }

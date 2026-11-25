@@ -113,6 +113,10 @@ try {
     $s5 = Qf start | ConvertFrom-Json
     Check 'plain start on a running engine clears the stop marker' ($s4.state -eq 'started' -and $s5.state -eq 'running' -and -not (Test-Path $marker)) "$($s4.state) $($s5.state) marker=$(Test-Path $marker)"
 }
+catch {
+    # A command that stops the script is a failure, never a short run that reports none.
+    Check 'the script ran to the end' $false "$($_.Exception.Message) $($_.InvocationInfo.PositionMessage)"
+}
 finally {
     try { & $Exe stop 2>&1 | Out-Null } catch {}
     Start-Sleep -Seconds 1

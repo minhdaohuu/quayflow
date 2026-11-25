@@ -2250,36 +2250,50 @@ fn an_out_of_range_tuning_in_config_json_is_clamped_not_fatal() {
 }
 
 #[test]
-fn claude_renewing_the_live_login_is_recorded_kept_and_lifts_a_set_aside() {
+fn claude_renewing_the_live_login_is_recorded_and_kept_but_never_lifts_a_set_aside() {
     let w = world();
     let e = engine_with_accounts(&w);
     let org = id("uuid-org");
-    let view = |e: &Shared| {
+    let view = |e: &Shared, uuid: &str| {
         e.state_view(None, None)
             .accounts
             .into_iter()
-            .find(|a| a.id == id("uuid-org"))
+            .find(|a| a.id == id(uuid))
             .unwrap()
     };
     // Registering a login found in Claude's files is not a sign-in and proves no renewal.
-    let v = view(&e);
+    let v = view(&e, "uuid-org");
     assert_eq!((v.signed_in_at, v.renewed_at), (None, None));
     assert!(v.registered_at > 0);
-    // The stored refresh token was refused earlier; then Claude refreshes the live login.
+    // Switches to and from an account write its saved copy back: not a renewal.
+    for to in ["uuid-personal", "uuid-org"] {
+        e.start_switch(&EnvId::default_env(), &id(to), SwitchHow::Manual, "test", false, true)
+            .unwrap();
+        e.tick();
+    }
+    assert_eq!(e.lock().envs[&EnvId::default_env()].live, Some(org.clone()));
+    assert_eq!(view(&e, "uuid-org").renewed_at, None, "a switch is not a renewal");
+    assert_eq!(view(&e, "uuid-personal").renewed_at, None, "a switch is not a renewal");
+    // Set aside (a refused sign-in); then Claude refreshes the live login.
     e.lock().config.account_mut(&org).unwrap().health = Health::RefreshRejected;
     std::thread::sleep(std::time::Duration::from_millis(30));
     login_files(&w.env, "uuid-org", "O2", "team");
     e.tick();
-    let v = view(&e);
+    let v = view(&e, "uuid-org");
     assert!(v.renewed_at.is_some(), "Claude's refresh is a renewal");
-    assert_eq!(v.health, Health::Ok, "new tokens carry a working refresh token");
-    // The same login seen again is not a new renewal.
+    assert_eq!(
+        v.health,
+        Health::RefreshRejected,
+        "new tokens do not prove the service accepts the account; only a sign-in lifts a set-aside"
+    );
+    // The same login written again (read again, same tokens) is not a new renewal.
     let first = v.renewed_at;
     std::thread::sleep(std::time::Duration::from_millis(30));
+    login_files(&w.env, "uuid-org", "O2", "team");
     e.tick();
-    assert_eq!(view(&e).renewed_at, first);
-    // Kept in config.json across a restart.
+    assert_eq!(view(&e, "uuid-org").renewed_at, first);
+    // The renewal and the set-aside are both in config.json after the tick.
     let e = restart(&w, e);
-    assert_eq!(view(&e).renewed_at, first);
-    assert_eq!(view(&e).health, Health::Ok);
+    assert_eq!(view(&e, "uuid-org").renewed_at, first);
+    assert_eq!(view(&e, "uuid-org").health, Health::RefreshRejected);
 }

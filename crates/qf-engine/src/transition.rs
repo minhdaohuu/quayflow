@@ -264,7 +264,10 @@ impl Engine {
             Err(e) => {
                 let mut inner = self.lock();
                 if let Some(a) = inner.config.account_mut(&to) {
-                    a.health = Health::VaultError;
+                    // A set-aside says more than a storage error, and must outlive it.
+                    if a.health != Health::RefreshRejected {
+                        a.health = Health::VaultError;
+                    }
                 }
                 drop(inner);
                 return self.end(

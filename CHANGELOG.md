@@ -11,7 +11,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - `quayflow status` and the account detail in `/quay` show when each account's sign-in was last renewed (the sign-in service issued new tokens, by Quayflow's refresh of an idle account or by Claude's own) and when you signed in. A sign-in's end date is not known in advance, so there is no countdown; a refused sign-in says to run `quayflow reauth <account>`. `--json` gains `registeredAt`, `signedInAt` and `renewedAt`.
 
 ### Fixed
-- An account whose sign-in was refused stays set aside after an engine restart, until you sign in again. When Claude's own login for that account shows new tokens (you signed in to it in Claude), the set-aside is lifted.
+- An account whose sign-in was refused stays set aside after an engine restart, until you sign in again (`quayflow reauth <account>` or **Sign in again** in `/quay`). A storage error on that account no longer replaces the set-aside, and a refusal that arrives after a newer login was saved for the account no longer sets it aside.
+- `quayflow reauth`, `use` and the other commands that take an account find it by its exact id first, so an id never picks another account whose label looks like that id.
 - The 5-minute cooldown after a switch now survives an engine restart, including a switch interrupted by a crash after its write. Before, a restarted engine could switch again at once. A clock that went back no longer holds switching for longer than one cooldown.
 - After a crash during a switch in a lane named like an account label, the restarted engine checks that lane. Before, the journal stored the lane's name as the account id, and the engine checked the default environment instead and could pause its automation by mistake.
 - With a threshold of 100% and margin 0, return home no longer switches to a Preferred account that is at its usage limit.

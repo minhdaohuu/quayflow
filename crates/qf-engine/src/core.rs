@@ -231,6 +231,9 @@ pub struct Inner {
     pub session_keychain: HashMap<String, (String, bool, i64)>,
     /// A support report built for review and not saved yet: (id, text).
     pub pending_report: Option<(String, String)>,
+    /// A renewal time changed in `config` and is not on disk yet: the tick saves it, so a step
+    /// that records one (a switch, an import) never writes config.json halfway through.
+    pub config_dirty: bool,
 }
 
 pub struct Events {
@@ -350,6 +353,7 @@ impl Engine {
                 session_model: HashMap::new(),
                 session_keychain: HashMap::new(),
                 pending_report: None,
+                config_dirty: false,
             }),
             cred_lock: Mutex::new(()),
             events: Mutex::new(Events {
@@ -904,7 +908,10 @@ impl Engine {
             },
             Err(e) => {
                 if let Some(a) = inner.config.account_mut(id) {
-                    a.health = Health::VaultError;
+                    // A set-aside says more than a storage error, and must outlive it.
+                    if a.health != Health::RefreshRejected {
+                        a.health = Health::VaultError;
+                    }
                 }
                 self.log.log(
                     "error",
@@ -917,22 +924,30 @@ impl Engine {
         }
     }
 
-    /// The sign-in service has just issued new tokens for this account: record the time (kept
-    /// in config.json, so it survives a restart) and lift a set-aside that a dead refresh token
-    /// caused, since the new login carries a working one.
+    /// The sign-in service has just issued new tokens for this account: record the time. It
+    /// reaches config.json at the end of the tick (`save_if_dirty`), never in the middle of the
+    /// step that saw it. A set-aside stays: new tokens do not prove the service accepts the
+    /// account (recovery sets one aside on an authentication refusal too); only a sign-in
+    /// through Quayflow lifts it.
     pub(crate) fn note_renewed(&self, inner: &mut Inner, id: &AccountId) {
         let Some(a) = inner.config.account_mut(id) else {
             return;
         };
         a.renewed_at = Some(now_ms());
-        let lifted = a.health == Health::RefreshRejected;
-        if matches!(a.health, Health::StaleAccess | Health::RefreshRejected) {
+        if a.health == Health::StaleAccess {
             a.health = Health::Ok;
         }
-        if lifted {
-            self.record(inner, "login.renewed_after_rejection", json!({"account": id}), true);
+        inner.config_dirty = true;
+    }
+
+    /// Save config.json when a renewal time changed since the last save.
+    pub fn save_if_dirty(&self) {
+        let mut inner = self.lock();
+        if !inner.config_dirty {
+            return;
         }
-        if let Err(e) = self.save_config(inner) {
+        inner.config_dirty = false;
+        if let Err(e) = self.save_config(&inner) {
             self.log.log(
                 "warn",
                 "config.save_failed",
@@ -1136,7 +1151,10 @@ impl Engine {
             let Some(mut login) = login else {
                 let mut inner = self.lock();
                 if let Some(a) = inner.config.account_mut(&id) {
-                    a.health = Health::VaultError;
+                    // A set-aside says more than a storage error, and must outlive it.
+                    if a.health != Health::RefreshRejected {
+                        a.health = Health::VaultError;
+                    }
                 }
                 continue;
             };
@@ -1243,7 +1261,10 @@ impl Engine {
                         // The service may have retired the old refresh token: this login
                         // needs a new sign-in.
                         if let Some(a) = inner.config.account_mut(id) {
-                            a.health = Health::VaultError;
+                            // A set-aside says more than a storage error, and must outlive it.
+                            if a.health != Health::RefreshRejected {
+                                a.health = Health::VaultError;
+                            }
                         }
                         self.log.log(
                             "error",
@@ -1261,6 +1282,12 @@ impl Engine {
                 }
             }
             Err(qf_provider::RefreshError::Rejected(m)) => {
+                // A newer login may have been stored while the request was out (a register or
+                // an import of the same account): the refusal is about the token that was sent.
+                let current = self.vault.load(id.as_str()).ok();
+                if current.as_ref().and_then(|l| l.refresh_token()) != Some(rt.as_str()) {
+                    return current;
+                }
                 if let Some(a) = inner.config.account_mut(id) {
                     a.health = Health::RefreshRejected;
                 }
@@ -1365,6 +1392,7 @@ impl Engine {
         for id in ids {
             self.decide(&id);
         }
+        self.save_if_dirty();
         self.first_tick_done.store(true, Ordering::SeqCst);
     }
 

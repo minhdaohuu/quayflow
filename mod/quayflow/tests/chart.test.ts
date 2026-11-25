@@ -81,9 +81,13 @@ describe('sign-in times', () => {
   test('the last renewal and the sign-in age; no countdown', () => {
     expect(signInText({ health: 'ok', registeredAt: NOW - 40 * 24 * H, signedInAt: NOW - 12 * 24 * H, renewedAt: NOW - 3 * H }, NOW)).toBe('renewed 3 h ago \u00b7 signed in 12 d ago')
     expect(signInText({ health: 'stale_access', registeredAt: NOW - 40 * 24 * H }, NOW)).toBe('renewal not seen yet \u00b7 added 40 d ago')
-    expect(signInText({ health: 'refresh_rejected', registeredAt: NOW - 2 * H, renewedAt: NOW - 30 * 60000 }, NOW)).toBe('refused, last renewed 30 min ago \u00b7 added 2 h ago')
-    expect(signInText({ health: 'ok' }, NOW)).toBe('renewal not seen yet')
+    expect(signInText({ health: 'refresh_rejected', registeredAt: NOW - 2 * H, renewedAt: NOW - 30 * 60000 }, NOW)).toBe('refused by the sign-in service, last renewed 30 min ago: sign in again \u00b7 added 2 h ago')
+    expect(signInText({ health: 'vault_error', registeredAt: NOW - 2 * H, renewedAt: NOW - H }, NOW)).toBe('protected copy unusable: sign in again \u00b7 added 2 h ago')
+    expect(signInText({ health: 'ok', registeredAt: 0 }, NOW)).toBe('renewal not seen yet')
+    // An engine that does not report the times: no line, not "not seen".
+    expect(signInText({ health: 'ok' }, NOW)).toBeNull()
     expect(agoText(20_000)).toBe('just now')
     expect(agoText(-5)).toBe('just now')
+    expect(agoText(-2 * H)).toBe("at a time ahead of this computer's clock")
   })
 })

@@ -233,13 +233,18 @@ describe('registration', () => {
 
   test('a reauthentication that returned another identity can be saved as new, never over the old one', async ($, on) => {
     const ready = { id: 'si-2', state: 'ready', configDir: 'C:\\t', command: 'claude', identity: { account: 'd4d4d4d4d4d4', kind: 'personal', unexpected: true } }
-    const w = world(on, { routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
+    const H = 3_600_000
+    const timed: StateView = {
+      ...STATE,
+      accounts: STATE.accounts.map(x => (x.id === 'b2b2b2b2b2b2' ? { ...x, registeredAt: Date.now() - 40 * 24 * H, signedInAt: Date.now() - 12 * 24 * H, renewedAt: Date.now() - 3 * H } : x)),
+    }
+    const w = world(on, { state: timed, routes: { '/v1/accounts/signin/start': ready, '/v1/accounts/signin/status': ready } })
     await start($, w, true)
     await quay($, '')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'tab:accounts' })
     await ui.press({ key: 'acct:b2b2b2b2b2b2' })
-    expect(await ui.find({ type: 'Text', text: /renewal not seen yet|renewed .* ago/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /renewed 3 h ago \u00b7 signed in 12 d ago/ })).toBeDefined()
     await ui.press({ key: 'ad-reauth' })
     await ui.press({ key: 'add-continue' })
     expect(await ui.find({ type: 'Text', text: /You signed in to a different account/ })).toBeDefined()

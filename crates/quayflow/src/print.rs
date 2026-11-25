@@ -228,8 +228,10 @@ fn sign_in_line(a: &Value, now: i64) -> String {
         (None, None) => String::new(),
     };
     let label = a["label"].as_str().unwrap_or("?");
-    // A label the shell would read as more than one plain word is given by account id.
-    let plain = !label.is_empty() && label.chars().all(|c| c.is_alphanumeric() || "-_.".contains(c));
+    // A label the shell would read as more than one plain word, or the CLI as an option
+    // (`--work`), is given by account id.
+    let plain =
+        label.starts_with(char::is_alphanumeric) && label.chars().all(|c| c.is_alphanumeric() || "-_.".contains(c));
     let arg = if plain {
         label.to_string()
     } else {
@@ -256,8 +258,12 @@ fn sign_in_line(a: &Value, now: i64) -> String {
     }
 }
 
-/// How long ago, coarsely: "just now", "40 min ago", "5 h ago", "12 d ago".
+/// How long ago, coarsely: "just now", "40 min ago", "5 h ago", "12 d ago". A time more than
+/// 5 minutes ahead of this clock (the clock was set back) says so, never "just now".
 fn ago_text(ms: i64) -> String {
+    if ms < -5 * 60_000 {
+        return "at a time ahead of this computer's clock".into();
+    }
     let min = ms.max(0) / 60_000;
     match min {
         0 => "just now".into(),
@@ -395,6 +401,17 @@ mod tests {
             "sign-in refused by the sign-in service, last renewed 9 d ago: sign in again (quayflow reauth work) · added 40 d ago"
         );
         // A label the shell would split is given by id.
+        // So is one the CLI would read as an option.
+        let a = json!({"id": "a1", "label": "--work", "health": "refresh_rejected"});
+        assert!(sign_in_line(&a, NOW).contains("(quayflow reauth a1)"));
+        // A time ahead of the clock is never "just now".
+        let a = json!({"id": "a1", "label": "work", "health": "ok", "renewedAt": NOW + 2 * H});
+        assert_eq!(
+            sign_in_line(&a, NOW),
+            "sign-in renewed at a time ahead of this computer's clock"
+        );
+        let a = json!({"id": "a1", "label": "work", "health": "ok", "renewedAt": NOW + 60_000});
+        assert_eq!(sign_in_line(&a, NOW), "sign-in renewed just now");
         let a = json!({"id": "a1", "label": "my work", "health": "vault_error"});
         assert_eq!(
             sign_in_line(&a, NOW),

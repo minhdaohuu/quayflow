@@ -543,6 +543,7 @@ function AccountDetail($: EngineInterface, c: Ctx, id: string): JSX.Element {
   const home = homeOf(s) === a.id
   const fresh = !!u?.fresh
   const reading = ensureFreshUsage($, c)
+  const signIn = signInText(a, Date.now())
   return (
     <Box flexDirection="column">
       {Section(
@@ -552,8 +553,8 @@ function AccountDetail($: EngineInterface, c: Ctx, id: string): JSX.Element {
         KV(c, 'Plan', `${a.kind}${a.subscription ? ` \u00b7 ${a.subscription}` : ''}`),
         KV(c, 'Groups', `${a.groups.join(', ') || 'none'}${home ? ' \u00b7 home' : a.rank && a.rank !== 'normal' ? ` \u00b7 ${a.rank}` : ''}`),
         KV(c, 'Live in', isLive ? `${env!.id} (here)` : a.liveIn.length ? a.liveIn.join(', ') : 'none'),
-        KV(c, 'Sign-in', signInText(a, Date.now())),
-        Hint(c, 'A sign-in has no known end date: it lasts until the sign-in service refuses it. "Renewed" is the last time the service issued new tokens for this account, which shows the sign-in still works.'),
+        signIn ? KV(c, 'Sign-in', signIn) : null,
+        signIn ? Hint(c, 'A sign-in has no known end date: it lasts until the sign-in service refuses it. "Renewed" is the last time the service issued new tokens for this account, which shows the sign-in still works.') : null,
         Hint(c, `Account #${a.id}. The full identity is shown here locally; it is never written to logs or reports.`),
       )}
       {Section(
@@ -570,7 +571,7 @@ function AccountDetail($: EngineInterface, c: Ctx, id: string): JSX.Element {
       {Row(
         c,
         !isLive && Btn(c, 'ad-switch', 'Switch', () => go($, { tab: 'switch', sub: 'review', arg: a.id }), true),
-        Btn(c, 'ad-reauth', 'Sign in again', () => go($, { tab: 'onboarding', sub: 'add', arg: a.id }), a.health === 'refresh_rejected'),
+        Btn(c, 'ad-reauth', 'Sign in again', () => go($, { tab: 'onboarding', sub: 'add', arg: a.id }), a.health === 'refresh_rejected' || a.health === 'vault_error'),
         Btn(c, 'ad-observation', 'Details', () => go($, { tab: 'accounts', sub: 'observation', arg: a.id })),
         Btn(c, 'ad-remove', 'Remove', () => go($, { tab: 'accounts', sub: 'remove', arg: a.id })),
         Btn(c, 'ad-back', 'Back', () => go($, { tab: 'accounts' })),

@@ -112,8 +112,10 @@ export function windowLine(w: Window): string {
   return `${windowName(w.key)}: ${pct(w.pct)}${reset}`
 }
 
-/** How long ago, coarsely: "just now", "40 min ago", "5 h ago", "12 d ago". */
+/** How long ago, coarsely: "just now", "40 min ago", "5 h ago", "12 d ago". A time more than 5 minutes
+ * ahead of this clock (the clock was set back) says so, never "just now". */
 export function agoText(ms: number): string {
+  if (ms < -5 * 60000) return "at a time ahead of this computer's clock"
   const min = Math.floor(Math.max(0, ms) / 60000)
   if (min < 1) return 'just now'
   if (min < 90) return `${min} min ago`
@@ -122,8 +124,10 @@ export function agoText(ms: number): string {
 }
 
 /** When the sign-in last worked and how old it is. A refresh token has no published expiry, so
- * there is no countdown: "renewed 3 h ago · signed in 12 d ago". */
-export function signInText(a: { health: Health; registeredAt?: number; signedInAt?: number | null; renewedAt?: number | null }, now: number): string {
+ * there is no countdown: "renewed 3 h ago · signed in 12 d ago". Null from an engine that does
+ * not report these times (before 0.5.0), rather than a claim that no renewal was seen. */
+export function signInText(a: { health: Health; registeredAt?: number; signedInAt?: number | null; renewedAt?: number | null }, now: number): string | null {
+  if (a.registeredAt === undefined) return null
   const ago = (t?: number | null) => (t && t > 0 ? agoText(now - t) : null)
   const renewed = ago(a.renewedAt)
   const signed = ago(a.signedInAt)
@@ -131,10 +135,12 @@ export function signInText(a: { health: Health; registeredAt?: number; signedInA
   const since = signed ? `signed in ${signed}` : added ? `added ${added}` : null
   const head =
     a.health === 'refresh_rejected'
-      ? `refused${renewed ? `, last renewed ${renewed}` : ''}`
-      : renewed
-        ? `renewed ${renewed}`
-        : 'renewal not seen yet'
+      ? `refused by the sign-in service${renewed ? `, last renewed ${renewed}` : ''}: sign in again`
+      : a.health === 'vault_error'
+        ? 'protected copy unusable: sign in again'
+        : renewed
+          ? `renewed ${renewed}`
+          : 'renewal not seen yet'
   return since ? `${head} \u00b7 ${since}` : head
 }
 
@@ -147,7 +153,7 @@ export function healthText(h: Health): string {
     case 'refresh_rejected':
       return 'refresh token rejected: set aside; sign in again (Accounts → Sign in again)'
     case 'vault_error':
-      return 'protected storage failed: no plaintext fallback; check the vault'
+      return 'protected storage failed: no plaintext fallback; sign in again (Accounts → Sign in again) to store a new copy'
   }
 }
 

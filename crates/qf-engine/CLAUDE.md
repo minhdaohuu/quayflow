@@ -7,4 +7,5 @@
 - **Lock order:** `observe_lock` (one usage poll at a time: the tick and a recovery's on-demand poll), then `cred_lock`, then the engine lock. No blocking I/O, network or binary scans while the engine lock is held.
 - Logs and the journal name accounts by id; labels are scrubbed, longer labels first. A journal field the engine reads back after a restart (`env`, ids) must survive scrubbing: test it with a label equal to its value (see `an_environment_id_is_kept_even_when_named_like_a_label`).
 - State restored from the journal at start reads the records once, before this start's own records are written; set anything those records imply directly (see `reconcile`).
+- A step in the middle of a switch, an import or a capture never writes config.json: it marks `config_dirty` and the tick saves (`save_if_dirty`). A set-aside (`RefreshRejected`) is lifted only by a sign-in through Quayflow, and no other health value replaces it.
 - A kept decision (a suggestion carried through unknown usage) must still stand on what is known: re-check its target, and check again when it is acted on (`/v1/accept`). Read files that can be torn by a crash as bytes, line by line.
