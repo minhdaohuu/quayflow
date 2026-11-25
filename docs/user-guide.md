@@ -97,6 +97,14 @@ The **Overview** shows, top to bottom:
 
 Every figure is written out beside its graphic. Usage is shown only while the reading is current: otherwise the account says *reading…*, *not read yet*, *usage unknown*, or *unreadable:* and the reason, never 0%. The true-color graphics are drawn in the terminal; other surfaces show text gauges.
 
+**Editing a group.** The **Groups** tab lists each group with its mode, its switch point and its accounts (⌂ marks the home). Open one to edit it:
+
+- **Mode:** Manual, Suggest or Automatic, as three buttons, with a line on what the chosen mode does, also in headless jobs.
+- **Switch point:** three presets, **Early 75/10**, **Balanced 85/10** and **Late 95/5** (threshold/margin), or any other threshold and margin typed in.
+- **Members:** one row per account with its 5-hour and 7-day gauges, its rank (**Preferred**, **Normal**, **Backup**), **Make home** and **Remove**; accounts not in the group appear after **+ Add**.
+
+Nothing is saved while you edit. The header counts the unsaved changes, and a card lists them with a **What if** line: what the edited settings would do now with the accounts' current usage (for example *work-01 at 91% ≥ 85%: would switch now to work-02 (12%)*). It is a preview; the engine still decides with all its rules. **Save** (key `s`) applies everything in one step: members first (a mix of identities still asks for its one-time approval), then the switch point, home and ranks, then the mode (Automatic opens its one-time approval when it has none). **Revert** (key `r`) drops the edits. The cooldown applies to every group and is set in **Settings > Tuning**.
+
 **Why an account is not a switch target.** Account rows (Overview and Accounts) give the reason in a word or two: *no room to gain* (it would not leave enough margin below the threshold), *usage unknown* (no current reading), *at its limit*, *not in this group*, *group conflict* (a running session's group does not allow it), *blocked by your organization* (managed login), or *plan lacks this model*. The live account, and an account whose badge already says what is wrong (SIGN IN, VAULT), get no reason. The full reason is in the account's detail and in **Why?**.
 
 - **Why?** ("Why this account?") lists every account as *Eligible*, *Excluded* or *Unknown* (no fresh reading, never 0%), with the reason and the observation age, plus the threshold, the required margin and the cooldown (with any time left).

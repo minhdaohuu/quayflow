@@ -4,36 +4,31 @@
 // arrows walk the controls.
 import type { Elements, EngineInterface, RenderSurface } from 'claude-code'
 
-import type { AccountView, EnvView, IdentityView, Mode, QuayView, StateView, Window } from '../types'
+import type { AccountView, EnvView, IdentityView, QuayView, StateView, Window } from '../types'
 import { MOD_VERSION, Q, flash, readPaneState, setCacheEntry, setDisclosure } from './context'
 import {
   actAssign,
   actEngine,
-  actGroupDelete,
   actIdentity,
   actLaneCheck,
   actLaneDelete,
   actMembers,
   actPin,
   actPoll,
-  actPreferred,
-  actRank,
   actRegister,
   actRelabel,
   actRemove,
-  actSetDefault,
   actSetMode,
   actSetTuning,
   actSigninConfirm,
   actGroupCreate,
-  actTuning,
   actUnassign,
   actUnpin,
 } from './actions'
 import { account, age, clock, healthText, isTerminal, label, myEnv, myGroup, orgName, pathCovers, pct, persistentWarnings, transitionWords, when, windowLine, windowName } from './format'
-import { hasCode } from './engine'
 import { Conflict, OffView, Onboarding, SwitchProgress, SwitchReview, Trust, afterConfirm, afterRegister } from './flows'
 import { HomeBlock, Operations, Review } from './review'
+import { GroupDetail } from './groupedit'
 import { GROUP, fleet } from './chart'
 import { Alert, Badge, Btn, Card, Field, Gauge, Paint, canPaint, Hint, KV, Line, Pick, Row, Section, Table, Toggle, clearForm, gaugeTone, go, hintsOn, run, setForm, toneColor, useRead } from './ui'
 import type { Ctx } from './ui'
@@ -645,9 +640,11 @@ function Groups($: EngineInterface, c: Ctx): JSX.Element {
           <Button key={`grp:${g.name}`} plain onPress={() => go($, { tab: 'groups', sub: 'group', arg: g.name })}>
             <Text bold>{g.name}</Text>
           </Button>
+          {Badge(c, g.mode.toUpperCase(), g.mode === 'automatic' ? (g.automaticApprovedAt ? 'accent' : 'warn') : 'muted')}
           {g.isDefault ? Badge(c, 'DEFAULT', 'muted') : null}
           {g.mixed ? Badge(c, 'MIXED', 'warn') : null}
-          <Text dimColor>{`${g.mode}${g.mode === 'automatic' && !g.automaticApprovedAt ? ' (not approved)' : ''} \u00b7 ${g.accounts.map(id => label(s, id)).join(', ') || 'no accounts'}${g.preferred ? ` \u00b7 home ${label(s, g.preferred)}` : ''}`}</Text>
+          {Object.keys(c.form).some(k => k.startsWith(`gd:${g.name}:`)) ? <Text color="warning">● unsaved</Text> : null}
+          <Text dimColor>{`${g.mode === 'automatic' && !g.automaticApprovedAt ? 'not approved \u00b7 ' : ''}switch at ${g.threshold}% \u00b7 ${g.accounts.map(id => `${g.preferred === id ? '\u2302 ' : ''}${label(s, id)}`).join(', ') || 'no accounts'}`}</Text>
         </Box>
       ))}
       {Hint(c, 'DEFAULT: used by projects without an explicit assignment. It is not all accounts: accounts of other groups are not implicitly added to it. MIXED: more than one identity boundary.')}
@@ -681,90 +678,6 @@ async function createGroup($: EngineInterface, c: Ctx, name: string): Promise<vo
   }
 }
 
-const MODE_WORDS: Record<Mode, string> = {
-  manual: 'Manual — only explicit account actions',
-  suggest: 'Suggest — interactive /quay accept; headless: recommendation only',
-  automatic: 'Automatic — proactive switching, return home and bounded limit recovery',
-}
-
-function GroupDetail($: EngineInterface, c: Ctx, name: string): JSX.Element {
-  const { Box } = c.els
-  const s = c.s!
-  const g = s.groups.find(x => x.name === name)
-  if (!g) return Line(c, `No group "${name}".`)
-  const nonMembers = s.accounts.filter(a => !g.accounts.includes(a.id))
-  const modeOpts = (['manual', 'suggest', 'automatic'] as const).map(m => ({ value: m, label: m === 'automatic' && !g.automaticApprovedAt ? `${MODE_WORDS[m]} (needs approval)` : MODE_WORDS[m] }))
-  const rankOpts = ['preferred', 'normal', 'backup'].map(r => ({ value: r, label: r === 'preferred' ? 'preferred (home)' : r }))
-  const t = s.tuning
-  return (
-    <Box flexDirection="column">
-      {Section(
-        c,
-        `Group ${g.name}${g.isDefault ? ' (default)' : ''}`,
-        g.mixed ? Line(c, `Mixed identities${g.mixedCovered ? ': disclosure accepted for this account set' : ': needs the one-time disclosure'}.`, { tone: g.mixedCovered ? undefined : 'warn' }) : null,
-      )}
-      {Pick(c, `mode:${g.name}`, 'Mode', modeOpts, g.mode, v => void changeMode($, c, g.name, v as Mode))}
-      {KV(c, 'Proactive threshold', `${g.threshold}% of the binding window`)}
-      {KV(c, 'Margin / cooldown', `${g.margin} points / ${seconds(t.cooldownS)}`)}
-      {Field($, c, `thr:${g.name}`, `Threshold % (now ${g.threshold})`, { placeholder: String(g.threshold), submitLabel: 'save', onSubmit: v => void saveTuning($, c, g.name, v, undefined) })}
-      {Field($, c, `mar:${g.name}`, `Margin points (now ${g.margin})`, { placeholder: String(g.margin), submitLabel: 'save', onSubmit: v => void saveTuning($, c, g.name, undefined, v) })}
-      {Field($, c, 'cooldown', `Cooldown seconds, every group (now ${t.cooldownS})`, { placeholder: String(t.cooldownS), submitLabel: 'save', onSubmit: v => void saveGlobal($, 'cooldown', v) })}
-      {g.mode !== 'automatic' && Alert(c, 'Before enabling Automatic', 'This group approves its accounts for assigned project context. Shared-session conflicts, plan compatibility, version checks and managed login still apply.', 'note')}
-      {Hint(c, 'When every account is at its limit, Quayflow switches to the eligible account that becomes available soonest, then Claude\'s own usage-limit behavior applies. Quayflow never holds requests.')}
-      {Section(
-        c,
-        'Members',
-        ...g.accounts.map(id =>
-          Row(
-            c,
-            Line(c, `${label(s, id)}${g.preferred === id ? ' [Home]' : ''}`),
-            Pick(c, `rank:${g.name}:${id}`, 'rank', rankOpts, g.preferred === id ? 'preferred' : (g.ranks?.[id] ?? 'normal'), v => void changeRank($, c, g.name, id, v)),
-            Btn(c, `rm:${g.name}:${id}`, 'Remove from group', () => void changeMembers($, c, g.name, [], [id])),
-          ),
-        ),
-        g.accounts.length === 0 ? Line(c, 'No accounts yet.', { dim: true }) : null,
-        Hint(c, 'A nearly exhausted home account does not defeat a clearly suitable alternative; return home needs fresh usage below the threshold minus the margin. Accounts do not share the prompt cache: the first request after a switch processes the full context again.'),
-      )}
-      {nonMembers.length > 0 &&
-        Pick(c, `add:${g.name}`, 'Add account', [{ value: '', label: '(choose)' }, ...nonMembers.map(a => ({ value: a.id, label: a.label }))], '', v => v && void changeMembers($, c, g.name, [v], []))}
-      {Row(
-        c,
-        !g.isDefault && Btn(c, 'gd-default', 'Make default', () => void run($, 'setting the default', () => actSetDefault($, g.name), r => (r.ok ? `"${g.name}" is the default group now.` : (r.message ?? 'Refused.')))),
-        g.preferred && Btn(c, 'gd-nohome', 'Clear home', () => void run($, 'clearing home', () => actPreferred($, g.name, null), r => (r.ok ? 'No home account: Quayflow stays on the current account until a trigger.' : (r.message ?? 'Refused.')))),
-        g.preferred && !s.envs.some(e => e.live?.account === g.preferred) && Btn(c, 'gd-home', 'Switch home', () => go($, { tab: 'switch', sub: 'review', arg: g.preferred! })),
-        !g.isDefault && Btn(c, 'gd-delete', 'Delete group', () => void run($, 'deleting the group', () => actGroupDelete($, g.name), r => (r.ok ? `Group "${g.name}" deleted.` : (r.message ?? 'Refused.'))).then(r => r?.ok && go($, { tab: 'groups' }))),
-        Btn(c, 'gd-back', 'Back', () => go($, { tab: 'groups' })),
-      )}
-    </Box>
-  )
-}
-
-async function changeMode($: EngineInterface, c: Ctx, group: string, mode: Mode): Promise<void> {
-  const approved = !!c.s?.groups.find(g => g.name === group)?.automaticApprovedAt
-  if (mode === 'automatic' && !approved) return go($, { tab: 'groups', sub: 'automatic', arg: group })
-  await run(
-    $,
-    'saving the mode',
-    () => actSetMode($, group, mode, false),
-    r => (r.ok ? `Group "${group}" is in ${mode[0]!.toUpperCase()}${mode.slice(1)} mode.` : (r.message ?? 'Refused.')),
-    async err => {
-      if (!hasCode(err, 'needs_approval')) return false
-      go($, { tab: 'groups', sub: 'automatic', arg: group })
-      return true
-    },
-  )
-}
-
-async function saveTuning($: EngineInterface, c: Ctx, group: string, threshold: string | undefined, margin: string | undefined): Promise<void> {
-  const t = threshold !== undefined ? Number(threshold) : undefined
-  const m = margin !== undefined ? Number(margin) : undefined
-  if ((t !== undefined && !(t > 0 && t <= 100)) || (m !== undefined && !(m >= 0 && m < 100))) {
-    return void flash($, 'warn', 'Threshold is a percentage (1-100); margin is points below it (0-99).')
-  }
-  await run($, 'saving tuning', () => actTuning($, group, t, m), r => (r.ok ? 'Tuning saved.' : (r.message ?? 'Refused.')))
-  await clearForm($, `thr:${group}`, `mar:${group}`)
-}
-
 /** Cooldown seconds or pin minutes: one setting for every group. */
 async function saveGlobal($: EngineInterface, what: 'cooldown' | 'pin', value: string): Promise<void> {
   const n = Number(value.trim())
@@ -772,25 +685,6 @@ async function saveGlobal($: EngineInterface, what: 'cooldown' | 'pin', value: s
   if (!ok) return void flash($, 'warn', what === 'cooldown' ? 'Cooldown is 0-3600 seconds.' : 'A pin lasts 5-1440 minutes.')
   await run($, 'saving the setting', () => actSetTuning($, what === 'cooldown' ? { cooldownS: n } : { pinMinutes: n }), r => r.message ?? (r.ok ? 'Saved.' : 'Refused.'))
   await clearForm($, what === 'cooldown' ? 'cooldown' : 'pin-minutes')
-}
-
-async function changeRank($: EngineInterface, c: Ctx, group: string, id: string, rank: string): Promise<void> {
-  if (rank === 'preferred') {
-    await run($, 'setting home', () => actPreferred($, group, id), r => (r.ok ? `"${label(c.s ?? undefined, id)}" is the home of ${group}; it replaces any earlier home.` : (r.message ?? 'Refused.')))
-    return
-  }
-  await run($, 'saving the rank', () => actRank($, group, id, rank), r => (r.ok ? 'Rank saved.' : (r.message ?? 'Refused.')))
-}
-
-async function changeMembers($: EngineInterface, c: Ctx, group: string, add: string[], remove: string[]): Promise<void> {
-  const r = await run($, 'saving membership', () => actMembers($, group, add, remove, false))
-  if (!r) return
-  if (r.needsDisclosure) {
-    await setDisclosure($, { then: 'members', group, add, text: r.disclosure ?? '' })
-    go($, { tab: 'groups', sub: 'disclosure' })
-    return
-  }
-  await flash($, r.ok ? 'info' : 'warn', r.ok ? (remove.length ? 'Removed from the group: its approval for future switches is withdrawn. Running work is not moved.' : 'Added to the group.') : (r.message ?? 'Refused.'))
 }
 
 // ------------------------------------------------------------ S07 mixed-identity disclosure
