@@ -217,17 +217,7 @@ pub fn clearly_higher(a: f64, b: f64) -> bool {
     a >= b * BALANCE_RATIO && (a - b) * 24.0 >= BALANCE_GAP_PER_DAY
 }
 
-/// A time span as people read it: "40 min", "5 h", "3 d 4 h".
-pub fn fmt_span(ms: i64) -> String {
-    let min = ms.max(0) / 60_000;
-    if min < 90 {
-        format!("{min} min")
-    } else if min < 48 * 60 {
-        format!("{} h", min / 60)
-    } else {
-        format!("{} d {} h", min / 1440, (min % 1440) / 60)
-    }
-}
+pub use qf_model::fmt_span;
 
 /// Rank candidates: lowest binding first; within 10 points of the best, rank decides.
 pub fn rank_candidates(mut c: Vec<Candidate>) -> Vec<Candidate> {
@@ -308,8 +298,11 @@ pub fn explain_all(ctx: &Ctx) -> Vec<(AccountId, Result<String, Exclusion>)> {
                         needed: threshold - margin,
                     });
                 }
+                let week = weekly_score(o, ctx.now)
+                    .map(|s| format!("; weekly {:.0}%/day", s * 24.0))
+                    .unwrap_or_default();
                 Ok(format!(
-                    "{:.0}% {} ({} old)",
+                    "{:.0}% {} ({} old){week}",
                     w.pct,
                     qf_model::window_name(&w.key),
                     fmt_age(o.age_ms(ctx.now) / 1000)

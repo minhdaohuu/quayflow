@@ -166,7 +166,8 @@ export type HelloResponse = {
 
 export type Notice = { id: string; level: 'info' | 'warn' | 'error' | string; kind: string; text: string; persistent?: boolean }
 
-export type UsageView = { binding?: Window | null; windows: Window[]; ageS: number; fresh: boolean; source: string }
+/** `weeklyPerDay`: weekly score in % per day (7d room left over the time to its reset); fresh readings only. */
+export type UsageView = { binding?: Window | null; windows: Window[]; ageS: number; fresh: boolean; source: string; weeklyPerDay?: number | null }
 export type Eligibility = { eligible: boolean; reason: string }
 
 export type AccountView = {

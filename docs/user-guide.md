@@ -333,7 +333,15 @@ If your organization enforces its login (`forceLoginOrgUUID` or `forceLoginMetho
 
 ## Engine control
 
-- `quayflow status` shows environments, accounts, usage and observation age (`--json` for scripts).
+- `quayflow status` shows each environment, and for each account where it is live (▶) or whether it is suggested (★), then every usage window with its reset countdown, the weekly score (see [Weekly balancing](#modes)) and the reading's age, then why it is or is not a switch target. `--json` gives the same for scripts. For example:
+
+  ```text
+  ▶ work-01          personal     live in default
+      5h 30% ↻ 59 min · 7d 60% ↻ 4 d 23 h · weekly 8%/day · 12 s old
+  ★ work-02          personal
+      5h 5% ↻ 9 min · 7d 30% ↻ 47 h · weekly 35%/day · 4 min old
+      5% 5h (4 min old); weekly 35%/day
+  ```
 - `quayflow pause` and `quayflow resume` pause and resume automation. Manual switches keep working. Resume ends only a pause you made (or a hold left by an unresolved switch). When automation is paused for another reason (an unknown login, another switcher, a signed-out or inconsistent login, an incompatible Claude version), `/quay` names that reason and its remedy instead of offering Resume.
 - `quayflow stop` stops the engine on purpose. The Mod then does not restart it until you run `quayflow start`. Stopping the engine never stops Claude: without the engine, Claude works exactly as it would without Quayflow.
 - `/quay` Activity shows recent decisions and the last switches; open one for its local trail (opaque ids and sanitized reasons). **Report**, then **Build preview**, builds the sanitized report without saving it; you review it, tick *I reviewed this report before saving it for sharing*, then **Save locally**. `/quay report` prints the preview without saving (`/quay report --save` saves), and `quayflow report --preview` does the same in a terminal; `quayflow report` saves at once. Nothing is sent automatically.

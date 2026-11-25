@@ -126,40 +126,89 @@ pub fn status(v: &Value) {
         }
     }
     outln!("\nAccounts:");
+    let suggested: Vec<&str> = v["envs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e["suggestion"]["to"].as_str())
+        .collect();
+    let now = qf_model::time::now_ms();
     for a in v["accounts"].as_array().into_iter().flatten() {
-        // A stale reading is never printed as a current figure.
-        let usage = match a["usage"].as_object() {
-            Some(u) if u["fresh"] == true => {
-                let b = &u["binding"];
-                format!(
-                    "{:.0}% {} ({} old)",
-                    b["pct"].as_f64().unwrap_or(0.0),
-                    qf_model::window_name(b["key"].as_str().unwrap_or("?")),
-                    age(u["ageS"].as_i64().unwrap_or(0))
-                )
-            }
-            Some(u) => format!("usage unknown (last read {} ago)", age(u["ageS"].as_i64().unwrap_or(0))),
-            None => "usage unknown".into(),
-        };
-        let note = a["usageNote"].as_str().map(|n| format!(" — {n}")).unwrap_or_default();
-        let live = if a["liveIn"].as_array().is_some_and(|x| !x.is_empty()) {
+        let live_in: Vec<&str> = a["liveIn"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x.as_str())
+            .collect();
+        let mark = if !live_in.is_empty() {
             "▶"
+        } else if a["id"].as_str().is_some_and(|id| suggested.contains(&id)) {
+            "★"
         } else {
             " "
         };
-        let elig = a["eligibility"]["reason"].as_str().unwrap_or("");
+        let place = if live_in.is_empty() {
+            String::new()
+        } else {
+            format!("live in {}", live_in.join(", "))
+        };
         outln!(
-            "{live} {:<16} {:<12} {:<28} {}{note}",
+            "{mark} {:<16} {:<12} {place}",
             a["label"].as_str().unwrap_or("?"),
-            a["kind"].as_str().unwrap_or("?"),
-            usage,
-            if a["health"] == "ok" {
-                elig.to_string()
-            } else {
-                format!("[{}] {elig}", a["health"].as_str().unwrap_or(""))
-            }
+            a["kind"].as_str().unwrap_or("?")
         );
+        outln!("    {}", usage_line(&a["usage"], now));
+        let elig = a["eligibility"]["reason"]
+            .as_str()
+            .filter(|_| live_in.is_empty())
+            .unwrap_or("");
+        let health = if a["health"] == "ok" {
+            String::new()
+        } else {
+            format!("[{}] ", a["health"].as_str().unwrap_or(""))
+        };
+        let note = a["usageNote"].as_str().map(|n| format!(" — {n}")).unwrap_or_default();
+        let detail = format!("{health}{elig}{note}");
+        if !detail.trim().is_empty() {
+            outln!("    {}", detail.trim_start_matches(" — "));
+        }
     }
+    if !suggested.is_empty() {
+        outln!("\n▶ live · ★ suggested (quayflow accept)");
+    }
+}
+
+/// Every window of a fresh reading with its reset countdown, the weekly score and the age:
+/// `5h 62% ↻ 2 h · 7d 40% ↻ 3 d 4 h · weekly 12%/day · 2 min old`. A stale reading is never
+/// printed as a current figure.
+fn usage_line(u: &Value, now: i64) -> String {
+    let age_s = u["ageS"].as_i64().unwrap_or(0);
+    if u.is_null() {
+        return "usage unknown".into();
+    }
+    if u["fresh"] != true {
+        return format!("usage unknown (last read {} ago)", age(age_s));
+    }
+    let mut parts: Vec<String> = u["windows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|w| {
+            let name = qf_model::window_name(w["key"].as_str().unwrap_or("?"));
+            let pct = w["pct"].as_f64().unwrap_or(0.0);
+            let reset = match w["resetsAt"].as_i64() {
+                Some(r) if r > now => format!(" ↻ {}", qf_model::fmt_span(r - now)),
+                Some(_) => " (reset passed)".into(),
+                None => String::new(),
+            };
+            format!("{name} {pct:.0}%{reset}")
+        })
+        .collect();
+    if let Some(w) = u["weeklyPerDay"].as_f64() {
+        parts.push(format!("weekly {w:.0}%/day"));
+    }
+    parts.push(format!("{} old", age(age_s)));
+    parts.join(" · ")
 }
 
 /// An account's label from a state view, or `#id` when it is not registered.
@@ -250,5 +299,38 @@ pub fn compat(v: &Value) {
                 .map(|d| d.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; "))
                 .unwrap_or_default()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const NOW: i64 = 1_000_000_000_000;
+    const H: i64 = 3_600_000;
+
+    #[test]
+    fn usage_line_shows_every_window_its_reset_and_the_weekly_score() {
+        let u = json!({"fresh": true, "ageS": 120, "weeklyPerDay": 34.6, "windows": [
+            {"key": "5h", "pct": 62.4, "resetsAt": NOW + 2 * H},
+            {"key": "7d", "pct": 40.0, "resetsAt": NOW + 76 * H},
+            {"key": "7d:Opus", "pct": 70.0, "resetsAt": NOW - H},
+            {"key": "7d:Sonnet", "pct": 5.0}
+        ]});
+        assert_eq!(
+            usage_line(&u, NOW),
+            "5h 62% ↻ 2 h · 7d 40% ↻ 3 d 4 h · 7d Opus 70% (reset passed) · 7d Sonnet 5% · weekly 35%/day · 2 min old"
+        );
+    }
+
+    #[test]
+    fn usage_line_never_shows_a_stale_or_missing_reading_as_current() {
+        let u = json!({"fresh": false, "ageS": 1500, "weeklyPerDay": 30.0, "windows": [{"key": "5h", "pct": 10.0}]});
+        assert_eq!(usage_line(&u, NOW), "usage unknown (last read 25 min ago)");
+        assert_eq!(usage_line(&Value::Null, NOW), "usage unknown");
+        // No weekly score without one from the engine.
+        let u = json!({"fresh": true, "ageS": 5, "windows": [{"key": "5h", "pct": 10.0}]});
+        assert_eq!(usage_line(&u, NOW), "5h 10% · 5 s old");
     }
 }

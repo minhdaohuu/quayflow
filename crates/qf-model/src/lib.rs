@@ -153,6 +153,18 @@ impl Observation {
     }
 }
 
+/// A time span as people read it: "40 min", "5 h", "3 d 4 h".
+pub fn fmt_span(ms: i64) -> String {
+    let min = ms.max(0) / 60_000;
+    if min < 90 {
+        format!("{min} min")
+    } else if min < 48 * 60 {
+        format!("{} h", min / 60)
+    } else {
+        format!("{} d {} h", min / 1440, (min % 1440) / 60)
+    }
+}
+
 /// A usage window's key as people read it: "5h", "7d", "7d Opus" (the key "7d:Opus").
 pub fn window_name(key: &str) -> String {
     key.replacen(':', " ", 1)

@@ -195,7 +195,7 @@ Loopback `127.0.0.1:<port>`, header `x-quayflow-token: <token>` from `engine.jso
 | Method and route | Body / query | Response |
 |---|---|---|
 | `POST /v1/hello` | `HelloRequest` | `HelloResponse` (protocol 1; accepted `[1]`) |
-| `GET /v1/state` | `?sessionId=&cwd=` | `StateView` |
+| `GET /v1/state` | `?sessionId=&cwd=` | `StateView` (each account's `usage` carries every window with its `resetsAt` and, for a fresh reading only, `weeklyPerDay`: the weekly score in % per day) |
 | `GET /v1/events` | `?since=<seq>&wait=<s, max 25>` | `EventsResponse` (long-poll; past a bounded number of open long-polls it answers at once) |
 | `GET /v1/ready` | `?wait=<s, max 25>` | `{ready}`: whether the first tick has finished (stale readings polled, first decisions made); waits up to `wait` seconds for it, as a bounded long-poll. A session's first request holds on it |
 | `POST /v1/onboarding` | `{"consents": {"engineStart": true, "credentialStorage": true, "terms": true, "signinStartup": false}, "complete": true}` | `OkResponse` |
@@ -261,7 +261,7 @@ Mod connection: the session's first handshake (`/v1/hello`) is tried up to three
 serve                          run the engine (foreground; used by start)
 start [--if-consented]         start the engine without a window; prints {"state":"running|started|failed|no_consent|stopped_by_user"}
 stop | pause | resume          intentional stop; pause or resume automation
-status [--json]                summary of environments, accounts and usage
+status [--json]                environments; per account every usage window with its reset, the weekly score, where it is live (▶) or suggested (★), and why it is or is not a target
 last --session <id> [--json]   what Quayflow did for one Claude session (see below)
 onboard                        interactive first-use consents (terminal)
 register --label L --group G [--accept-disclosure]   register the current login (asks for consent)

@@ -210,17 +210,18 @@ impl Engine {
                 } else {
                     cfg.tuning.live_fresh_s
                 } as i64;
-                let usage = inner
-                    .observations
-                    .iter()
-                    .find(|o| o.account == a.id)
-                    .map(|o| UsageView {
+                let usage = inner.observations.iter().find(|o| o.account == a.id).map(|o| {
+                    let fresh = o.age_ms(now) / 1000 <= fresh_limit;
+                    UsageView {
                         binding: o.binding().cloned(),
                         windows: o.windows.clone(),
                         age_s: o.age_ms(now) / 1000,
-                        fresh: o.age_ms(now) / 1000 <= fresh_limit,
+                        fresh,
                         source: o.source.clone(),
-                    });
+                        // Stale is never shown as current: no score from an old reading.
+                        weekly_per_day: qf_policy::weekly_score(o, now).filter(|_| fresh).map(|s| s * 24.0),
+                    }
+                });
                 let env_for = live_in.first().cloned().unwrap_or_else(|| default_env.clone());
                 let eligibility = Engine::ctx(&inner, &env_for, None).map(|ctx| {
                     let all = qf_policy::explain_all(&ctx);

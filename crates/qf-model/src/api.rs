@@ -76,6 +76,11 @@ pub struct UsageView {
     pub age_s: i64,
     pub fresh: bool,
     pub source: String,
+    /// Weekly score in percent per day (7d room left over the time to its reset, at least 5 h;
+    /// see `qf_policy::weekly_score`). Only for a fresh reading with a 7d window and a future
+    /// reset; never from a stale one.
+    #[serde(default)]
+    pub weekly_per_day: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

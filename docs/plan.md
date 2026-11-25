@@ -4,7 +4,7 @@ Work agreed but not started, in order. Each item moves to `CHANGELOG.md` when it
 
 ## 1. Weekly balancing
 
-Status: done in `[Unreleased]` (CHANGELOG, Changed). Not done: the `sim-usage.ps1` scenario with `seven_day_reset_s`.
+Status: done in `[Unreleased]` (CHANGELOG, Changed), with its `sim-usage.ps1` scenario.
 
 ### Problem
 
@@ -37,6 +37,8 @@ Behavior change for existing configurations: an Automatic group now also switche
 - Docs: user guide (Modes, defaults per group, how a target is picked), tech spec (ranking), requirements (new FR), CHANGELOG.
 
 ## 2. `quayflow status`: full usage for every account
+
+Status: done in `[Unreleased]` (CHANGELOG, Changed). `sim-usage.ps1` checks the status text; it and the weekly balancing scenario of item 1 passed on macOS (39 of 39).
 
 Do this after item 1, so the status view can show the weekly score.
 

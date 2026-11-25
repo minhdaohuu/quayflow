@@ -2057,3 +2057,37 @@ fn an_unreadable_journal_is_logged_not_read_as_no_switches() {
     assert!(logs.contains("journal.unreadable"), "no warning logged");
     drop(e);
 }
+
+#[test]
+fn the_state_view_gives_the_weekly_score_of_fresh_readings_only() {
+    let w = world();
+    let e = engine_with_accounts(&w);
+    set_week(&e, "uuid-org", 30.0, 60.0, 120);
+    set_week(&e, "uuid-personal", 0.0, 30.0, 48);
+    let acct = |e: &Shared, uuid: &str| {
+        e.state_view(None, None)
+            .accounts
+            .into_iter()
+            .find(|a| a.id == id(uuid))
+            .unwrap()
+    };
+    let p = acct(&e, "uuid-personal");
+    let score = p.usage.as_ref().unwrap().weekly_per_day.unwrap();
+    assert!((score - 35.0).abs() < 0.1, "{score}");
+    // The eligibility reason (status, "Why this account?") carries it too.
+    let why = p.eligibility.unwrap().reason;
+    assert!(why.ends_with("; weekly 35%/day"), "{why}");
+    // A stale reading has no score.
+    {
+        let mut inner = e.lock();
+        let o = inner
+            .observations
+            .iter_mut()
+            .find(|o| o.account == id("uuid-personal"))
+            .unwrap();
+        o.ts = time::now_ms() - 2 * 3_600_000;
+    }
+    let p = acct(&e, "uuid-personal");
+    assert!(!p.usage.as_ref().unwrap().fresh);
+    assert_eq!(p.usage.unwrap().weekly_per_day, None);
+}

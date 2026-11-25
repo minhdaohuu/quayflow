@@ -8,7 +8,8 @@ the engine's decisions end to end:
   counted as zero, backoff on a rate-limited usage endpoint, a rejected token, hard-limit
   recovery with one switch and one retry, concurrent failures sharing one switch, no recovery on
   an unconfirmed limit, the soonest-available account when every account is exhausted
-  (FR-15, FR-16), and the refresh of an idle account's expiring token.
+  (FR-15, FR-16), the refresh of an idle account's expiring token, and weekly balancing
+  below the threshold (FR-09a) with the windows, resets and weekly scores in quayflow status.
 
 Safe to run anywhere: USERPROFILE, CLAUDE_CONFIG_DIR and QUAYFLOW_HOME point into a temporary
 folder, and QUAYFLOW_SIM_API (loopback only) sends usage and profile calls to the fake server.
@@ -245,6 +246,29 @@ try {
     Qf use d | Out-Null
     $ok = WaitFor { ((Acct 'e') | ConvertTo-Json -Depth 8) -match 'refresh_rejected' } 20
     Check 'refused refresh token: e is marked for a new sign-in' $ok ((Acct 'e') | ConvertTo-Json -Depth 8 -Compress)
+
+    # 10. Weekly balancing (no home account, Automatic): below the threshold, the environment
+    # moves to the account whose weekly allowance would be lost soonest.
+    Qf group preferred Default none | Out-Null
+    Qf mode automatic --group Default --approve | Out-Null
+    Sim @{
+        $TA  = @{ five_hour = 100; seven_day = 20; seven_day_reset_s = 86400 }   # at its limit: never a target
+        $TB  = @{ five_hour = 5; seven_day = 30; seven_day_reset_s = 172800 }    # 70% left for 2 d: 35%/day
+        $TC  = @{ five_hour = 5; seven_day = 50; seven_day_reset_s = 518400 }    # 50% left for 6 d: 8%/day
+        $TD2 = @{ five_hour = 30; seven_day = 60; seven_day_reset_s = 432000 }   # live d: 40% left for 5 d: 8%/day
+    }
+    Qf unpin | Out-Null
+    Check 'weekly balance: moves below the threshold to b (35%/day against 8%/day)' (WaitFor { (LiveToken) -eq $TB } 25) "$(LiveToken) | decision: $((Env0).decision)"
+    $journal = Get-Content -Raw (Join-Path $env:QUAYFLOW_HOME 'journal.jsonl')
+    $req = ($journal -split "`n") | Where-Object { $_ -match '"event":"transition.requested"' -and $_ -match 'weekly balance' } | Select-Object -Last 1
+    # (One-letter labels such as "b" are not replaced by ids; the engine tests cover that with longer labels.)
+    Check 'weekly balance: the switch records its reason in the journal' ([bool]$req) "$req"
+    Start-Sleep 4  # past the cooldown
+    Check 'weekly balance: d does not pull it back (not clearly ahead)' ((LiveToken) -eq $TB) "$(LiveToken) | decision: $((Env0).decision)"
+    $st = Qf status
+    Check 'status: every window with its reset, the weekly score and where it is live' (
+        $st -match '7d 30% ↻ 47 h' -and $st -match 'weekly 35%/day' -and $st -match 'live in default' -and $st -match '7d Opus 30%') $st
+    Check 'status: an account at its limit says so' ($st -match 'at its limit \(100% 5h\)') $st
 
     $all = (Get-ChildItem -Recurse $env:QUAYFLOW_HOME -File | Where-Object { $_.Extension -in '.log', '.jsonl', '.json' } | Get-Content -Raw) -join ''
     Check 'no token in logs, journal or state' (-not ($all -match 'sk-ant-oat-SIM')) ''
